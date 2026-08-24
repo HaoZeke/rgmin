@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- SE(3) factory parity with manopt `specialeuclideanfactory(3)`
+  at `k = 1`: SO(3) projection and QR retraction on the rotation
+  block, Euclidean translation, transport by projection at
+  arrival, Frobenius inner product through `vecops`, typical
+  distance `sqrt(3*(pi^2+1))`. A 3N cluster is refused. `Se3`
+  stays the dedicated 12-vector token.
 - `ManifoldKind::Symmetric`: manopt `symmetricfactory`. Packed
   row-major `n^2`. Projection is symmetrization, retraction is
   `X + U`, transport is the identity. C token 14.

@@ -117,8 +117,12 @@ Packing notes
 - ``So3`` is a 9-vector, row-major. The tangent projection returns
   the embedded vector ``R Omega``, not the skew factor alone.
 
-- ``Se3`` is twelve numbers: the same 9-vector, then a translation.
-  It is one rigid body, not N atoms.
+- ``Se3`` is manopt ``specialeuclideanfactory(3)`` at ``k = 1``:
+  the same 9-vector, then a translation. Product geometry
+  ``SO(3) x R^3`` (rotation QR, Euclidean ``t``). Inner product is
+  the ambient Frobenius / Euclidean dot via ``vecops``. Typical
+  distance is ``sqrt(3*(pi^2 + 1))``. A 3N cluster is refused.
+  SE(n) for ``n != 3`` is a different factory.
 
 - ``Stiefel`` is ``St(n,1)``. A frame with ``p > 1`` is not a length
   token: ``n p`` does not name ``p``.

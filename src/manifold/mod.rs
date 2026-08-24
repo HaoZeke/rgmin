@@ -36,7 +36,10 @@ pub use multinomial::Multinomial;
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
 pub use rigid_quotient::RigidQuotient;
-pub use se3::Se3;
+pub use se3::{
+    inner as inner_se3, is_se3, pack as pack_se3, typical_dist as typical_dist_se3,
+    unpack as unpack_se3, Se3,
+};
 pub use so3::So3;
 pub use spd::{is_spd, pack as pack_spd, side as side_spd, unpack as unpack_spd, Spd};
 pub use sphere::Sphere;
@@ -60,6 +63,7 @@ pub enum ManifoldKind {
     /// `p > 1` is [`Self::StiefelP`]; a 3N cluster is [`Self::RigidQuotient`].
     Stiefel,
     /// Rigid motions SE(3): 3x3 row-major then translation (12).
+    /// manopt `specialeuclideanfactory(3)` at `k = 1`.
     Se3,
     /// Isolated-molecule shape space \(R^{3N}/\mathrm{SE}(3)\).
     /// Sella Cartesian + `fix_translation` + `fix_rotation`.
