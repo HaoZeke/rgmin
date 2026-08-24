@@ -86,11 +86,7 @@ impl Default for Unitary {
 impl Unitary {
     /// \(\mathrm{U}(n)\) with \(n \ge 1\).
     pub fn new(n: usize) -> Result<Self, usize> {
-        if n >= 1 {
-            Ok(Self { n })
-        } else {
-            Err(n)
-        }
+        if n >= 1 { Ok(Self { n }) } else { Err(n) }
     }
 
     /// Packed length `2 n^2`, or `None` on overflow.
@@ -621,5 +617,43 @@ mod tests {
         let y = m.retract(&x, &Array1::zeros(8));
         assert!((&y - &x).mapv(f64::abs).sum() < 1e-15);
         assert!(is_unitary(&y));
+    }
+
+    #[test]
+    fn retract_from_non_identity_stays_unitary() {
+        let m = Unitary::new(2).unwrap();
+        let s = 0.5_f64.sqrt();
+        let mut u = vec![0.0; 8];
+        m.put(&mut u, 0, 0, C64 { re: s, im: 0.0 });
+        m.put(&mut u, 0, 1, C64 { re: s, im: 0.0 });
+        m.put(&mut u, 1, 0, C64 { re: 0.0, im: s });
+        m.put(&mut u, 1, 1, C64 { re: 0.0, im: -s });
+        let x = pack(2, u);
+        assert!(is_unitary(&x));
+        let v = m.project(&x, &skewh_step(2, 0.4));
+        let y = m.retract(&x, &v);
+        assert!(is_unitary(&y), "left U(2) {y:?}");
+        assert_gram_identity(&m, &y, 1e-10);
+    }
+
+    #[test]
+    fn projected_step_is_real_orthogonal_to_the_point() {
+        let m = Unitary::new(2).unwrap();
+        let x = identity(2);
+        let v = m.project(&x, &skewh_step(2, 0.3));
+        let s = vecops::dot(x.view(), v.view());
+        assert!(s.abs() < 1e-14, "Re <U, U Omega> must vanish {s}");
+        let x2 = {
+            let s = 0.5_f64.sqrt();
+            let mut u = vec![0.0; 8];
+            m.put(&mut u, 0, 0, C64 { re: s, im: 0.0 });
+            m.put(&mut u, 0, 1, C64 { re: s, im: 0.0 });
+            m.put(&mut u, 1, 0, C64 { re: 0.0, im: s });
+            m.put(&mut u, 1, 1, C64 { re: 0.0, im: -s });
+            pack(2, u)
+        };
+        let v2 = m.project(&x2, &skewh_step(2, 0.5));
+        let s2 = vecops::dot(x2.view(), v2.view());
+        assert!(s2.abs() < 1e-14, "Re <U, U Omega> must vanish {s2}");
     }
 }
