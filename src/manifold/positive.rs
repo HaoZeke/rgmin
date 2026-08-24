@@ -51,7 +51,12 @@ impl Manifold for Positive {
         }
         Array1::from_iter(x.iter().zip(v.iter()).map(|(xi, vi)| {
             let den = xi.max(f64::EPSILON);
-            xi.max(f64::EPSILON) * (*vi / den).exp()
+            let yi = xi.max(f64::EPSILON) * (*vi / den).exp();
+            if yi.is_finite() {
+                yi.max(f64::EPSILON)
+            } else {
+                f64::EPSILON
+            }
         }))
     }
 
