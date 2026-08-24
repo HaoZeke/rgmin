@@ -46,6 +46,8 @@ Tokens
     +-------------------+---------------------------------------+-------------------------------------------+
     | ``ComplexCircle`` | interleaved ``(re,im)``, length 2n   | ``sign(z+v)`` per pair                    |
     +-------------------+---------------------------------------+-------------------------------------------+
+    | ``Unitary``       | interleaved ``(re,im)`` row-major, ``2 n^2`` | complex QR of ``X + V``            |
+    +-------------------+---------------------------------------+-------------------------------------------+
 
 An isolated molecule or cluster lives on ``RigidQuotient``
 (``R^{3N}/SE(3)``): Sella Cartesian ``fix_translation`` plus
@@ -97,6 +99,7 @@ C
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SE3);
     rgmin_solver_set_complex_circle(s, 4);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SYMMETRIC);
+    rgmin_solver_set_unitary(s, 2);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN);
 
 Changing the manifold drops method memory (``forget``).
@@ -127,6 +130,12 @@ Packing notes
   interleaved ``(re, im)`` pairs, length ``2 n``. Each pair is
   independently unit-modulus. It is not the sphere :math:`S^{2n-1}`
   and not a 3N cluster.
+
+- ``Unitary { n }`` is manopt ``unitaryfactory(n)``: an ``n x n``
+  complex unitary matrix packed interleaved ``(re, im)``
+  row-major, length ``2 n^2``. Projection is ``U skewh(U^* Z)``.
+  Retraction is thin QR of ``X + V`` with a real-positive
+  diagonal. Transport is projection at the arrival point.
 
 - ``Symmetric`` is manopt ``symmetricfactory``: an ``n x n`` real
   symmetric matrix packed row-major (``n^2``). Projection is

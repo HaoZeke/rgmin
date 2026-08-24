@@ -6,6 +6,11 @@
 
 ** Unreleased
 
+Unitary group (~unitary~ / ~RGMIN_MANIFOLD_UNITARY~ = 16): manopt
+~unitaryfactory(n)~. Packed interleaved ~(re, im)~ row-major,
+length ~2 n^2~. Projection is ~U skewh(U^* Z)~. Retraction is
+complex QR with a real-positive diagonal.
+
 Symmetric matrices (~symmetric~ / ~RGMIN_MANIFOLD_SYMMETRIC~ = 14):
 manopt ~symmetricfactory~. Packed row-major ~n^2~. Projection is
 symmetrization, retraction is ~X + U~, transport is the identity.

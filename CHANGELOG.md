@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ManifoldKind::Unitary { n }`: manopt `unitaryfactory(n)`. Packed
+  interleaved `(re, im)` row-major, length `2 n^2`. Projection is
+  `U skewh(U^* Z)`. Retraction is complex QR with a real-positive
+  diagonal. C token 16.
 - `ManifoldKind::Symmetric`: manopt `symmetricfactory`. Packed
   row-major `n^2`. Projection is symmetrization, retraction is
   `X + U`, transport is the identity. C token 14.
