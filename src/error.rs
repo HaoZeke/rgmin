@@ -22,7 +22,7 @@ pub enum Error {
     /// Packed manifold rejected this ambient dimension.
     #[error("{kind} rejected dimension {got}")]
     ManifoldDim {
-        /// Token (`so3`, `se3`, `rigid_quotient`, `mw_rigid`).
+        /// Token (`so3`, `se3`, `se_n`, `rigid_quotient`, `mw_rigid`).
         kind: &'static str,
         /// Length of the working vector.
         got: usize,
