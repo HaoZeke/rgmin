@@ -286,7 +286,12 @@ impl Solver {
     }
 
     fn horizontal_grad(&self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
-        let mut g = self.project_vec(x, grad);
+        // Quotient geometries carry session masses / periodic flags
+        // that the stateless ManifoldKind projector does not see.
+        let mut g = match self.manifold {
+            ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => self.project_vec(x, grad),
+            other => other.egrad2rgrad(x, grad),
+        };
         if self.project_rigid
             && !matches!(
                 self.manifold,
@@ -311,17 +316,66 @@ impl Solver {
         }
     }
 
-    /// Riemannian L-BFGS pair at `x`: `s = T(x - old)`, `y = g - T(g_old)`.
+    /// Riemannian L-BFGS pair at `x`: `s = T(step)`, `y = g - T(g_old)`.
+    /// Huang / manopt `rlbfgs`: `step` is the tangent that was retracted.
     fn lbfgs_sy(
         &self,
         old: &Array1<f64>,
         x: &Array1<f64>,
         gold: &Array1<f64>,
         grad: &Array1<f64>,
+        step: &Array1<f64>,
     ) -> (Array1<f64>, Array1<f64>) {
-        let s = self.transport_vec(old, x, &(x - old));
+        let s = self.transport_vec(old, x, step);
         let y = grad - &self.transport_vec(old, x, gold);
         (s, y)
+    }
+
+    /// Move every stored L-BFGS pair into the arrival tangent.
+    fn transport_lbfgs_memory(&mut self, from: &Array1<f64>, to: &Array1<f64>) {
+        let old: Vec<(Array1<f64>, Array1<f64>)> = match &self.inner {
+            Inner::Lbfgs(solver) => solver
+                .stored_pairs()
+                .map(|(s, y)| (s.to_owned(), y.to_owned()))
+                .collect(),
+            _ => return,
+        };
+        if old.is_empty() {
+            return;
+        }
+        let moved: Vec<(Array1<f64>, Array1<f64>)> = old
+            .iter()
+            .map(|(s, y)| {
+                (
+                    self.transport_vec(from, to, s),
+                    self.transport_vec(from, to, y),
+                )
+            })
+            .collect();
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.replace_transported(moved);
+        }
+    }
+
+    fn record_lbfgs_pair(
+        &mut self,
+        old: &Array1<f64>,
+        x: &Array1<f64>,
+        gold: &Array1<f64>,
+        grad: &Array1<f64>,
+        step: &Array1<f64>,
+    ) {
+        if !x.iter().zip(old.iter()).any(|(a, b)| a != b) {
+            return;
+        }
+        if !matches!(self.manifold, ManifoldKind::Euclidean) {
+            self.transport_lbfgs_memory(old, x);
+        }
+        let (s, y) = self.lbfgs_sy(old, x, gold, grad, step);
+        let gn = l2(grad);
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.push_pair(s, y, Some(gn));
+        }
     }
 
     fn same_last_x(&self, x: &Array1<f64>) -> bool {
@@ -471,15 +525,7 @@ impl Solver {
                 }
                 grad = self.horizontal_grad(x, &grad);
                 self.remember(x, value, &grad);
-                let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
-                    let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
-                    Some((s, y, l2(&grad)))
-                } else {
-                    None
-                };
-                if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
-                    solver.push_pair(s, y, Some(gn));
-                }
+                self.record_lbfgs_pair(&old, x, &gold, &grad, &dir);
                 self.steps += 1;
                 return Ok(Report {
                     value,
@@ -524,15 +570,7 @@ impl Solver {
         }
         grad = self.horizontal_grad(x, &grad);
         self.remember(x, value, &grad);
-        let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
-            let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
-            Some((s, y, l2(&grad)))
-        } else {
-            None
-        };
-        if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
-            solver.push_pair(s, y, Some(gn));
-        }
+        self.record_lbfgs_pair(&old, x, &gold, &grad, &dir);
         self.steps += 1;
         Ok(Report {
             value,
@@ -641,17 +679,22 @@ impl Solver {
 
         let start = x.clone();
         let gold = grad.clone();
+        let mut lbfgs_step: Option<Array1<f64>> = None;
+        if let Inner::Lbfgs(solver) = &self.inner {
+            lbfgs_step = Some(solver.direction(grad.view()));
+        }
+        if let Some(dir) = lbfgs_step.as_mut() {
+            *dir = self.project_vec(x, dir);
+        }
         match &mut self.inner {
-            Inner::Lbfgs(solver) => {
-                let dir = solver.direction(grad.view());
-                let old = x.clone();
-                let gold = grad.clone();
+            Inner::Lbfgs(_) => {
+                let dir = lbfgs_step.as_ref().expect("L-BFGS direction");
                 let (npos, nval, ngrad, moved) = accept_step(
                     obj,
                     x,
                     value,
                     &gold,
-                    &dir,
+                    dir,
                     &self.control,
                     self.accept,
                     &mut self.e_hist,
@@ -668,7 +711,6 @@ impl Solver {
                     *x = npos;
                     value = nval;
                     grad = ngrad;
-                    solver.push(&*x - &old, &grad - &gold);
                 }
             }
             Inner::Steepest => {
@@ -891,16 +933,12 @@ impl Solver {
         }
         grad = self.horizontal_grad(x, &grad);
 
-        let pair = if matches!(self.inner, Inner::Lbfgs(_))
-            && x.iter().zip(start.iter()).any(|(a, b)| a != b)
-        {
-            let (s, y) = self.lbfgs_sy(&start, x, &gold, &grad);
-            Some((s, y, l2(&grad)))
-        } else {
-            None
-        };
-        if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
-            solver.replace_newest(s, y, Some(gn));
+        if matches!(self.inner, Inner::Lbfgs(_)) {
+            let step = match (self.accept, lbfgs_step.as_ref()) {
+                (Accept::None, Some(d)) => d.clone(),
+                _ => self.project_vec(&start, &(x - &start)),
+            };
+            self.record_lbfgs_pair(&start, x, &gold, &grad, &step);
         }
 
         self.remember(x, value, &grad);
