@@ -9,11 +9,12 @@
 //! Isolated molecules and clusters use [`ManifoldKind::RigidQuotient`]
 //! (Sella Cartesian `fix_translation` / `fix_rotation`,
 //! \(R^{3N}/\mathrm{SE}(3)\)) or [`ManifoldKind::MwRigid`] (Page–McIver
-//! mass-weighted Eckart, the IRC metric). Sphere / SO(3)-9 / SE(3)-12
-//! / Symmetric-n² / SPD-n² / ComplexCircle-2n / Oblique-nm are
-//! matrix-manifold embeddings, not a 3N cluster.
+//! mass-weighted Eckart, the IRC metric). Sphere / SO(3)-9 / SO(n)-n²
+//! / SE(3)-12 / Symmetric-n² / SPD-n² / ComplexCircle-2n / Oblique-nm
+//! are matrix-manifold embeddings, not a 3N cluster.
 //! [`ManifoldKind::Symmetric`] is manopt `symmetricfactory`.
 //! [`ManifoldKind::ComplexCircle`] is manopt `complexcirclefactory`.
+//! [`ManifoldKind::SoN`] is manopt `rotationsfactory` for \(n \ge 2\).
 
 use ndarray::Array1;
 
@@ -25,6 +26,7 @@ mod oblique;
 mod rigid_quotient;
 mod se3;
 mod so3;
+mod so_n;
 mod spd;
 mod sphere;
 mod stiefel;
@@ -38,6 +40,10 @@ pub use oblique::Oblique;
 pub use rigid_quotient::RigidQuotient;
 pub use se3::Se3;
 pub use so3::So3;
+pub use so_n::{
+    inner as inner_so, is_so, pack as pack_so, side as side_so, typical_dist as typical_dist_so,
+    unpack as unpack_so, SoN,
+};
 pub use spd::{is_spd, pack as pack_spd, side as side_spd, unpack as unpack_spd, Spd};
 pub use sphere::Sphere;
 pub use stiefel::{Stiefel, StiefelNp};
@@ -56,6 +62,13 @@ pub enum ManifoldKind {
     Sphere,
     /// Rotation matrices SO(3), 9-vector row-major.
     So3,
+    /// Rotation matrices \(\mathrm{SO}(n)\) for `n >= 2`, row-major
+    /// length `n^2`. manopt `rotationsfactory(n)`. Construct with
+    /// [`ManifoldKind::so_n`]. SO(3) stays [`Self::So3`].
+    SoN {
+        /// Matrix side. Must be `>= 2`.
+        n: usize,
+    },
     /// Stiefel \(\mathrm{St}(n,1)\). A single orthonormal column.
     /// `p > 1` is [`Self::StiefelP`]; a 3N cluster is [`Self::RigidQuotient`].
     Stiefel,
@@ -129,12 +142,18 @@ impl ManifoldKind {
         Self::ComplexCircle { n }
     }
 
+    /// \(\mathrm{SO}(n)\), packed row-major length `n^2`.
+    pub fn so_n(n: usize) -> Self {
+        Self::SoN { n }
+    }
+
     /// C ABI / INI token.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Euclidean => "euclidean",
             Self::Sphere => "sphere",
             Self::So3 => "so3",
+            Self::SoN { .. } => "so_n",
             Self::Stiefel | Self::StiefelP { .. } => "stiefel",
             Self::Se3 => "se3",
             Self::RigidQuotient => "rigid_quotient",
@@ -174,6 +193,7 @@ impl Manifold for ManifoldKind {
             Self::Euclidean => Euclidean.required_dim(n),
             Self::Sphere => Sphere.required_dim(n),
             Self::So3 => So3.required_dim(n),
+            Self::SoN { n: sn } => SoN { n: *sn }.required_dim(n),
             Self::Stiefel => Stiefel.required_dim(n),
             Self::Se3 => Se3.required_dim(n),
             Self::RigidQuotient => RigidQuotient.required_dim(n),
@@ -192,6 +212,7 @@ impl Manifold for ManifoldKind {
             Self::Euclidean => Euclidean.project(x, v),
             Self::Sphere => Sphere.project(x, v),
             Self::So3 => So3.project(x, v),
+            Self::SoN { n } => SoN { n: *n }.project(x, v),
             Self::Stiefel => Stiefel.project(x, v),
             Self::Se3 => Se3.project(x, v),
             Self::RigidQuotient => RigidQuotient.project(x, v),
@@ -210,6 +231,7 @@ impl Manifold for ManifoldKind {
             Self::Euclidean => Euclidean.retract(x, v),
             Self::Sphere => Sphere.retract(x, v),
             Self::So3 => So3.retract(x, v),
+            Self::SoN { n } => SoN { n: *n }.retract(x, v),
             Self::Stiefel => Stiefel.retract(x, v),
             Self::Se3 => Se3.retract(x, v),
             Self::RigidQuotient => RigidQuotient.retract(x, v),
@@ -228,6 +250,7 @@ impl Manifold for ManifoldKind {
             Self::Euclidean => Euclidean.transport(x_from, x_to, v),
             Self::Sphere => Sphere.transport(x_from, x_to, v),
             Self::So3 => So3.transport(x_from, x_to, v),
+            Self::SoN { n } => SoN { n: *n }.transport(x_from, x_to, v),
             Self::Stiefel => Stiefel.transport(x_from, x_to, v),
             Self::Se3 => Se3.transport(x_from, x_to, v),
             Self::RigidQuotient => RigidQuotient.transport(x_from, x_to, v),

@@ -205,6 +205,12 @@ impl Solver {
         self.set_manifold(ManifoldKind::ComplexCircle { n });
     }
 
+    /// \(\mathrm{SO}(n)\), packed row-major length `n^2`.
+    /// Distinct from [`ManifoldKind::So3`]. A 3N cluster is not this packing.
+    pub fn set_so_n(&mut self, n: usize) {
+        self.set_manifold(ManifoldKind::so_n(n));
+    }
+
     /// Per-atom masses for [`ManifoldKind::MwRigid`] (Page–McIver / Eckart).
     /// Empty clears them (unit mass).
     pub fn set_masses(&mut self, masses: Array1<f64>) {

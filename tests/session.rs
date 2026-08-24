@@ -662,6 +662,84 @@ fn so3_rejects_a_3n_cluster() {
 }
 
 #[test]
+fn so_n_session_stays_on_the_set() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::manifold::is_so;
+    use rgmin::ManifoldKind;
+
+    struct FrobeniusI;
+    impl Objective<f64> for FrobeniusI {
+        fn dim(&self) -> usize {
+            4
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| {
+                Bounds::new(Array1::from_elem(4, -2.0), Array1::from_elem(4, 2.0), 0.0)
+            })
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            let i = [1.0, 0.0, 0.0, 1.0];
+            0.5 * x.iter().zip(i).map(|(a, b)| (a - b) * (a - b)).sum::<f64>()
+        }
+    }
+    impl Gradient<f64> for FrobeniusI {
+        fn dim(&self) -> usize {
+            4
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            let i = [1.0, 0.0, 0.0, 1.0];
+            Array1::from_iter(x.iter().zip(i).map(|(a, b)| a - b))
+        }
+    }
+    impl DifferentiableObjective<f64> for FrobeniusI {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = FrobeniusI;
+    let mut x = array![1.0, -0.2, 0.2, 1.0];
+    let mut solver = Solver::new(
+        Method::Steepest,
+        Control {
+            maxiter: 20,
+            gtol: 1e-8,
+            istep: 0.1,
+            maxmove: None,
+        },
+        4,
+    );
+    solver.set_so_n(2);
+    solver.set_accept(rgmin::Accept::None);
+    for _ in 0..20 {
+        let _ = solver.step(&obj, &mut x).unwrap();
+        assert!(is_so(&x), "left SO(2) {x:?}");
+        let det = x[0] * x[3] - x[1] * x[2];
+        assert!((det - 1.0).abs() < 1e-10, "det={det} x={x:?}");
+    }
+    assert_eq!(ManifoldKind::so_n(2).as_str(), "so_n");
+}
+
+#[test]
+fn so_n_rejects_a_3n_cluster() {
+    let obj = Rosenbrock::<12>::new();
+    let mut x = Array1::from_elem(12, 0.1);
+    let mut solver = Solver::new(Method::Steepest, control(), 12);
+    solver.set_manifold(rgmin::ManifoldKind::so_n(4));
+    let err = solver.step(&obj, &mut x).unwrap_err();
+    match err {
+        rgmin::Error::ManifoldDim { kind, got } => {
+            assert_eq!(kind, "so_n");
+            assert_eq!(got, 12);
+        }
+        other => panic!("expected ManifoldDim, got {other:?}"),
+    }
+}
+
+#[test]
 fn se3_rejects_a_3n_cluster() {
     let obj = Rosenbrock::<114>::new();
     let mut x = Array1::from_elem(114, 0.1);
@@ -1067,11 +1145,7 @@ fn an_uphill_everywhere_oracle_is_refused_not_moved() {
         };
         (r, g)
     });
-    let mut solver = rgmin::Solver::new(
-        rgmin::Method::Steepest,
-        rgmin::Control::default(),
-        6,
-    );
+    let mut solver = rgmin::Solver::new(rgmin::Method::Steepest, rgmin::Control::default(), 6);
     solver.set_accept(rgmin::Accept::Energy);
     let mut x = Array1::from(vec![0.0; 6]);
     let rep = solver.step(&obj, &mut x).expect("step runs");
