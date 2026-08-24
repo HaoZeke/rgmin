@@ -3,16 +3,14 @@
 //! Coverage here is behavioural, not ceremonial: each test states the
 //! contract the API promises and fails when the contract does.
 
+use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
 use ndarray::{array, Array1, ArrayView1};
 use rgmin::manifold::{
-    is_spd, is_symmetric, ComplexCircle, Manifold, Multinomial, MwRigid, Oblique, Spd, Sphere,
-    Stiefel, StiefelNp, Symmetric,
+    is_spd, is_symmetric, is_unitary, ComplexCircle, Manifold, Multinomial, MwRigid, Oblique, Spd,
+    Sphere, Stiefel, StiefelNp, Symmetric, Unitary,
 };
 use rgmin::IrcTrust;
-use rgmin::{
-    minimize_scg_exact, Conjugacy, Control, DirectionalCurvature, Restart, ScgParams,
-};
-use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+use rgmin::{minimize_scg_exact, Conjugacy, Control, DirectionalCurvature, Restart, ScgParams};
 
 /// Stiefel at p = 1 is the sphere, in all three operations, which is
 /// the whole content of the type: divergence in any one of them means
@@ -24,10 +22,7 @@ fn stiefel_p1_is_the_sphere_in_all_three_operations() {
     let y = array![0.0, 1.0, 0.0];
     assert_eq!(Stiefel.project(&x, &v), Sphere.project(&x, &v));
     assert_eq!(Stiefel.retract(&x, &v), Sphere.retract(&x, &v));
-    assert_eq!(
-        Stiefel.transport(&x, &y, &v),
-        Sphere.transport(&x, &y, &v)
-    );
+    assert_eq!(Stiefel.transport(&x, &y, &v), Sphere.transport(&x, &y, &v));
 }
 
 /// Oblique OB(3,2) is a product of two spheres: each column stays unit.
@@ -133,7 +128,10 @@ fn irc_trust_is_not_the_unit_sphere() {
     let p = tr.project(&s);
     assert!(tr.on_bound(&p, 1e-12));
     let eucl = p.iter().map(|v| v * v).sum::<f64>().sqrt();
-    assert!((eucl - 1.0).abs() > 1e-3, "must not be unit-sphere projection");
+    assert!(
+        (eucl - 1.0).abs() > 1e-3,
+        "must not be unit-sphere projection"
+    );
     let sphere = Sphere.project(&Array1::from(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0]), &s);
     assert!((sphere[0] - p[0]).abs() > 1e-6 || (tr.cons(&p) - 0.1).abs() < 1e-12);
 }
@@ -152,7 +150,6 @@ fn spd_retract_stays_on_the_set() {
     let w = Spd.transport(&x, &y, &v);
     assert!((w[1] - w[2]).abs() < 1e-15);
 }
-
 
 /// manopt complexcirclefactory: each (re, im) pair stays on S^1.
 /// The product is not the sphere in the ambient even dimension.
@@ -188,6 +185,24 @@ fn symmetric_retract_stays_on_the_set() {
     assert!(det < 0.0, "must not force SPD {y:?}");
 }
 
+/// manopt unitaryfactory: retraction stays on U(n). Packed
+/// interleaved (re, im) row-major, length 2 n^2. Not the sphere.
+#[test]
+fn unitary_retract_stays_on_the_set() {
+    let m = Unitary::new(2).unwrap();
+    let mut x = Array1::zeros(8);
+    x[0] = 1.0;
+    x[6] = 1.0;
+    let mut v = Array1::zeros(8);
+    v[3] = 0.2;
+    v[5] = 0.2;
+    let t = m.project(&x, &v);
+    let y = m.retract(&x, &t);
+    assert!(is_unitary(&y), "left U(2) {y:?}");
+    let fro = y.iter().map(|a| a * a).sum::<f64>().sqrt();
+    assert!((fro - 1.0).abs() > 0.3, "must not be the sphere {y:?}");
+}
+
 /// A quadratic bowl carrying its exact directional curvature. SCG with
 /// the exact path must reach the minimum without the finite-difference
 /// probe's extra gradient.
@@ -200,11 +215,7 @@ impl Objective<f64> for CurvedBowl {
     fn bounds(&self) -> &Bounds<f64> {
         static BOUNDS: std::sync::OnceLock<Bounds<f64>> = std::sync::OnceLock::new();
         BOUNDS.get_or_init(|| {
-            Bounds::new(
-                Array1::from_elem(4, -1e12),
-                Array1::from_elem(4, 1e12),
-                0.0,
-            )
+            Bounds::new(Array1::from_elem(4, -1e12), Array1::from_elem(4, 1e12), 0.0)
         })
     }
     fn eval(&self, x: ArrayView1<f64>) -> f64 {
@@ -232,7 +243,12 @@ impl DifferentiableObjective<f64> for CurvedBowl {
 
 impl DirectionalCurvature for CurvedBowl {
     fn directional_curvature(&self, _x: ArrayView1<f64>, d: ArrayView1<f64>) -> Option<f64> {
-        Some(d.iter().enumerate().map(|(i, v)| (i + 1) as f64 * v * v).sum())
+        Some(
+            d.iter()
+                .enumerate()
+                .map(|(i, v)| (i + 1) as f64 * v * v)
+                .sum(),
+        )
     }
 }
 
@@ -241,7 +257,10 @@ fn scg_exact_reaches_the_bowl_floor_on_supplied_curvature() {
     let rep = minimize_scg_exact(
         &CurvedBowl,
         array![1.0, -2.0, 3.0, -4.0],
-        &Control { maxiter: 200, ..Control::default() },
+        &Control {
+            maxiter: 200,
+            ..Control::default()
+        },
         &ScgParams::default(),
         Conjugacy::PolakRibiere,
         Restart::Njws { threshold: 0.1 },

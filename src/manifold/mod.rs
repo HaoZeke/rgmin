@@ -10,10 +10,11 @@
 //! (Sella Cartesian `fix_translation` / `fix_rotation`,
 //! \(R^{3N}/\mathrm{SE}(3)\)) or [`ManifoldKind::MwRigid`] (Page–McIver
 //! mass-weighted Eckart, the IRC metric). Sphere / SO(3)-9 / SE(3)-12
-//! / Symmetric-n² / SPD-n² / ComplexCircle-2n / Oblique-nm are
-//! matrix-manifold embeddings, not a 3N cluster.
+//! / Symmetric-n² / SPD-n² / ComplexCircle-2n / Unitary-2n² /
+//! Oblique-nm are matrix-manifold embeddings, not a 3N cluster.
 //! [`ManifoldKind::Symmetric`] is manopt `symmetricfactory`.
 //! [`ManifoldKind::ComplexCircle`] is manopt `complexcirclefactory`.
+//! [`ManifoldKind::Unitary`] is manopt `unitaryfactory`.
 
 use ndarray::Array1;
 
@@ -29,6 +30,7 @@ mod spd;
 mod sphere;
 mod stiefel;
 mod symmetric;
+mod unitary;
 
 pub use complex_circle::ComplexCircle;
 pub use euclidean::Euclidean;
@@ -44,6 +46,9 @@ pub use stiefel::{Stiefel, StiefelNp};
 pub use symmetric::{
     inner as inner_sym, is_symmetric, pack as pack_sym, side as side_sym,
     typical_dist as typical_dist_sym, unpack as unpack_sym, Symmetric,
+};
+pub use unitary::{
+    is_unitary, pack as pack_unitary, side as side_unitary, unpack as unpack_unitary, Unitary,
 };
 
 /// Which embedded geometry a session retracts onto.
@@ -99,6 +104,14 @@ pub enum ManifoldKind {
         /// Number of unit-modulus complex entries.
         n: usize,
     },
+    /// Unitary group \(\mathrm{U}(n)\) for `n >= 1`. Packed
+    /// interleaved `(re, im)` row-major, length `2 n^2`.
+    /// manopt `unitaryfactory(n)` at `k = 1`. Construct with
+    /// [`ManifoldKind::unitary`].
+    Unitary {
+        /// Matrix side. Must be `>= 1`.
+        n: usize,
+    },
 }
 
 impl ManifoldKind {
@@ -129,6 +142,11 @@ impl ManifoldKind {
         Self::ComplexCircle { n }
     }
 
+    /// \(\mathrm{U}(n)\), packed interleaved row-major length `2 n^2`.
+    pub fn unitary(n: usize) -> Self {
+        Self::Unitary { n }
+    }
+
     /// C ABI / INI token.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -144,6 +162,7 @@ impl ManifoldKind {
             Self::Spd => "spd",
             Self::Symmetric => "symmetric",
             Self::ComplexCircle { .. } => "complex_circle",
+            Self::Unitary { .. } => "unitary",
         }
     }
 }
@@ -184,6 +203,7 @@ impl Manifold for ManifoldKind {
             Self::Spd => Spd.required_dim(n),
             Self::Symmetric => Symmetric.required_dim(n),
             Self::ComplexCircle { n: cn } => ComplexCircle { n: *cn }.required_dim(n),
+            Self::Unitary { n: un } => Unitary { n: *un }.required_dim(n),
         }
     }
 
@@ -202,6 +222,7 @@ impl Manifold for ManifoldKind {
             Self::Spd => Spd.project(x, v),
             Self::Symmetric => Symmetric.project(x, v),
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.project(x, v),
+            Self::Unitary { n } => Unitary { n: *n }.project(x, v),
         }
     }
 
@@ -220,6 +241,7 @@ impl Manifold for ManifoldKind {
             Self::Spd => Spd.retract(x, v),
             Self::Symmetric => Symmetric.retract(x, v),
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.retract(x, v),
+            Self::Unitary { n } => Unitary { n: *n }.retract(x, v),
         }
     }
 
@@ -238,6 +260,7 @@ impl Manifold for ManifoldKind {
             Self::Spd => Spd.transport(x_from, x_to, v),
             Self::Symmetric => Symmetric.transport(x_from, x_to, v),
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.transport(x_from, x_to, v),
+            Self::Unitary { n } => Unitary { n: *n }.transport(x_from, x_to, v),
         }
     }
 }
