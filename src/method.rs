@@ -7,8 +7,16 @@ use crate::nlcg::{Conjugacy, Restart};
 pub enum Method {
     /// Nonlinear CG (Nocedal-Wright algorithm 5.4).
     ///
+    /// On a non-Euclidean [`crate::ManifoldKind`] the session is
+    /// manopt `conjugategradient`: [`crate::Manifold::egrad2rgrad`]
+    /// supplies the Riemannian gradient and the previous search
+    /// direction is vector-transported into the arrival tangent
+    /// before the β formula.
+    ///
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    /// Absil, Mahony, Sepulchre, <https://doi.org/10.1515/9781400830244>.
+    /// Boumal, <https://doi.org/10.1017/9781009166164>.
     Nlcg {
         /// β formula.
         conjugacy: Conjugacy,
@@ -149,6 +157,13 @@ impl Method {
             conjugacy,
             restart: Restart::Never,
         }
+    }
+
+    /// Riemannian CG (manopt `conjugategradient`). Same conjugacy as
+    /// [`Self::polak_ribiere`]. Geometry comes from
+    /// [`crate::Solver::set_manifold`].
+    pub fn rcg() -> Self {
+        Self::polak_ribiere()
     }
 }
 

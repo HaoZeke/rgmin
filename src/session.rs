@@ -18,7 +18,7 @@ use crate::linesearch::LineSearch;
 use crate::manifold::{Manifold, ManifoldKind};
 use crate::method::Method;
 use crate::newton::{rfo_direction, shifted_newton, HessianObjective, NewtonKind};
-use crate::nlcg::{Conjugacy, ConjugacyContext, Restart};
+use crate::nlcg::{search_direction, Conjugacy, ConjugacyContext, Restart};
 use crate::pso::{random_velocity, update_swarm, Particle, RNG_SEED};
 use crate::qn::{bfgs_inverse_update, solve_dense, sr1_inverse_update, sr2_hessian_update};
 use crate::qn_step::QnStep;
@@ -286,7 +286,12 @@ impl Solver {
     }
 
     fn horizontal_grad(&self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
-        let mut g = self.project_vec(x, grad);
+        // Quotient geometries carry session masses / periodic flags
+        // that the stateless ManifoldKind projector does not see.
+        let mut g = match self.manifold {
+            ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => self.project_vec(x, grad),
+            other => other.egrad2rgrad(x, grad),
+        };
         if self.project_rigid
             && !matches!(
                 self.manifold,
@@ -641,6 +646,17 @@ impl Solver {
 
         let start = x.clone();
         let gold = grad.clone();
+        let nlcg_step = match &self.inner {
+            Inner::Nlcg {
+                dir, initialized, ..
+            } if *initialized => Some(dir.clone()),
+            Inner::Nlcg { .. } => {
+                let d0 = search_direction(grad.view(), grad.view(), 0.0, self.istep);
+                Some(self.project_vec(x, &d0))
+            }
+            _ => None,
+        };
+        let mut nlcg_moved = false;
         match &mut self.inner {
             Inner::Lbfgs(solver) => {
                 if self.accept == Accept::None {
@@ -699,26 +715,25 @@ impl Solver {
                 grad = ngrad;
             }
             Inner::Nlcg {
-                conjugacy,
-                restart,
                 dir,
                 g_old,
                 d_old,
                 initialized,
+                ..
             } => {
+                let step_dir = nlcg_step.as_ref().expect("NLCG direction");
                 if !*initialized {
-                    *dir = grad.mapv(|g| -g * self.istep);
-                    *g_old = grad.clone();
-                    *d_old = dir.clone();
+                    *dir = step_dir.clone();
+                    *g_old = gold.clone();
+                    *d_old = step_dir.clone();
                     *initialized = true;
                 }
-                let step_dir = dir.clone();
                 let (npos, nval, ngrad, moved) = accept_step(
                     obj,
                     x,
                     value,
                     &grad,
-                    &step_dir,
+                    step_dir,
                     &self.control,
                     self.accept,
                     &mut self.e_hist,
@@ -728,24 +743,7 @@ impl Solver {
                 *x = npos;
                 value = nval;
                 grad = ngrad;
-                if moved {
-                    let ctx = ConjugacyContext {
-                        current_gradient: grad.view(),
-                        previous_gradient: g_old.view(),
-                        previous_direction: d_old.view(),
-                    };
-                    let mut beta = conjugacy.beta(&ctx);
-                    if restart.should_restart(&ctx) {
-                        beta = 0.0;
-                    }
-                    *dir = Array1::from_iter(
-                        grad.iter()
-                            .zip(d_old.iter())
-                            .map(|(g, d)| -g * self.istep + beta * d),
-                    );
-                    g_old.assign(&grad);
-                    d_old.assign(dir);
-                }
+                nlcg_moved = moved;
             }
             Inner::Bfgs { h } => {
                 let direction = -h.dot(&grad);
@@ -899,6 +897,40 @@ impl Solver {
             grad = ev.1;
         }
         grad = self.horizontal_grad(x, &grad);
+
+        if nlcg_moved {
+            if let Some(step_dir) = nlcg_step.as_ref() {
+                // manopt conjugategradient: T(d_{k-1}) and T(g_{k-1})
+                // live in T_x before the β formula.
+                let d_transp = self.transport_vec(&start, x, step_dir);
+                let g_transp = self.transport_vec(&start, x, &gold);
+                let (conjugacy, restart) = match &self.inner {
+                    Inner::Nlcg {
+                        conjugacy, restart, ..
+                    } => (conjugacy.clone(), *restart),
+                    _ => unreachable!("NLCG moved with a non-NLCG inner"),
+                };
+                let ctx = ConjugacyContext {
+                    current_gradient: grad.view(),
+                    previous_gradient: g_transp.view(),
+                    previous_direction: d_transp.view(),
+                };
+                let mut beta = conjugacy.beta(&ctx);
+                if restart.should_restart(&ctx) {
+                    beta = 0.0;
+                }
+                let mut new_dir = search_direction(grad.view(), d_transp.view(), beta, self.istep);
+                new_dir = self.project_vec(x, &new_dir);
+                if let Inner::Nlcg {
+                    dir, g_old, d_old, ..
+                } = &mut self.inner
+                {
+                    *dir = new_dir;
+                    g_old.assign(&grad);
+                    d_old.assign(dir);
+                }
+            }
+        }
 
         let pair = if matches!(self.inner, Inner::Lbfgs(_))
             && x.iter().zip(start.iter()).any(|(a, b)| a != b)
