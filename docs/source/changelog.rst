@@ -6,6 +6,13 @@ Changelog
 Unreleased
 ~~~~~~~~~~
 
+SO(n) (``so_n`` / ``RGMIN_MANIFOLD_SO_N`` = 15): manopt
+``rotationsfactory(n)`` at ``k = 1``. Packed row-major ``n^2``,
+``n >= 2``. Projection is ``R skew(R^T H)``, retraction is QR of
+``R + V`` with ``det = +1``, transport is projection at the arrival
+point. Distinct from ``So3``. A 3N cluster is rejected. Stamp
+layout 5.
+
 Symmetric matrices (``symmetric`` / ``RGMIN_MANIFOLD_SYMMETRIC`` = 14):
 manopt ``symmetricfactory``. Packed row-major ``n^2``. Projection is
 symmetrization, retraction is ``X + U``, transport is the identity.

@@ -143,6 +143,7 @@ tokens do not converge on these cluster / bulk geometries.
 | method | Borda | Class | Evidence |
 |---+---|---|---|
 | SO(3) | 11/12 crash bug | ~n!=9~ is ~Error::ManifoldDim~ | ~so3.rs~ ~required_dim~; ~pack~ is never called on 3N |
+| SO(n) | n/a | ~n^2~ only; not Sphere, not 3N | ~so_n.rs~ ~required_dim~; ~set_so_n~; token 15 |
 | SE(3) | 10/12 contract | ~n!=12~ is ~Error::ManifoldDim~ | ~se3.rs~ exact-12; no 9-prefix |
 | sphere | 12/12 misuse | impl correct, ~S^{3N-1}~ | ~sphere.rs:22-39~; cluster not on the unit sphere |
 | Stiefel | 12/12 alias | ~St(n,1)~ = sphere | ~stiefel.rs:11-23~; ~stiefel_p~ is always 1 |

@@ -40,6 +40,8 @@ Tokens
     +-------------------+---------------------------------------+-------------------------------------------+
     | ``So3``           | row-major ``R``, length 9             | QR with positive diagonal                 |
     +-------------------+---------------------------------------+-------------------------------------------+
+    | ``SoN { n }``     | row-major ``R``, length ``n^2``       | QR with positive diagonal                 |
+    +-------------------+---------------------------------------+-------------------------------------------+
     | ``Stiefel``       | ``St(n,1)``: same as the sphere       | same as the sphere                        |
     +-------------------+---------------------------------------+-------------------------------------------+
     | ``Se3``           | row-major ``R`` then ``t``, length 12 | SO(3) on the rotation, Euclidean on ``t`` |
@@ -56,11 +58,11 @@ gpr\ :sub:`optim`\ ``IRCDriver`` (https://doi.org/10.1063/1.454172,
 https://doi.org/10.1063/1.434152). Call ``set_masses`` with N atomic masses;
 unit mass makes ``MwRigid`` identical to ``RigidQuotient``.
 
-``Sphere``, ``So3``, ``Stiefel``, ``Se3``, and ``ComplexCircle`` are
+``Sphere``, ``So3``, ``SoN``, ``Stiefel``, ``Se3``, and ``ComplexCircle`` are
 matrix-manifold embeddings. ``So3`` rejects any length other than 9.
-``Se3`` rejects any length other than 12. ``ComplexCircle { n }``
-rejects any length other than ``2 n``. They do not pack or
-prefix-interpret a 3N cluster.
+``SoN { n }`` rejects any length other than ``n^2``. ``Se3`` rejects any
+length other than 12. ``ComplexCircle { n }`` rejects any length other
+than ``2 n``. They do not pack or prefix-interpret a 3N cluster.
 
 Euclidean is the default. Existing eOn / rgpot / eindir paths do
 not change until a host calls the setter.
@@ -93,6 +95,7 @@ C
     rgmin_solver_set_masses(s, masses, n_atoms);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SPHERE);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SO3);
+    rgmin_solver_set_so_n(s, 4);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_STIEFEL);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SE3);
     rgmin_solver_set_complex_circle(s, 4);
@@ -116,6 +119,11 @@ Packing notes
 
 - ``So3`` is a 9-vector, row-major. The tangent projection returns
   the embedded vector ``R Omega``, not the skew factor alone.
+
+- ``SoN { n }`` / ``set_so_n(n)`` is manopt ``rotationsfactory(n)``:
+  row-major ``n^2``, ``n >= 2``. Projection is ``R skew(R^T H)``.
+  Retraction is QR of ``R + V`` with ``det = +1``. It is not the
+  sphere and not a 3N cluster. SO(3) stays the ``So3`` token.
 
 - ``Se3`` is twelve numbers: the same 9-vector, then a translation.
   It is one rigid body, not N atoms.
