@@ -782,7 +782,7 @@ fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
     assert_eq!(stamp.abi_minor, 14);
-    assert_eq!(stamp.layout_revision, 4);
+    assert_eq!(stamp.layout_revision, 5);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
 }
 
@@ -872,6 +872,8 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_oblique(session, 3, 2);
         rgmin_solver_set_stiefel(session, 4, 2);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC);
+        rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX);
+        rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_CONSTANT);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN);
         rgmin_solver_forget(session);
     }
@@ -911,6 +913,8 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_periodic(null, 0);
         rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE);
         rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL);
+        rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX);
+        rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_CONSTANT);
         rgmin_solver_set_oblique(null, 3, 2);
         rgmin_solver_set_stiefel(null, 4, 2);
         rgmin_solver_set_masses(null, masses.as_ptr(), masses.len());

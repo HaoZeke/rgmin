@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ManifoldKind::EuclideanComplex`: manopt `euclideancomplexfactory`.
+  Packed interleaved `(re, im)`, even length `>= 2`. Euclidean
+  geometry. C token 17.
+- `ManifoldKind::Constant`: manopt `constantfactory`. A 0-dimensional
+  fixed point of length `n >= 1`. C token 18.
 - `ManifoldKind::Symmetric`: manopt `symmetricfactory`. Packed
   row-major `n^2`. Projection is symmetrization, retraction is
   `X + U`, transport is the identity. C token 14.

@@ -6,6 +6,16 @@ Changelog
 Unreleased
 ~~~~~~~~~~
 
+Complex Euclidean (``euclidean_complex`` /
+``RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX`` = 17): manopt
+``euclideancomplexfactory``. Packed interleaved ``(re, im)``, even
+length ``>= 2``. Projection, retraction, and transport are Euclidean.
+
+Constant (``constant`` / ``RGMIN_MANIFOLD_CONSTANT`` = 18): manopt
+``constantfactory``. A 0-dimensional fixed point of length ``n >= 1``.
+Projection and transport are zero; retraction ignores the increment.
+Stamp layout 5.
+
 Symmetric matrices (``symmetric`` / ``RGMIN_MANIFOLD_SYMMETRIC`` = 14):
 manopt ``symmetricfactory``. Packed row-major ``n^2``. Projection is
 symmetrization, retraction is ``X + U``, transport is the identity.

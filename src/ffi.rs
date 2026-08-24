@@ -64,7 +64,7 @@ pub struct rgmin_abi_stamp_t {
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
 pub const RGMIN_ABI_VERSION_MINOR: u16 = 14;
-pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
+pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 5;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
 #[repr(C)]
@@ -1397,6 +1397,13 @@ pub enum rgmin_manifold_t {
     RGMIN_MANIFOLD_COMPLEX_CIRCLE = 13,
     /// Real symmetric n-by-n, row-major n². manopt `symmetricfactory`.
     RGMIN_MANIFOLD_SYMMETRIC = 14,
+    /// Reserved: 15-16.
+    /// Complex Euclidean C^n as R^{2n}. Packed interleaved, even length >= 2.
+    /// manopt `euclideancomplexfactory`.
+    RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX = 17,
+    /// A 0-dimensional manifold: one fixed point of length n >= 1.
+    /// manopt `constantfactory`.
+    RGMIN_MANIFOLD_CONSTANT = 18,
 }
 
 #[unsafe(no_mangle)]
@@ -1418,6 +1425,8 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
         rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL => ManifoldKind::Multinomial,
         rgmin_manifold_t::RGMIN_MANIFOLD_COMPLEX_CIRCLE => ManifoldKind::ComplexCircle { n: 1 },
         rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC => ManifoldKind::Symmetric,
+        rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX => ManifoldKind::EuclideanComplex,
+        rgmin_manifold_t::RGMIN_MANIFOLD_CONSTANT => ManifoldKind::Constant,
         rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN => ManifoldKind::Euclidean,
     };
     unsafe { (*solver).solver.set_manifold(kind) };

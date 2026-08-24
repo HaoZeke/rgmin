@@ -46,6 +46,10 @@ Tokens
     +-------------------+---------------------------------------+-------------------------------------------+
     | ``ComplexCircle`` | interleaved ``(re,im)``, length 2n   | ``sign(z+v)`` per pair                    |
     +-------------------+---------------------------------------+-------------------------------------------+
+    | ``EuclideanComplex`` | interleaved ``(re,im)``, even ``>= 2`` | ``x + v``                             |
+    +-------------------+---------------------------------------+-------------------------------------------+
+    | ``Constant``      | length ``n >= 1``                     | ``x`` (ignore ``v``)                       |
+    +-------------------+---------------------------------------+-------------------------------------------+
 
 An isolated molecule or cluster lives on ``RigidQuotient``
 (``R^{3N}/SE(3)``): Sella Cartesian ``fix_translation`` plus
@@ -97,6 +101,8 @@ C
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SE3);
     rgmin_solver_set_complex_circle(s, 4);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SYMMETRIC);
+    rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX);
+    rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_CONSTANT);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN);
 
 Changing the manifold drops method memory (``forget``).
@@ -132,6 +138,16 @@ Packing notes
   symmetric matrix packed row-major (``n^2``). Projection is
   symmetrization. Retraction is ``X + U``. Transport is the
   identity. It is not the SPD cone and not a 3N cluster.
+
+- ``EuclideanComplex`` is manopt ``euclideancomplexfactory``:
+  interleaved ``(re, im)`` pairs, even length ``>= 2``. The
+  geometry is Euclidean. It is not ``ComplexCircle`` and not the
+  sphere.
+
+- ``Constant`` is manopt ``constantfactory``: a single fixed point
+  of length ``n >= 1``. Projection and transport are zero.
+  Retraction returns ``x``. It is a product factor, not a
+  constraint solver.
 
 - ``set_project_rigid`` is the same horizontal projection as
   ``RigidQuotient`` and stays available on Euclidean.
