@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Riemannian steepest descent on every `ManifoldKind`: the first-order
+  session arm follows `-rgrad` and retracts. `MwRigid` dualizes the
+  Cartesian force by `1/m` before the Eckart projector.
 - `ManifoldKind::Symmetric`: manopt `symmetricfactory`. Packed
   row-major `n^2`. Projection is symmetrization, retraction is
   `X + U`, transport is the identity. C token 14.

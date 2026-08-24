@@ -81,7 +81,9 @@ Rust
 
 First-order steps retract the taken increment. Quasi-Newton
 directions are projected into the tangent, then retracted by the
-accept rule.
+accept rule. Steepest descent follows ``-rgrad`` and retracts onto
+the session manifold. On ``MwRigid``, ``rgrad`` is the mass-weighted
+dual of the Cartesian force, then the Eckart projector.
 
 C
 ~
