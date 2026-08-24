@@ -893,6 +893,117 @@ fn rigid_quotient_drops_translation_and_keeps_3n() {
 }
 
 #[test]
+fn steepest_on_mw_rigid_stays_on_the_mw_set() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::ManifoldKind;
+
+    struct Pair;
+    impl Objective<f64> for Pair {
+        fn dim(&self) -> usize {
+            9
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| {
+                Bounds::new(Array1::from_elem(9, -4.0), Array1::from_elem(9, 4.0), 0.0)
+            })
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            let d01 = (x[0] - x[3]).powi(2) + (x[1] - x[4]).powi(2) + (x[2] - x[5]).powi(2);
+            let d02 = (x[0] - x[6]).powi(2) + (x[1] - x[7]).powi(2) + (x[2] - x[8]).powi(2);
+            0.5 * ((d01.sqrt() - 1.0).powi(2) + (d02.sqrt() - 1.0).powi(2))
+        }
+    }
+    impl Gradient<f64> for Pair {
+        fn dim(&self) -> usize {
+            9
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            let e = 1e-6;
+            let f0 = self.eval(x);
+            let mut g = Array1::zeros(9);
+            let mut y = x.to_owned();
+            for i in 0..9 {
+                y[i] += e;
+                g[i] = (self.eval(y.view()) - f0) / e;
+                y[i] = x[i];
+            }
+            g
+        }
+    }
+    impl DifferentiableObjective<f64> for Pair {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    fn mw_com(x: &Array1<f64>, m: &Array1<f64>) -> [f64; 3] {
+        let mut c = [0.0; 3];
+        let mut tot = 0.0;
+        for i in 0..3 {
+            tot += m[i];
+            c[0] += m[i] * x[3 * i];
+            c[1] += m[i] * x[3 * i + 1];
+            c[2] += m[i] * x[3 * i + 2];
+        }
+        [c[0] / tot, c[1] / tot, c[2] / tot]
+    }
+
+    fn mw_angular(x: &Array1<f64>, dx: &Array1<f64>, m: &Array1<f64>) -> [f64; 3] {
+        let com = mw_com(x, m);
+        let mut l = [0.0; 3];
+        for i in 0..3 {
+            let rx = x[3 * i] - com[0];
+            let ry = x[3 * i + 1] - com[1];
+            let rz = x[3 * i + 2] - com[2];
+            let vx = dx[3 * i];
+            let vy = dx[3 * i + 1];
+            let vz = dx[3 * i + 2];
+            l[0] += m[i] * (ry * vz - rz * vy);
+            l[1] += m[i] * (rz * vx - rx * vz);
+            l[2] += m[i] * (rx * vy - ry * vx);
+        }
+        l
+    }
+
+    let obj = Pair;
+    let mut x = array![0.0, 0.0, 0.0, 1.2, 0.0, 0.0, 0.0, 1.2, 0.0];
+    let masses = array![16.0, 1.0, 1.0];
+    let mut solver = Solver::new(
+        Method::Steepest,
+        Control {
+            maxiter: 20,
+            gtol: 1e-8,
+            istep: 0.1,
+            maxmove: None,
+        },
+        9,
+    );
+    solver.set_manifold(ManifoldKind::MwRigid);
+    solver.set_masses(masses.clone());
+    solver.set_accept(rgmin::Accept::None);
+    let com0 = mw_com(&x, &masses);
+    for _ in 0..20 {
+        let prev = x.clone();
+        let _ = solver.step(&obj, &mut x).unwrap();
+        assert_eq!(x.len(), 9);
+        let com = mw_com(&x, &masses);
+        assert!(
+            (com[0] - com0[0]).abs() < 1e-7
+                && (com[1] - com0[1]).abs() < 1e-7
+                && (com[2] - com0[2]).abs() < 1e-7,
+            "MW-COM drifted {com0:?} -> {com:?}"
+        );
+        let dx = &x - &prev;
+        let l = mw_angular(&prev, &dx, &masses);
+        let ln = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
+        assert!(ln < 1e-6, "rotation leaked into the MW step {l:?}");
+    }
+}
+
+#[test]
 fn nlcg_second_step_is_not_steepest() {
     let obj = Rosenbrock::<2>::new();
     let mut a = array![-1.2, 1.0];
