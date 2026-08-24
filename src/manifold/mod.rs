@@ -205,6 +205,24 @@ impl Manifold for ManifoldKind {
         }
     }
 
+    fn egrad2rgrad(&self, x: &Array1<f64>, egrad: &Array1<f64>) -> Array1<f64> {
+        match self {
+            Self::Euclidean => Euclidean.egrad2rgrad(x, egrad),
+            Self::Sphere => Sphere.egrad2rgrad(x, egrad),
+            Self::So3 => So3.egrad2rgrad(x, egrad),
+            Self::Stiefel => Stiefel.egrad2rgrad(x, egrad),
+            Self::Se3 => Se3.egrad2rgrad(x, egrad),
+            Self::RigidQuotient => RigidQuotient.egrad2rgrad(x, egrad),
+            Self::MwRigid => MwRigid.egrad2rgrad(x, egrad),
+            Self::Oblique { n, m } => Oblique { n: *n, m: *m }.egrad2rgrad(x, egrad),
+            Self::Multinomial => Multinomial.egrad2rgrad(x, egrad),
+            Self::StiefelP { n, p } => StiefelNp { n: *n, p: *p }.egrad2rgrad(x, egrad),
+            Self::Spd => Spd.egrad2rgrad(x, egrad),
+            Self::Symmetric => Symmetric.egrad2rgrad(x, egrad),
+            Self::ComplexCircle { n } => ComplexCircle { n: *n }.egrad2rgrad(x, egrad),
+        }
+    }
+
     fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         match self {
             Self::Euclidean => Euclidean.retract(x, v),
