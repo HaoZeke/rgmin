@@ -6,6 +6,13 @@
 
 ** Unreleased
 
+Positive orthant (~positive~ / ~RGMIN_MANIFOLD_POSITIVE~ = 19):
+manopt ~positivefactory~, retraction ~x odot exp(v oslash x)~.
+Real phase (~realphase~ / ~RGMIN_MANIFOLD_REALPHASE~ = 20): product
+of 0-spheres, retraction stays on ~{+/-1}^n~. Centered matrices
+(~centered~ / ~RGMIN_MANIFOLD_CENTERED~ = 21): doubly-centered
+~m x n~, row-major ~m n~, ~rgmin_solver_set_centered~. Stamp 1.15.5.
+
 Symmetric matrices (~symmetric~ / ~RGMIN_MANIFOLD_SYMMETRIC~ = 14):
 manopt ~symmetricfactory~. Packed row-major ~n^2~. Projection is
 symmetrization, retraction is ~X + U~, transport is the identity.
@@ -39,9 +46,10 @@ or prefix-interpreted. Periodic bulk sets
 
 Embedded manopt tokens: Euclidean (default), sphere, SO(3),
 Stiefel ~St(n,1)~ and ~St(n,p)~ (~rgmin_solver_set_stiefel~),
-SE(3), Oblique token 11, Multinomial token 12. Reserved: 7 SPD,
-8 Grassmann, 9 Hyperbolic, 10 Poincare. Hourglass mark and the
-Diataxis book under ~docs/orgmode/~.
+SE(3), Oblique token 11, Multinomial token 12, positive token 19,
+realphase token 20, centered token 21. Reserved: 7 SPD,
+8 Grassmann, 9 Hyperbolic, 10 Poincare, 15 SO(n), 16 SE(n), 17-18.
+Hourglass mark and the Diataxis book under ~docs/orgmode/~.
 
 ** 0.2.0
 

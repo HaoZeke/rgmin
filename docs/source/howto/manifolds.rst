@@ -97,6 +97,9 @@ C
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SE3);
     rgmin_solver_set_complex_circle(s, 4);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SYMMETRIC);
+    rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_POSITIVE);
+    rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_REALPHASE);
+    rgmin_solver_set_centered(s, 2, 3);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN);
 
 Changing the manifold drops method memory (``forget``).
@@ -127,6 +130,17 @@ Packing notes
   interleaved ``(re, im)`` pairs, length ``2 n``. Each pair is
   independently unit-modulus. It is not the sphere :math:`S^{2n-1}`
   and not a 3N cluster.
+
+- ``Positive`` is manopt ``positivefactory``: the open orthant
+  ``x_i > 0``. Projection is the identity. Retraction is
+  ``x odot exp(v oslash x)``.
+
+- ``RealPhase`` is the product of 0-spheres ``{+/-1}^n``. The
+  tangent is zero; retraction stays on the signs (no hop).
+
+- ``Centered { m, n }`` / ``set_centered(m, n)`` is manopt
+  ``centeredmatrixfactory`` with both row and column means
+  removed. Packed row-major ``m n``.
 
 - ``Symmetric`` is manopt ``symmetricfactory``: an ``n x n`` real
   symmetric matrix packed row-major (``n^2``). Projection is

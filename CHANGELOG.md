@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ManifoldKind::Positive`: manopt `positivefactory`. Componentwise
+  `x .* exp(v ./ x)` retraction. C token 19.
+- `ManifoldKind::RealPhase`: product of 0-spheres `{+/-1}^n`. C token 20.
+- `ManifoldKind::Centered { m, n }`: manopt `centeredmatrixfactory`,
+  doubly centered, row-major `m*n`. C token 21.
 - `ManifoldKind::Symmetric`: manopt `symmetricfactory`. Packed
   row-major `n^2`. Projection is symmetrization, retraction is
   `X + U`, transport is the identity. C token 14.

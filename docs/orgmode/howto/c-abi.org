@@ -86,6 +86,7 @@ Tokens: ~RGMIN_MANIFOLD_EUCLIDEAN~ (default), ~RIGID_QUOTIENT~
 Sella IRC Eckart), ~SPHERE~, ~SO3~ (length 9), ~STIEFEL~
 (~St(n,1)~; ~rgmin_solver_set_stiefel~ for ~p > 1~), ~SE3~
 (length 12), ~OBLIQUE~ (token 11), ~MULTINOMIAL~ (token 12),
-~SYMMETRIC~ (n² row-major). See
+~SYMMETRIC~ (n² row-major), ~POSITIVE~ (token 19), ~REALPHASE~
+(token 20), ~CENTERED~ (token 21, ~rgmin_solver_set_centered~). See
 [[file:manifolds.org][retract onto an embedded manifold]].
 ~rgmin_solver_set_masses~ supplies N atomic masses for ~MW_RIGID~.

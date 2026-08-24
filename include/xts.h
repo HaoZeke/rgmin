@@ -48,8 +48,8 @@ typedef struct xts_abi_stamp_t {
 } xts_abi_stamp_t;
 
 #define XTS_ABI_VERSION_MAJOR 1
-#define XTS_ABI_VERSION_MINOR 14
-#define XTS_ABI_LAYOUT_REVISION 4
+#define XTS_ABI_VERSION_MINOR 15
+#define XTS_ABI_LAYOUT_REVISION 5
 
 /** Solver selector. \c XTS_LBFGS is the production unconstrained method. */
 typedef enum xts_method_t {
@@ -197,6 +197,7 @@ typedef struct xts_solver_t xts_solver_t;
 #define xts_solver_set_oblique rgmin_solver_set_oblique
 #define xts_solver_set_stiefel rgmin_solver_set_stiefel
 #define xts_solver_set_complex_circle rgmin_solver_set_complex_circle
+#define xts_solver_set_centered rgmin_solver_set_centered
 #define xts_solver_set_masses rgmin_solver_set_masses
 #define xts_solver_set_periodic rgmin_solver_set_periodic
 #define xts_solver_step rgmin_solver_step
@@ -241,7 +242,8 @@ int32_t xts_solver_set_highs(xts_solver_t *solver, int32_t enabled);
  *  R^{3N}/SE(3)) or MW_RIGID (Page-McIver / Sella IRC Eckart).
  *  SO3 is length 9; SE3 is length 12. Oblique is n-by-m via
  *  xts_solver_set_oblique. Stiefel p>1 is xts_solver_set_stiefel.
- *  Reserved: 7 SPD, 8 Grassmann, 9 Hyperbolic, 10 Poincare. */
+ *  Reserved: 7 SPD, 8 Grassmann, 9 Hyperbolic, 10 Poincare,
+ *  15 SO(n), 16 SE(n), 17-18. */
 typedef enum xts_manifold_t {
     XTS_MANIFOLD_EUCLIDEAN = 0,
     XTS_MANIFOLD_SPHERE = 1,
@@ -253,7 +255,10 @@ typedef enum xts_manifold_t {
     XTS_MANIFOLD_OBLIQUE = 11,
     XTS_MANIFOLD_MULTINOMIAL = 12,
     XTS_MANIFOLD_COMPLEX_CIRCLE = 13,
-    XTS_MANIFOLD_SYMMETRIC = 14
+    XTS_MANIFOLD_SYMMETRIC = 14,
+    XTS_MANIFOLD_POSITIVE = 19,
+    XTS_MANIFOLD_REALPHASE = 20,
+    XTS_MANIFOLD_CENTERED = 21
 } xts_manifold_t;
 void xts_solver_set_manifold(xts_solver_t *solver, xts_manifold_t manifold);
 /** Oblique OB(n,m): product of m unit spheres in R^n, column-major. */
@@ -262,6 +267,8 @@ void xts_solver_set_oblique(xts_solver_t *solver, size_t n, size_t m);
 void xts_solver_set_stiefel(xts_solver_t *solver, size_t n, size_t p);
 /** n unit-modulus complex numbers. Packed interleaved, length 2n. */
 void xts_solver_set_complex_circle(xts_solver_t *solver, size_t n);
+/** Doubly-centered m-by-n matrices, row-major m*n. */
+void xts_solver_set_centered(xts_solver_t *solver, size_t m, size_t n);
 /** Per-atom masses for MW_RIGID. n_atoms == 0 or masses == NULL
  *  restores unit mass. */
 void xts_solver_set_masses(xts_solver_t *solver, const double *masses,

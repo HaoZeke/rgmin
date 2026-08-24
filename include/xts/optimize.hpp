@@ -213,6 +213,9 @@ public:
     void set_complex_circle(std::size_t n) {
         rgmin_solver_set_complex_circle(ptr_, n);
     }
+    void set_centered(std::size_t m, std::size_t n) {
+        rgmin_solver_set_centered(ptr_, m, n);
+    }
 
     Report step(rgmin_eval_fn eval, rgmin_grad_fn grad, void* user,
                 DLManagedTensorVersioned* x) {

@@ -7,9 +7,6 @@ use std::os::raw::c_void;
 use dlpk::sys::{DLDeviceType, DLManagedTensorVersioned};
 use eindir_core::ffi::eindir_core_abi_stamp;
 use eindir_core::ffi::{eindir_objective_t, eindir_status_t};
-use rgpot_core::eindir::{rgpot_potential_free_eindir, rgpot_potential_new_eindir};
-use rgpot_core::status::rgpot_status_t;
-use rgpot_core::types::{rgpot_force_input_t, rgpot_force_out_t};
 use rgmin::ffi::{
     rgmin_abi_compatible, rgmin_abi_stamp, rgmin_accept_t, rgmin_conjugacy_t, rgmin_control_t,
     rgmin_curv_fn, rgmin_eigen_kind_t, rgmin_eigen_params_t, rgmin_last_error,
@@ -18,6 +15,9 @@ use rgmin::ffi::{
     rgmin_solver_create, rgmin_solver_free, rgmin_solver_set_accept, rgmin_solver_step,
     rgmin_solver_step_fg, rgmin_status_t, rgmin_tensor_borrow_cpu_f64, rgmin_tensor_free,
 };
+use rgpot_core::eindir::{rgpot_potential_free_eindir, rgpot_potential_new_eindir};
+use rgpot_core::status::rgpot_status_t;
+use rgpot_core::types::{rgpot_force_input_t, rgpot_force_out_t};
 
 unsafe extern "C" fn quadratic_eval(
     _user: *mut c_void,
@@ -734,7 +734,15 @@ fn lowest_eigenpair_lanczos_recovers_gapped_mode() {
         actions: 0,
     };
     let status = unsafe {
-        rgmin_lowest_eigenpair(Some(gapped_hvp), std::ptr::null_mut(), xt, st, mt, &params, &mut out)
+        rgmin_lowest_eigenpair(
+            Some(gapped_hvp),
+            std::ptr::null_mut(),
+            xt,
+            st,
+            mt,
+            &params,
+            &mut out,
+        )
     };
     unsafe {
         rgmin_tensor_free(xt);
@@ -767,7 +775,15 @@ fn lowest_eigenpair_elpa_is_unavailable() {
         actions: 0,
     };
     let status = unsafe {
-        rgmin_lowest_eigenpair(Some(gapped_hvp), std::ptr::null_mut(), xt, st, mt, &params, &mut out)
+        rgmin_lowest_eigenpair(
+            Some(gapped_hvp),
+            std::ptr::null_mut(),
+            xt,
+            st,
+            mt,
+            &params,
+            &mut out,
+        )
     };
     unsafe {
         rgmin_tensor_free(xt);
@@ -781,8 +797,8 @@ fn lowest_eigenpair_elpa_is_unavailable() {
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 14);
-    assert_eq!(stamp.layout_revision, 4);
+    assert_eq!(stamp.abi_minor, 15);
+    assert_eq!(stamp.layout_revision, 5);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
 }
 
@@ -841,10 +857,10 @@ fn c_abi_respects_maxmove_when_initial_step_is_larger() {
 fn c_abi_every_setter_survives_live_and_null_sessions() {
     use rgmin::ffi::{
         rgmin_manifold_t, rgmin_qn_step_t, rgmin_solver_forget, rgmin_solver_set_atom_maxmove,
-        rgmin_solver_set_cautious, rgmin_solver_set_extra_updates, rgmin_solver_set_manifold,
-        rgmin_solver_set_masses, rgmin_solver_set_maxmove, rgmin_solver_set_oblique,
-        rgmin_solver_set_periodic, rgmin_solver_set_project_rigid, rgmin_solver_set_qn_step,
-        rgmin_solver_set_stiefel,
+        rgmin_solver_set_cautious, rgmin_solver_set_centered, rgmin_solver_set_extra_updates,
+        rgmin_solver_set_manifold, rgmin_solver_set_masses, rgmin_solver_set_maxmove,
+        rgmin_solver_set_oblique, rgmin_solver_set_periodic, rgmin_solver_set_project_rigid,
+        rgmin_solver_set_qn_step, rgmin_solver_set_stiefel,
     };
     let ctrl = rgmin_control_t {
         maxiter: 20,
@@ -872,6 +888,9 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_oblique(session, 3, 2);
         rgmin_solver_set_stiefel(session, 4, 2);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC);
+        rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_POSITIVE);
+        rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_REALPHASE);
+        rgmin_solver_set_centered(session, 2, 3);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN);
         rgmin_solver_forget(session);
     }
@@ -911,8 +930,11 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_periodic(null, 0);
         rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE);
         rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL);
+        rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_POSITIVE);
+        rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_REALPHASE);
         rgmin_solver_set_oblique(null, 3, 2);
         rgmin_solver_set_stiefel(null, 4, 2);
+        rgmin_solver_set_centered(null, 2, 3);
         rgmin_solver_set_masses(null, masses.as_ptr(), masses.len());
         rgmin_solver_forget(null);
     }
