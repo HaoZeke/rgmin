@@ -64,4 +64,14 @@ mod tests {
         let y = Sphere.retract(&x, &v);
         assert!((nrm(&y) - 1.0).abs() < 1e-14);
     }
+
+    #[test]
+    fn rgrad_is_the_tangent_projection() {
+        let x = array![1.0, 0.0, 0.0];
+        let egrad = array![2.0, 3.0, 4.0];
+        let r = Sphere.egrad2rgrad(&x, &egrad);
+        let t = Sphere.project(&x, &egrad);
+        assert!((&r - &t).mapv(f64::abs).sum() < 1e-15);
+        assert!(dot(&x, &r).abs() < 1e-15);
+    }
 }
