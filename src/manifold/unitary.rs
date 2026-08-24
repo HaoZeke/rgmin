@@ -11,10 +11,12 @@
 //! columns with a column phase so the diagonal of `R` is real
 //! and non-negative. Transport is projection at the arrival
 //! point. Isolated molecules use [`super::RigidQuotient`].
+//!
+//! Ambient `X + V` and column reductions go through [`crate::vecops`].
 
 use ndarray::{Array1, ArrayView1};
 
-use crate::vecops::nrm2;
+use crate::vecops::{self, Vector};
 
 use super::Manifold;
 
@@ -206,7 +208,7 @@ impl Unitary {
                 let r = herm_dot(&qk, &v);
                 caxpy(r, &qk, &mut v);
             }
-            let nrm = nrm2(ArrayView1::from(v.as_slice()));
+            let nrm = vecops::nrm2(ArrayView1::from(v.as_slice()));
             if nrm > 1e-16 {
                 for t in v.iter_mut() {
                     *t /= nrm;
@@ -225,28 +227,32 @@ impl Unitary {
 }
 
 /// Hermitian inner product of two interleaved columns: \(\sum_i \bar u_i v_i\).
+/// Real part is the vecops seam on the packed pairs; imag part is the
+/// same seam against the 90-degree rotation \((\mathrm{im}, -\mathrm{re})\).
 fn herm_dot(u: &[f64], v: &[f64]) -> C64 {
-    let n = u.len() / 2;
-    let mut acc = C64::ZERO;
-    for k in 0..n {
-        let ur = u[2 * k];
-        let ui = u[2 * k + 1];
-        let vr = v[2 * k];
-        let vi = v[2 * k + 1];
-        acc.re += ur * vr + ui * vi;
-        acc.im += ur * vi - ui * vr;
+    let re = vecops::dot(ArrayView1::from(u), ArrayView1::from(v));
+    let mut rot = vec![0.0; v.len()];
+    for k in 0..v.len() / 2 {
+        rot[2 * k] = v[2 * k + 1];
+        rot[2 * k + 1] = -v[2 * k];
     }
-    acc
+    let im = vecops::dot(ArrayView1::from(u), ArrayView1::from(rot.as_slice()));
+    C64 { re, im }
 }
 
 /// `v -= r * q` with complex `r` on interleaved pairs.
 fn caxpy(r: C64, q: &[f64], v: &mut [f64]) {
-    let n = q.len() / 2;
-    for k in 0..n {
-        let qr = q[2 * k];
-        let qi = q[2 * k + 1];
-        v[2 * k] -= r.re * qr - r.im * qi;
-        v[2 * k + 1] -= r.re * qi + r.im * qr;
+    let mut host = Array1::from(v.to_vec());
+    let q_re = Array1::from(q.to_vec());
+    vecops::axpy(-r.re, q_re.view(), &mut host);
+    let mut q_im = Array1::zeros(q.len());
+    for k in 0..q.len() / 2 {
+        q_im[2 * k] = -q[2 * k + 1];
+        q_im[2 * k + 1] = q[2 * k];
+    }
+    vecops::axpy(-r.im, q_im.view(), &mut host);
+    if let Some(src) = host.as_slice() {
+        v.copy_from_slice(src);
     }
 }
 
@@ -284,6 +290,16 @@ pub fn unpack(x: &Array1<f64>) -> Option<(usize, Vec<f64>)> {
 /// Flatten an interleaved n-by-n complex matrix into the ambient vector.
 pub fn pack(n: usize, a: Vec<f64>) -> Array1<f64> {
     Array1::from_shape_vec(2 * n * n, a).unwrap()
+}
+
+/// Real Frobenius product. manopt `M.inner = real(d1(:)'*d2(:))`.
+pub fn inner(u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+    vecops::dot(u.view(), v.view())
+}
+
+/// manopt `M.typicaldist = pi*sqrt(n*k)` with `k = 1`.
+pub fn typical_dist(n: usize) -> f64 {
+    std::f64::consts::PI * (n as f64).sqrt()
 }
 
 /// `true` when the packed matrix satisfies \(U^* U = I\) to `1e-8`.
@@ -342,12 +358,16 @@ impl Manifold for Unitary {
         if !self.fits(xv.len()) || xv.len() != uv.len() {
             return x + v;
         }
-        let mut y = xv.to_vec();
-        for (yi, ui) in y.iter_mut().zip(uv.iter()) {
-            *yi += *ui;
+        let mut y = Vector::from_host(x.clone());
+        vecops::vaxpy(1.0, &Vector::from_host(v.clone()), &mut y);
+        {
+            let ys = y.host_mut();
+            let Some(ys) = ys.as_slice_mut() else {
+                return x + v;
+            };
+            self.qr_unique(ys);
         }
-        self.qr_unique(&mut y);
-        pack(self.n, y)
+        y.into_host()
     }
 
     fn transport(&self, _x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
@@ -403,6 +423,21 @@ mod tests {
         a.iter().fold(0.0, |m, &t| m.max(t.abs()))
     }
 
+    fn assert_gram_identity(m: &Unitary, y: &Array1<f64>, tol: f64) {
+        let uh = m.hconj(y.as_slice().unwrap());
+        let g = m.mul(&uh, y.as_slice().unwrap());
+        for i in 0..m.n {
+            for j in 0..m.n {
+                let z = m.at(&g, i, j);
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (z.re - want).abs() < tol && z.im.abs() < tol,
+                    "U^* U[{i},{j}] = {z:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn retract_stays_unitary() {
         let m = Unitary::new(2).unwrap();
@@ -410,19 +445,57 @@ mod tests {
         let v = m.project(&x, &skewh_step(2, 0.3));
         let y = m.retract(&x, &v);
         assert!(is_unitary(&y), "left U(2) {y:?}");
-        let uh = m.hconj(y.as_slice().unwrap());
-        let g = m.mul(&uh, y.as_slice().unwrap());
+        assert_gram_identity(&m, &y, 1e-10);
+        assert_eq!(y.len(), 8);
+    }
+
+    #[test]
+    fn retract_stays_on_u3() {
+        let m = Unitary::new(3).unwrap();
+        let x = identity(3);
+        let v = m.project(&x, &skewh_step(3, 0.4));
+        let y = m.retract(&x, &v);
+        assert!(is_unitary(&y), "left U(3) {y:?}");
+        assert_gram_identity(&m, &y, 1e-10);
+        assert_eq!(y.len(), 18);
+        let fro = vecops::nrm2(y.view());
+        assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {y:?}");
+    }
+
+    #[test]
+    fn project_pullback_is_skew_hermitian() {
+        let m = Unitary::new(2).unwrap();
+        let s = 0.5_f64.sqrt();
+        let mut u = vec![0.0; 8];
+        m.put(&mut u, 0, 0, C64 { re: s, im: 0.0 });
+        m.put(&mut u, 0, 1, C64 { re: s, im: 0.0 });
+        m.put(&mut u, 1, 0, C64 { re: 0.0, im: s });
+        m.put(&mut u, 1, 1, C64 { re: 0.0, im: -s });
+        let x = pack(2, u);
+        let v = m.project(&x, &skewh_step(2, 0.7));
+        let uh = m.hconj(x.as_slice().unwrap());
+        let omega = m.mul(&uh, v.as_slice().unwrap());
+        let omega_h = m.hconj(&omega);
         for i in 0..2 {
             for j in 0..2 {
-                let z = m.at(&g, i, j);
-                let want = if i == j { 1.0 } else { 0.0 };
+                let a = m.at(&omega, i, j);
+                let b = m.at(&omega_h, i, j);
                 assert!(
-                    (z.re - want).abs() < 1e-10 && z.im.abs() < 1e-10,
-                    "U^* U[{i},{j}] = {z:?}"
+                    (a.re + b.re).abs() < 1e-12 && (a.im + b.im).abs() < 1e-12,
+                    "U^* V not skew-Hermitian at [{i},{j}]"
                 );
             }
         }
-        assert_eq!(y.len(), 8);
+    }
+
+    #[test]
+    fn inner_is_the_real_frobenius_product() {
+        let a = array![1.0, 0.5, 0.0, -0.25, 0.3, 0.1, -0.2, 0.4];
+        let b = array![0.2, 0.1, 0.5, 0.0, -0.1, 0.3, 0.4, -0.2];
+        let got = inner(&a, &b);
+        let want: f64 = a.iter().zip(b.iter()).map(|(p, q)| p * q).sum();
+        assert!((got - want).abs() < 1e-15);
+        assert!((typical_dist(2) - std::f64::consts::PI * 2.0_f64.sqrt()).abs() < 1e-15);
     }
 
     #[test]
