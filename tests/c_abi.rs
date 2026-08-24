@@ -832,6 +832,33 @@ fn c_abi_respects_maxmove_when_initial_step_is_larger() {
     assert!((1.0 - x[0]).abs() <= 0.1 + 1e-12);
 }
 
+#[test]
+fn c_abi_skewsymmetric_is_token_15_and_skips_reserved_7_to_10() {
+    use rgmin::ffi::rgmin_manifold_t;
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MW_RIGID as i32, 6);
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_OBLIQUE as i32, 11);
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC as i32, 14);
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_SKEWSYMMETRIC as i32, 15);
+    for reserved in 7..=10 {
+        for kind in [
+            rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN,
+            rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE,
+            rgmin_manifold_t::RGMIN_MANIFOLD_SO3,
+            rgmin_manifold_t::RGMIN_MANIFOLD_STIEFEL,
+            rgmin_manifold_t::RGMIN_MANIFOLD_SE3,
+            rgmin_manifold_t::RGMIN_MANIFOLD_RIGID_QUOTIENT,
+            rgmin_manifold_t::RGMIN_MANIFOLD_MW_RIGID,
+            rgmin_manifold_t::RGMIN_MANIFOLD_OBLIQUE,
+            rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL,
+            rgmin_manifold_t::RGMIN_MANIFOLD_COMPLEX_CIRCLE,
+            rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC,
+            rgmin_manifold_t::RGMIN_MANIFOLD_SKEWSYMMETRIC,
+        ] {
+            assert_ne!(kind as i32, reserved);
+        }
+    }
+}
+
 /// Every C setter the header exports has to survive being called: on a
 /// live session, and on a null one, where the contract is a silent
 /// no-op rather than a crash. These were the thirteen exported symbols

@@ -152,6 +152,39 @@ mod tests {
     }
 
     #[test]
+    fn retract_stays_on_the_3x3_skew_set() {
+        let x = array![0.0, 1.0, 2.0, -1.0, 0.0, 3.0, -2.0, -3.0, 0.0];
+        let v = array![0.1, 0.4, -0.2, 0.0, 0.3, 0.5, 0.2, -0.1, -0.4];
+        let y = SkewSymmetric.retract(&x, &v);
+        assert_eq!(y.len(), 9);
+        assert!(is_skewsymmetric(&y), "left the skew-symmetric set {y:?}");
+        assert_eq!(side(y.len()), Some(3));
+        for i in 0..3 {
+            assert!(y[i * 3 + i].abs() < 1e-15, "nonzero diagonal {y:?}");
+            for j in 0..3 {
+                assert!(
+                    (y[i * 3 + j] + y[j * 3 + i]).abs() < 1e-15,
+                    "not skew {y:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn egrad2rgrad_is_multiskew() {
+        let x = array![0.0, 1.0, -1.0, 0.0];
+        let egrad = array![0.3, 1.0, -0.4, 0.5];
+        let r = SkewSymmetric.egrad2rgrad(&x, &egrad);
+        let p = SkewSymmetric.project(&x, &egrad);
+        for i in 0..4 {
+            assert!((r[i] - p[i]).abs() < 1e-15);
+        }
+        assert!((r[0]).abs() < 1e-15);
+        assert!((r[3]).abs() < 1e-15);
+        assert!((r[1] + r[2]).abs() < 1e-15);
+    }
+
+    #[test]
     fn project_kills_the_symmetric_part() {
         let x = array![0.0, 1.0, -1.0, 0.0];
         let v = array![0.3, 1.0, -0.4, 0.5];

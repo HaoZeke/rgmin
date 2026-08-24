@@ -830,6 +830,84 @@ fn symmetric_rejects_a_3n_cluster() {
 }
 
 #[test]
+fn skewsymmetric_session_stays_on_the_set() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::manifold::is_skewsymmetric;
+    use rgmin::ManifoldKind;
+
+    struct FrobeniusJ;
+    impl Objective<f64> for FrobeniusJ {
+        fn dim(&self) -> usize {
+            4
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| {
+                Bounds::new(Array1::from_elem(4, -4.0), Array1::from_elem(4, 4.0), 0.0)
+            })
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            let j = [0.0, 1.0, -1.0, 0.0];
+            0.5 * x.iter().zip(j).map(|(a, b)| (a - b) * (a - b)).sum::<f64>()
+        }
+    }
+    impl Gradient<f64> for FrobeniusJ {
+        fn dim(&self) -> usize {
+            4
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            let j = [0.0, 1.0, -1.0, 0.0];
+            Array1::from_iter(x.iter().zip(j).map(|(a, b)| a - b))
+        }
+    }
+    impl DifferentiableObjective<f64> for FrobeniusJ {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = FrobeniusJ;
+    let mut x = array![0.2, 0.5, 0.1, -0.3];
+    let mut solver = Solver::new(
+        Method::Steepest,
+        Control {
+            maxiter: 20,
+            gtol: 1e-8,
+            istep: 0.1,
+            maxmove: None,
+        },
+        4,
+    );
+    solver.set_manifold(ManifoldKind::SkewSymmetric);
+    solver.set_accept(rgmin::Accept::None);
+    for _ in 0..20 {
+        let _ = solver.step(&obj, &mut x).unwrap();
+        assert!(is_skewsymmetric(&x), "left the skew-symmetric set {x:?}");
+        assert!((x[0]).abs() < 1e-12, "nonzero diagonal {x:?}");
+        assert!((x[3]).abs() < 1e-12, "nonzero diagonal {x:?}");
+        assert!((x[1] + x[2]).abs() < 1e-12, "not skew {x:?}");
+    }
+}
+
+#[test]
+fn skewsymmetric_rejects_a_3n_cluster() {
+    let obj = Rosenbrock::<114>::new();
+    let mut x = Array1::from_elem(114, 0.1);
+    let mut solver = Solver::new(Method::Steepest, control(), 114);
+    solver.set_manifold(rgmin::ManifoldKind::SkewSymmetric);
+    let err = solver.step(&obj, &mut x).unwrap_err();
+    match err {
+        rgmin::Error::ManifoldDim { kind, got } => {
+            assert_eq!(kind, "skewsymmetric");
+            assert_eq!(got, 114);
+        }
+        other => panic!("expected ManifoldDim, got {other:?}"),
+    }
+}
+
+#[test]
 fn rigid_quotient_drops_translation_and_keeps_3n() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
     use ndarray::ArrayView1;
