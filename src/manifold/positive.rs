@@ -77,9 +77,9 @@ mod tests {
         let y = Positive.retract(&x, &v);
         assert_eq!(y.len(), 3);
         assert!(is_positive(&y), "left the positive orthant {y:?}");
-        let want0 = 0.2 * (0.4 / 0.2).exp();
-        let want1 = 1.5 * (-2.0 / 1.5).exp();
-        let want2 = 3.0 * (1.0 / 3.0).exp();
+        let want0 = 0.2_f64 * (0.4_f64 / 0.2_f64).exp();
+        let want1 = 1.5_f64 * (-2.0_f64 / 1.5_f64).exp();
+        let want2 = 3.0_f64 * (1.0_f64 / 3.0_f64).exp();
         assert!((y[0] - want0).abs() < 1e-14, "{y:?}");
         assert!((y[1] - want1).abs() < 1e-14, "{y:?}");
         assert!((y[2] - want2).abs() < 1e-14, "{y:?}");
