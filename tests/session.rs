@@ -646,6 +646,68 @@ fn default_manifold_is_euclidean() {
 }
 
 #[test]
+fn euclidean_session_step_matches_ambient_steepest() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::ManifoldKind;
+    use std::sync::OnceLock;
+
+    struct Bowl;
+    impl Objective<f64> for Bowl {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-1e6, -1e6], array![1e6, 1e6], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            0.5 * (x[0] * x[0] + x[1] * x[1])
+        }
+    }
+    impl Gradient<f64> for Bowl {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            array![x[0], x[1]]
+        }
+    }
+    impl DifferentiableObjective<f64> for Bowl {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = Bowl;
+    let x0 = array![3.0, -4.0];
+    let istep = control().istep;
+    let g = Gradient::grad(&obj, x0.view());
+    let ambient = array![x0[0] - istep * g[0], x0[1] - istep * g[1]];
+
+    let mut x_set = x0.clone();
+    let mut on_eucl = Solver::new(Method::Steepest, control(), 2);
+    on_eucl.set_manifold(ManifoldKind::Euclidean);
+    on_eucl.step(&obj, &mut x_set).unwrap();
+
+    let mut x_def = x0.clone();
+    let mut default_m = Solver::new(Method::Steepest, control(), 2);
+    default_m.step(&obj, &mut x_def).unwrap();
+
+    for i in 0..2 {
+        assert!(
+            (x_set[i] - ambient[i]).abs() < 1e-15,
+            "Euclidean session {x_set:?} != ambient steepest {ambient:?}"
+        );
+        assert!(
+            (x_def[i] - ambient[i]).abs() < 1e-15,
+            "default session {x_def:?} != ambient steepest {ambient:?}"
+        );
+        assert!((x_set[i] - x_def[i]).abs() < 1e-15);
+    }
+}
+
+#[test]
 fn so3_rejects_a_3n_cluster() {
     let obj = Rosenbrock::<6>::new();
     let mut x = Array1::from_elem(6, 0.1);
@@ -1067,11 +1129,7 @@ fn an_uphill_everywhere_oracle_is_refused_not_moved() {
         };
         (r, g)
     });
-    let mut solver = rgmin::Solver::new(
-        rgmin::Method::Steepest,
-        rgmin::Control::default(),
-        6,
-    );
+    let mut solver = rgmin::Solver::new(rgmin::Method::Steepest, rgmin::Control::default(), 6);
     solver.set_accept(rgmin::Accept::Energy);
     let mut x = Array1::from(vec![0.0; 6]);
     let rep = solver.step(&obj, &mut x).expect("step runs");

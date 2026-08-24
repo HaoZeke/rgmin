@@ -124,5 +124,11 @@ Changing the manifold drops method memory (~forget~).
   symmetric matrix packed row-major (~n^2~). Projection is
   symmetrization. Retraction is ~X + U~. Transport is the
   identity. It is not the SPD cone and not a 3N cluster.
+- ~Euclidean~ is manopt ~euclideanfactory~ on a rank-1 vector of
+  length ~n~. Projection and transport are the identity.
+  Retraction is ~x + v~. The inner product is the Frobenius
+  Euclidean dot via ~vecops~. Typical distance is ~sqrt(n)~.
+  Matrix or tensor packing (~euclideanfactory(m, n)~ / a size
+  vector) is a child ticket.
 - ~set_project_rigid~ is the same horizontal projection as
   ~RigidQuotient~ and stays available on Euclidean.

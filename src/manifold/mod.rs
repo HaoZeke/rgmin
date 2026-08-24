@@ -31,7 +31,7 @@ mod stiefel;
 mod symmetric;
 
 pub use complex_circle::ComplexCircle;
-pub use euclidean::Euclidean;
+pub use euclidean::{inner as inner_eucl, typical_dist as typical_dist_eucl, Euclidean};
 pub use multinomial::Multinomial;
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
@@ -49,7 +49,7 @@ pub use symmetric::{
 /// Which embedded geometry a session retracts onto.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ManifoldKind {
-    /// Ambient Euclidean. Today's path.
+    /// Ambient Euclidean. manopt `euclideanfactory` on a rank-1 vector.
     #[default]
     Euclidean,
     /// Unit sphere \(S^{n-1}\).
