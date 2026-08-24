@@ -114,8 +114,12 @@ Packing notes
   N). The IRC path itself is steepest descent in that metric,
   not a separate token.
 
-- ``So3`` is a 9-vector, row-major. The tangent projection returns
-  the embedded vector ``R Omega``, not the skew factor alone.
+- ``So3`` is manopt ``rotationsfactory(3)`` at ``k = 1``: a 9-vector,
+  row-major. The tangent projection returns the embedded vector
+  ``R Omega``, not the skew factor alone. Inner product is the
+  Frobenius dot via ``vecops``. Typical distance is ``pi * sqrt(3)``.
+  A 3N cluster is refused. SO(n) for ``n != 3`` is a different
+  factory.
 
 - ``Se3`` is twelve numbers: the same 9-vector, then a translation.
   It is one rigid body, not N atoms.

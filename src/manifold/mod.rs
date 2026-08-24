@@ -37,7 +37,10 @@ pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
 pub use rigid_quotient::RigidQuotient;
 pub use se3::Se3;
-pub use so3::So3;
+pub use so3::{
+    inner as inner_so3, is_so3, pack as pack_so3, typical_dist as typical_dist_so3,
+    unpack as unpack_so3, So3,
+};
 pub use spd::{is_spd, pack as pack_spd, side as side_spd, unpack as unpack_spd, Spd};
 pub use sphere::Sphere;
 pub use stiefel::{Stiefel, StiefelNp};
