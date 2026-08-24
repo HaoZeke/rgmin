@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ManifoldKind::EuclideanComplex`: manopt
+  `euclideancomplexfactory(n)`. Interleaved `(re, im)` pairs of
+  length `2 n`. Projection is the identity, retraction is `x + v`,
+  transport is the identity. C token 16. Tokens 7-10 stay reserved.
 - `ManifoldKind::SkewSymmetric`: manopt `skewsymmetricfactory`.
   Packed row-major `n^2`, `n >= 2`. Projection is `multiskew`
   (`0.5 (A - A^T)`), retraction is `X + U`, transport is the
