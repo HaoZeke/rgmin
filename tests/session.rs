@@ -287,6 +287,60 @@ fn sphere_rayleigh_stays_on_the_sphere() {
 }
 
 #[test]
+fn sphere_session_step_stays_on_the_set() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::manifold::inner_sphere;
+    use rgmin::{Manifold, ManifoldKind};
+
+    struct Ray;
+    impl Objective<f64> for Ray {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-2.0, -2.0, -2.0], array![2.0, 2.0, 2.0], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            0.5 * (x[0] * x[0] + 2.0 * x[1] * x[1] + 3.0 * x[2] * x[2])
+        }
+    }
+    impl Gradient<f64> for Ray {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            array![x[0], 2.0 * x[1], 3.0 * x[2]]
+        }
+    }
+    impl DifferentiableObjective<f64> for Ray {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = Ray;
+    let n = (1.0_f64 + 1.0 + 1.0).sqrt();
+    let mut x = array![1.0 / n, 1.0 / n, 1.0 / n];
+    assert!((inner_sphere(&x, &x).sqrt() - 1.0).abs() < 1e-15);
+    let mut solver = Solver::new(Method::Steepest, control(), 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    solver.set_accept(rgmin::Accept::None);
+    solver.step(&obj, &mut x).unwrap();
+    let nrm = inner_sphere(&x, &x).sqrt();
+    assert!((nrm - 1.0).abs() < 1e-14, "left the sphere {x:?}");
+    let g = Gradient::grad(&obj, x.view());
+    let r = ManifoldKind::Sphere.egrad2rgrad(&x, &g);
+    assert!(
+        inner_sphere(&x, &r).abs() < 1e-14,
+        "rgrad not tangent at {x:?}: x·r = {}",
+        inner_sphere(&x, &r)
+    );
+}
+
+#[test]
 fn stiefel_p1_matches_sphere_retract() {
     use rgmin::{Manifold, ManifoldKind};
     let x = array![0.0, 1.0, 0.0];
@@ -1067,11 +1121,7 @@ fn an_uphill_everywhere_oracle_is_refused_not_moved() {
         };
         (r, g)
     });
-    let mut solver = rgmin::Solver::new(
-        rgmin::Method::Steepest,
-        rgmin::Control::default(),
-        6,
-    );
+    let mut solver = rgmin::Solver::new(rgmin::Method::Steepest, rgmin::Control::default(), 6);
     solver.set_accept(rgmin::Accept::Energy);
     let mut x = Array1::from(vec![0.0; 6]);
     let rep = solver.step(&obj, &mut x).expect("step runs");

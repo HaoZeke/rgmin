@@ -133,5 +133,13 @@ Packing notes
   symmetrization. Retraction is ``X + U``. Transport is the
   identity. It is not the SPD cone and not a 3N cluster.
 
+- ``Sphere`` is manopt ``spherefactory(n)`` (``m = 1``): the unit
+  sphere :math:`S^{n-1}`. Projection is ``v - (x·v)x``. Retraction
+  is ``(x+v)/||x+v||``. Transport is projection at the arrival
+  point. The inner product is the Frobenius Euclidean dot via
+  ``vecops``. Typical distance is ``pi``. Unit-Frobenius ``n x m``
+  matrices (``spherefactory(n, m)`` with ``m > 1``) are a child
+  ticket. The product of spheres is ``Oblique``, not this factory.
+
 - ``set_project_rigid`` is the same horizontal projection as
   ``RigidQuotient`` and stays available on Euclidean.

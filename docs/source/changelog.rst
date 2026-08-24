@@ -6,6 +6,12 @@ Changelog
 Unreleased
 ~~~~~~~~~~
 
+Sphere factory parity with manopt ``spherefactory(n)`` (``m = 1``):
+projection ``v - (x·v)x``, retraction ``(x+v)/||x+v||``, transport
+is projection at the arrival point, Frobenius inner product
+through ``vecops``, typical distance ``pi``. A session steepest
+step on Sphere stays on :math:`S^{n-1}`.
+
 Symmetric matrices (``symmetric`` / ``RGMIN_MANIFOLD_SYMMETRIC`` = 14):
 manopt ``symmetricfactory``. Packed row-major ``n^2``. Projection is
 symmetrization, retraction is ``X + U``, transport is the identity.

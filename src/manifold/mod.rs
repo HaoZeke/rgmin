@@ -12,6 +12,7 @@
 //! mass-weighted Eckart, the IRC metric). Sphere / SO(3)-9 / SE(3)-12
 //! / Symmetric-n² / SPD-n² / ComplexCircle-2n / Oblique-nm are
 //! matrix-manifold embeddings, not a 3N cluster.
+//! [`ManifoldKind::Sphere`] is manopt `spherefactory(n)` (`m = 1`).
 //! [`ManifoldKind::Symmetric`] is manopt `symmetricfactory`.
 //! [`ManifoldKind::ComplexCircle`] is manopt `complexcirclefactory`.
 
@@ -39,7 +40,7 @@ pub use rigid_quotient::RigidQuotient;
 pub use se3::Se3;
 pub use so3::So3;
 pub use spd::{is_spd, pack as pack_spd, side as side_spd, unpack as unpack_spd, Spd};
-pub use sphere::Sphere;
+pub use sphere::{inner as inner_sphere, typical_dist as typical_dist_sphere, Sphere};
 pub use stiefel::{Stiefel, StiefelNp};
 pub use symmetric::{
     inner as inner_sym, is_symmetric, pack as pack_sym, side as side_sym,
@@ -52,7 +53,7 @@ pub enum ManifoldKind {
     /// Ambient Euclidean. Today's path.
     #[default]
     Euclidean,
-    /// Unit sphere \(S^{n-1}\).
+    /// Unit sphere \(S^{n-1}\). manopt `spherefactory(n)` (`m = 1`).
     Sphere,
     /// Rotation matrices SO(3), 9-vector row-major.
     So3,

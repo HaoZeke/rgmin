@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Sphere factory parity with manopt `spherefactory(n)` (`m = 1`):
+  projection `v - (x·v)x`, retraction `(x+v)/||x+v||`, transport
+  is projection at the arrival point, Frobenius inner product
+  through `vecops`, typical distance `pi`. A session steepest
+  step on Sphere stays on `S^{n-1}`.
 - `ManifoldKind::Symmetric`: manopt `symmetricfactory`. Packed
   row-major `n^2`. Projection is symmetrization, retraction is
   `X + U`, transport is the identity. C token 14.

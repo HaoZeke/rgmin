@@ -1,9 +1,14 @@
-//! Unit sphere \(S^{n-1}\). manopt_cpp `Sphere`.
+//! Unit sphere \(S^{n-1}\). manopt `spherefactory(n)` (`m = 1`).
 //!
 //! Projection \(v - (x\cdot v)x\). Retraction \((x+v)/\|x+v\|\).
-//! Transport is projection at the arrival point.
+//! Transport is projection at the arrival point. The inner product
+//! is the Frobenius / Euclidean dot (`d1(:).'*d2(:)`). Typical
+//! distance is \(\pi\). Unit-Frobenius \(n \times m\) matrices
+//! (`spherefactory(n, m)` with `m > 1`) are a different factory.
 
 use ndarray::Array1;
+
+use crate::vecops;
 
 use super::Manifold;
 
@@ -11,25 +16,30 @@ use super::Manifold;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Sphere;
 
-fn dot(a: &Array1<f64>, b: &Array1<f64>) -> f64 {
-    a.iter().zip(b.iter()).map(|(u, v)| u * v).sum()
+/// Frobenius inner product. manopt `M.inner = d1(:).'*d2(:)`.
+pub fn inner(u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+    vecops::dot(u.view(), v.view())
 }
 
-fn nrm(a: &Array1<f64>) -> f64 {
-    dot(a, a).sqrt()
+/// manopt `M.typicaldist = @() pi`. Diameter of the unit sphere.
+pub fn typical_dist() -> f64 {
+    std::f64::consts::PI
 }
 
 impl Manifold for Sphere {
     fn project(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
-        let s = dot(x, v);
-        Array1::from_iter(x.iter().zip(v.iter()).map(|(xi, vi)| vi - s * xi))
+        let mut t = v.clone();
+        let s = vecops::dot(x.view(), v.view());
+        vecops::axpy(-s, x.view(), &mut t);
+        t
     }
 
     fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
-        let y = x + v;
-        let n = nrm(&y);
+        let mut y = x.clone();
+        vecops::axpy(1.0, v.view(), &mut y);
+        let n = vecops::nrm2(y.view());
         if n <= 1e-16 {
-            let n0 = nrm(x);
+            let n0 = vecops::nrm2(x.view());
             if n0 <= 1e-16 {
                 return x.clone();
             }
@@ -49,12 +59,22 @@ mod tests {
     use ndarray::array;
 
     #[test]
-    fn project_is_orthogonal_to_x() {
+    fn project_is_tangent() {
         let x = array![1.0, 0.0, 0.0];
         let v = array![2.0, 3.0, 4.0];
         let t = Sphere.project(&x, &v);
-        assert!(dot(&x, &t).abs() < 1e-15);
+        assert!(inner(&x, &t).abs() < 1e-15, "x·t = {}", inner(&x, &t));
         assert!((t[1] - 3.0).abs() < 1e-15);
+        assert!((t[2] - 4.0).abs() < 1e-15);
+        assert!(t[0].abs() < 1e-15);
+        let r = Sphere.egrad2rgrad(&x, &v);
+        for i in 0..3 {
+            assert!((r[i] - t[i]).abs() < 1e-15, "egrad2rgrad {r:?} != {t:?}");
+        }
+        let tt = Sphere.project(&x, &t);
+        for i in 0..3 {
+            assert!((tt[i] - t[i]).abs() < 1e-15, "P^2 != P {tt:?} != {t:?}");
+        }
     }
 
     #[test]
@@ -62,6 +82,61 @@ mod tests {
         let x = array![0.0, 1.0, 0.0];
         let v = array![0.1, 0.0, -0.2];
         let y = Sphere.retract(&x, &v);
-        assert!((nrm(&y) - 1.0).abs() < 1e-14);
+        assert!(
+            (vecops::nrm2(y.view()) - 1.0).abs() < 1e-14,
+            "left S^{n-1} {y:?}"
+        );
+        let z = Sphere.retract(&x, &Array1::zeros(3));
+        assert!((vecops::nrm2(z.view()) - 1.0).abs() < 1e-15);
+        for i in 0..3 {
+            assert!((z[i] - x[i]).abs() < 1e-15, "zero step {z:?} != {x:?}");
+        }
+    }
+
+    #[test]
+    fn transport_stays_tangent_at_arrival() {
+        let x = array![1.0, 0.0, 0.0];
+        let v = Sphere.project(&x, &array![0.0, 0.3, -0.4]);
+        let y = Sphere.retract(&x, &v);
+        let w = array![0.2, -0.1, 0.5];
+        let t = Sphere.transport(&x, &y, &w);
+        assert!(
+            inner(&y, &t).abs() < 1e-14,
+            "arrival x·T(v) = {} at {y:?} t={t:?}",
+            inner(&y, &t)
+        );
+        let p = Sphere.project(&y, &w);
+        for i in 0..3 {
+            assert!(
+                (t[i] - p[i]).abs() < 1e-15,
+                "transp != proj(y) {t:?} != {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn frobenius_inner_and_typical_dist() {
+        let u = array![1.0, 2.0, 3.0];
+        let v = array![4.0, -1.0, 0.5];
+        assert!((inner(&u, &v) - 3.5).abs() < 1e-15);
+        assert!((typical_dist() - std::f64::consts::PI).abs() < 1e-15);
+        assert!((vecops::nrm2(u.view()) - inner(&u, &u).sqrt()).abs() < 1e-15);
+    }
+
+    #[test]
+    fn not_oblique_and_not_a_quotient() {
+        assert_ne!(
+            crate::manifold::ManifoldKind::Sphere,
+            crate::manifold::ManifoldKind::oblique(3, 1)
+        );
+        assert_ne!(
+            crate::manifold::ManifoldKind::Sphere,
+            crate::manifold::ManifoldKind::Euclidean
+        );
+        assert_ne!(
+            crate::manifold::ManifoldKind::Sphere,
+            crate::manifold::ManifoldKind::RigidQuotient
+        );
+        assert_eq!(crate::manifold::ManifoldKind::Sphere.as_str(), "sphere");
     }
 }
