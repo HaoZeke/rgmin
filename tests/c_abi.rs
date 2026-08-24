@@ -970,7 +970,7 @@ fn c_abi_euclidean_complex_stays_on_the_set() {
     let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_STEEPEST, &ctrl, 4) };
     assert!(!session.is_null());
     unsafe { rgmin_solver_set_euclidean_complex(session, 2) };
-    let mut x = [1.0_f64, 0.5, -0.25, 2.0];
+    let mut x = [2.0_f64, 1.0, -1.0, 3.0];
     let mut out = rgmin_report_t {
         value: 0.0,
         steps: 0,

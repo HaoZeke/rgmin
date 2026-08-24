@@ -930,7 +930,7 @@ fn euclidean_complex_session_stays_on_the_set() {
     }
 
     let obj = CplxBowl;
-    let mut x = array![1.0, 0.5, -0.25, 2.0];
+    let mut x = array![2.0, 1.0, -1.0, 3.0];
     let mut solver = Solver::new(
         Method::Steepest,
         Control {
