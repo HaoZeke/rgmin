@@ -102,6 +102,9 @@ pub enum Method {
     ///
     /// Barzilai and Borwein, <https://doi.org/10.1093/imanum/8.1.141>.
     /// Raydan, <https://doi.org/10.1137/S1052623494266365>.
+    /// Iannazzo and Porcelli, Riemannian BB,
+    /// <https://doi.org/10.1093/imanum/drx015>.
+    /// Geometry comes from [`crate::Solver::set_manifold`].
     Bb,
     /// Powell dogleg on a caller-supplied dense Hessian.
     ///
@@ -149,6 +152,12 @@ impl Method {
             conjugacy,
             restart: Restart::Never,
         }
+    }
+
+    /// Riemannian Barzilai-Borwein (manopt `barzilaiborwein`).
+    /// Same as [`Self::Bb`]. Geometry from [`crate::Solver::set_manifold`].
+    pub fn rbb() -> Self {
+        Self::Bb
     }
 }
 

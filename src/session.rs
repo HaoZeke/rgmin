@@ -286,7 +286,12 @@ impl Solver {
     }
 
     fn horizontal_grad(&self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
-        let mut g = self.project_vec(x, grad);
+        // Quotient geometries carry session masses / periodic flags
+        // that the stateless ManifoldKind projector does not see.
+        let mut g = match self.manifold {
+            ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => self.project_vec(x, grad),
+            other => other.egrad2rgrad(x, grad),
+        };
         if self.project_rigid
             && !matches!(
                 self.manifold,
@@ -311,8 +316,9 @@ impl Solver {
         }
     }
 
-    /// Riemannian L-BFGS pair at `x`: `s = T(x - old)`, `y = g - T(g_old)`.
-    fn lbfgs_sy(
+    /// Transported pair at `x`: `s = T(x - old)`, `y = g - T(g_old)`.
+    /// manopt `barzilaiborwein` / `rlbfgs` at the arrival tangent.
+    fn transported_sy(
         &self,
         old: &Array1<f64>,
         x: &Array1<f64>,
@@ -322,6 +328,17 @@ impl Solver {
         let s = self.transport_vec(old, x, &(x - old));
         let y = grad - &self.transport_vec(old, x, gold);
         (s, y)
+    }
+
+    /// Riemannian L-BFGS pair at `x`: `s = T(x - old)`, `y = g - T(g_old)`.
+    fn lbfgs_sy(
+        &self,
+        old: &Array1<f64>,
+        x: &Array1<f64>,
+        gold: &Array1<f64>,
+        grad: &Array1<f64>,
+    ) -> (Array1<f64>, Array1<f64>) {
+        self.transported_sy(old, x, gold, grad)
     }
 
     fn same_last_x(&self, x: &Array1<f64>) -> bool {
@@ -864,14 +881,15 @@ impl Solver {
                 fire_after_v1(state, &force_new);
             }
             Inner::Bb { prev_s, prev_y } => {
+                // `grad` is already rgrad = egrad2rgrad. First step
+                // has no pair; later steps use T(s), T(y) from the
+                // previous accepted retract.
                 let dir = bb_direction(prev_s.as_ref(), prev_y.as_ref(), &grad, self.istep);
-                let old = x.clone();
-                let gold = grad.clone();
-                let (npos, nval, ngrad, moved) = accept_step(
+                let (npos, nval, ngrad, _moved) = accept_step(
                     obj,
                     x,
                     value,
-                    &gold,
+                    &grad,
                     &dir,
                     &self.control,
                     self.accept,
@@ -882,10 +900,6 @@ impl Solver {
                 *x = npos;
                 value = nval;
                 grad = ngrad;
-                if moved {
-                    *prev_s = Some(&*x - &old);
-                    *prev_y = Some(&grad - &gold);
-                }
             }
             Inner::Pso { .. } | Inner::Newton { .. } | Inner::Dogleg { .. } => unreachable!(),
         }
@@ -910,6 +924,16 @@ impl Solver {
         };
         if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
             solver.replace_newest(s, y, Some(gn));
+        }
+
+        if matches!(self.inner, Inner::Bb { .. })
+            && x.iter().zip(start.iter()).any(|(a, b)| a != b)
+        {
+            let (s, y) = self.transported_sy(&start, x, &gold, &grad);
+            if let Inner::Bb { prev_s, prev_y } = &mut self.inner {
+                *prev_s = Some(s);
+                *prev_y = Some(y);
+            }
         }
 
         self.remember(x, value, &grad);
