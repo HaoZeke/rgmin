@@ -781,7 +781,7 @@ fn lowest_eigenpair_elpa_is_unavailable() {
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 14);
+    assert_eq!(stamp.abi_minor, 15);
     assert_eq!(stamp.layout_revision, 4);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
 }
@@ -841,10 +841,10 @@ fn c_abi_respects_maxmove_when_initial_step_is_larger() {
 fn c_abi_every_setter_survives_live_and_null_sessions() {
     use rgmin::ffi::{
         rgmin_manifold_t, rgmin_qn_step_t, rgmin_solver_forget, rgmin_solver_set_atom_maxmove,
-        rgmin_solver_set_cautious, rgmin_solver_set_extra_updates, rgmin_solver_set_manifold,
-        rgmin_solver_set_masses, rgmin_solver_set_maxmove, rgmin_solver_set_oblique,
-        rgmin_solver_set_periodic, rgmin_solver_set_project_rigid, rgmin_solver_set_qn_step,
-        rgmin_solver_set_stiefel,
+        rgmin_solver_set_cautious, rgmin_solver_set_euclidean_complex,
+        rgmin_solver_set_extra_updates, rgmin_solver_set_manifold, rgmin_solver_set_masses,
+        rgmin_solver_set_maxmove, rgmin_solver_set_oblique, rgmin_solver_set_periodic,
+        rgmin_solver_set_project_rigid, rgmin_solver_set_qn_step, rgmin_solver_set_stiefel,
     };
     let ctrl = rgmin_control_t {
         maxiter: 20,
@@ -869,6 +869,8 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_masses(session, std::ptr::null(), 0);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_SKEWSYMMETRIC);
+        rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX);
+        rgmin_solver_set_euclidean_complex(session, 2);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL);
         rgmin_solver_set_oblique(session, 3, 2);
         rgmin_solver_set_stiefel(session, 4, 2);
@@ -912,9 +914,94 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_periodic(null, 0);
         rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE);
         rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL);
+        rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX);
+        rgmin_solver_set_euclidean_complex(null, 2);
         rgmin_solver_set_oblique(null, 3, 2);
         rgmin_solver_set_stiefel(null, 4, 2);
         rgmin_solver_set_masses(null, masses.as_ptr(), masses.len());
         rgmin_solver_forget(null);
     }
+}
+
+unsafe extern "C" fn cplx_bowl_eval(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    value_out: *mut f64,
+) -> rgmin_status_t {
+    let (p, n) = unsafe { cpu_f64(x) };
+    assert_eq!(n, 4);
+    let mut s = 0.0;
+    for i in 0..4 {
+        let v = unsafe { *p.add(i) };
+        s += v * v;
+    }
+    unsafe { *value_out = 0.5 * s };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn cplx_bowl_grad(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    g: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let (p, n) = unsafe { cpu_f64(x) };
+    assert_eq!(n, 4);
+    let (gp, gn) = unsafe { cpu_f64(g as *const _) };
+    assert_eq!(gn, 4);
+    for i in 0..4 {
+        unsafe { *(gp as *mut f64).add(i) = *p.add(i) };
+    }
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+/// Token 16 / set_euclidean_complex keeps the interleaved C^n packing.
+/// Retraction is translation: the point stays in C^n and is not
+/// sphere-normalized.
+#[test]
+fn c_abi_euclidean_complex_stays_on_the_set() {
+    use rgmin::ffi::{rgmin_manifold_t, rgmin_solver_set_euclidean_complex};
+    let ctrl = rgmin_control_t {
+        maxiter: 20,
+        gtol: 1e-8,
+        istep: 0.1,
+        memory: 0,
+        maxmove: 0.0,
+    };
+    let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_STEEPEST, &ctrl, 4) };
+    assert!(!session.is_null());
+    unsafe { rgmin_solver_set_euclidean_complex(session, 2) };
+    let mut x = [1.0_f64, 0.5, -0.25, 2.0];
+    let mut out = rgmin_report_t {
+        value: 0.0,
+        steps: 0,
+        grad_norm: 0.0,
+    };
+    let xt = unsafe { rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), 4) };
+    let st = unsafe {
+        rgmin_solver_step(
+            session,
+            Some(cplx_bowl_eval),
+            Some(cplx_bowl_grad),
+            std::ptr::null_mut(),
+            xt,
+            &mut out,
+        )
+    };
+    unsafe { rgmin_tensor_free(xt) };
+    assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+    assert_eq!(x.len(), 4);
+    assert!(x.iter().all(|a| a.is_finite()));
+    let fro = x.iter().map(|a| a * a).sum::<f64>().sqrt();
+    assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {x:?}");
+    let n0 = (x[0] * x[0] + x[1] * x[1]).sqrt();
+    let n1 = (x[2] * x[2] + x[3] * x[3]).sqrt();
+    assert!((n0 - 1.0).abs() > 0.05, "must not force S^1 {x:?}");
+    assert!((n1 - 1.0).abs() > 0.05, "must not force S^1 {x:?}");
+    assert_eq!(
+        rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX as i32,
+        16
+    );
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MW_RIGID as i32, 6);
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_OBLIQUE as i32, 11);
+    unsafe { rgmin_solver_free(session) };
 }

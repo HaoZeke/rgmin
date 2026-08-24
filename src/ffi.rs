@@ -63,7 +63,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 14;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 15;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -1400,6 +1400,9 @@ pub enum rgmin_manifold_t {
     /// Real skew-symmetric n-by-n, row-major n², n >= 2.
     /// manopt `skewsymmetricfactory`.
     RGMIN_MANIFOLD_SKEWSYMMETRIC = 15,
+    /// Complex Euclidean C^n. Packed interleaved, length 2n.
+    /// Token defaults to n = 1; use rgmin_solver_set_euclidean_complex.
+    RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX = 16,
 }
 
 #[unsafe(no_mangle)]
@@ -1422,6 +1425,7 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
         rgmin_manifold_t::RGMIN_MANIFOLD_COMPLEX_CIRCLE => ManifoldKind::ComplexCircle { n: 1 },
         rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC => ManifoldKind::Symmetric,
         rgmin_manifold_t::RGMIN_MANIFOLD_SKEWSYMMETRIC => ManifoldKind::SkewSymmetric,
+        rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX => ManifoldKind::EuclideanComplex { n: 1 },
         rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN => ManifoldKind::Euclidean,
     };
     unsafe { (*solver).solver.set_manifold(kind) };
@@ -1462,6 +1466,18 @@ pub unsafe extern "C" fn rgmin_solver_set_complex_circle(solver: *mut rgmin_solv
         return;
     }
     unsafe { (*solver).solver.set_complex_circle(n) };
+}
+
+/// Complex Euclidean \(\mathbb{C}^n\). Packed interleaved, length `2 n`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_euclidean_complex(
+    solver: *mut rgmin_solver_t,
+    n: usize,
+) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_euclidean_complex(n) };
 }
 
 /// Per-atom masses for `RGMIN_MANIFOLD_MW_RIGID`. `n_atoms == 0` or a
