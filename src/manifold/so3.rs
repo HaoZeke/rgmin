@@ -209,7 +209,10 @@ mod tests {
     #[test]
     fn retract_stays_in_so3() {
         let x = identity();
-        let v = So3.project(&x, &array![0.0, -0.2, 0.1, 0.2, 0.0, -0.05, -0.1, 0.05, 0.0]);
+        let v = So3.project(
+            &x,
+            &array![0.0, -0.2, 0.1, 0.2, 0.0, -0.05, -0.1, 0.05, 0.0],
+        );
         let y = So3.retract(&x, &v);
         assert!(is_so3(&y), "left SO(3) {y:?}");
         assert_eq!(y.len(), 9);
