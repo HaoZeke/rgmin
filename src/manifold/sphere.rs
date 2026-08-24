@@ -84,7 +84,7 @@ mod tests {
         let y = Sphere.retract(&x, &v);
         assert!(
             (vecops::nrm2(y.view()) - 1.0).abs() < 1e-14,
-            "left S^{n-1} {y:?}"
+            "left S^{{n-1}} {y:?}"
         );
         let z = Sphere.retract(&x, &Array1::zeros(3));
         assert!((vecops::nrm2(z.view()) - 1.0).abs() < 1e-15);
