@@ -67,7 +67,7 @@ where
             c2,
         } => minimize_pso(obj, init, control, n_particles, inertia, c1, c2),
         Method::Newton { kind: _ } | Method::Dogleg => Err(Error::NeedHessian),
-        Method::Fire { .. } | Method::Bb => run_session(obj, init, control, method),
+        Method::Fire { .. } | Method::Bb | Method::Rtr => run_session(obj, init, control, method),
     }
 }
 
@@ -110,7 +110,7 @@ where
 {
     match method {
         Method::Newton { kind } => minimize_newton(obj, init, control, kind),
-        Method::Dogleg => run_session_hess(obj, init, control, method),
+        Method::Dogleg | Method::Rtr => run_session_hess(obj, init, control, method),
         other => minimize_method(obj, init, control, other, linesearch),
     }
 }

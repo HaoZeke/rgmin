@@ -25,6 +25,7 @@ use crate::qn_step::QnStep;
 use crate::report::Report;
 use crate::rigid::{project_horizontal, project_out_rot_trans};
 use crate::step::{l2, scale_step, scale_step_atom};
+use crate::rtr::{fd_eps, rhess_ehess, rhess_fd, scale_tangent, tcg};
 use crate::trust::{
     accept_ratio, dogleg_direction, predicted_reduction, reduction_ratio, update_radius,
 };
@@ -99,6 +100,9 @@ enum Inner {
         prev_y: Option<Array1<f64>>,
     },
     Dogleg {
+        radius: f64,
+    },
+    Rtr {
         radius: f64,
     },
 }
@@ -376,6 +380,9 @@ impl Solver {
             Inner::Dogleg { radius } => {
                 *radius = self.control.istep.max(1e-8);
             }
+            Inner::Rtr { radius } => {
+                *radius = self.control.istep.max(1e-8);
+            }
         }
     }
 
@@ -409,7 +416,7 @@ impl Solver {
                 QnStep::Rfo => Some(NewtonKind::Rfo),
                 QnStep::TwoLoop => None,
             },
-            Inner::Dogleg { .. } => None,
+            Inner::Dogleg { .. } | Inner::Rtr { .. } => None,
             _ => return self.step_first_order(obj, x),
         };
         let cached = self.same_last_x(x);
@@ -434,6 +441,10 @@ impl Solver {
         let hess = obj.hessian(x.view());
         if matches!(self.inner, Inner::Dogleg { .. }) {
             return self.step_dogleg(obj, x, value, grad, &hess);
+        }
+        if matches!(self.inner, Inner::Rtr { .. }) {
+            let egrad = obj.value_and_gradient(x.view()).1;
+            return self.step_rtr(obj, x, value, &grad, &egrad, Some(&hess));
         }
         #[cfg(feature = "highs")]
         if self.highs {
@@ -603,6 +614,126 @@ impl Solver {
         }
     }
 
+    /// One Riemannian trust-region iteration: tCG in the tangent, retract.
+    /// `hess` is the ambient Euclidean Hessian when the host supplied one.
+    /// `egrad` is the ambient Euclidean gradient (Weingarten on the sphere).
+    fn step_rtr<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        value: f64,
+        rgrad: &Array1<f64>,
+        egrad: &Array1<f64>,
+        hess: Option<&Array2<f64>>,
+    ) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let radius = match &self.inner {
+            Inner::Rtr { radius } => *radius,
+            _ => self.control.istep.max(1e-8),
+        };
+        let rmax = self
+            .atom_maxmove
+            .or(self.control.maxmove)
+            .unwrap_or(radius * 8.0)
+            .max(radius);
+        let cap = self.atom_maxmove.or(self.control.maxmove);
+        let tr_radius = match cap {
+            Some(c) if c > 0.0 => radius.min(c),
+            _ => radius,
+        };
+        let n = rgrad.len();
+        let maxinner = (2 * n).max(1);
+        let mut eta = if let Some(h) = hess {
+            let hv = |v: &Array1<f64>| rhess_ehess(&self.manifold, x, egrad, h, v);
+            tcg(rgrad, tr_radius, maxinner, hv).0
+        } else {
+            let hv = |v: &Array1<f64>| {
+                rhess_fd(obj, &self.manifold, x, rgrad, v, fd_eps())
+            };
+            tcg(rgrad, tr_radius, maxinner, hv).0
+        };
+        eta = self.project_vec(x, &eta);
+        if let Some(c) = cap {
+            scale_tangent(&mut eta, c);
+        }
+        let retracted = self.retract_vec(x, &eta);
+        let clipped = obj.bounds().clip(retracted.view());
+        let trial = if matches!(self.manifold, crate::manifold::ManifoldKind::Euclidean)
+            || clipped
+                .iter()
+                .zip(retracted.iter())
+                .all(|(a, b)| (*a - *b).abs() <= 1e-15)
+        {
+            clipped
+        } else {
+            let mut inc = &clipped - &*x;
+            inc = self.project_vec(x, &inc);
+            self.retract_vec(x, &inc)
+        };
+        let p = {
+            // Tangent increment used for the model: eta, not the ambient
+            // difference, so the ratio stays in the tangent metric.
+            eta
+        };
+        let pnorm = l2(&p);
+        let (ft, gt_e) = obj.value_and_gradient(trial.view());
+        let pred = if let Some(h) = hess {
+            let hp = rhess_ehess(&self.manifold, x, egrad, h, &p);
+            crate::rtr::predicted_reduction_hvp(rgrad, &p, &hp)
+        } else {
+            let hp = rhess_fd(obj, &self.manifold, x, rgrad, &p, fd_eps());
+            crate::rtr::predicted_reduction_hvp(rgrad, &p, &hp)
+        };
+        let rho = if ft.is_finite() {
+            reduction_ratio(value - ft, pred)
+        } else {
+            -1.0
+        };
+        if let Inner::Rtr { radius } = &mut self.inner {
+            *radius = update_radius(*radius, rho, pnorm, rmax);
+        }
+        if accept_ratio(rho) && ft.is_finite() {
+            *x = trial;
+            let gt = self.horizontal_grad(x, &gt_e);
+            self.remember(x, ft, &gt);
+            self.steps += 1;
+            Ok(Report {
+                value: ft,
+                coords: x.clone(),
+                steps: self.steps,
+                grad_norm: l2(&gt),
+            })
+        } else {
+            self.remember(x, value, rgrad);
+            self.steps += 1;
+            Ok(Report {
+                value,
+                coords: x.clone(),
+                steps: self.steps,
+                grad_norm: l2(rgrad),
+            })
+        }
+    }
+
+    fn retract_vec(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+        match self.manifold {
+            crate::manifold::ManifoldKind::MwRigid => {
+                let mut w = v.clone();
+                let masses = self.masses.as_ref().and_then(|m| m.as_slice());
+                project_horizontal(&mut w, x.view(), masses, !self.periodic);
+                &*x + &w
+            }
+            crate::manifold::ManifoldKind::RigidQuotient => {
+                let mut w = v.clone();
+                project_horizontal(&mut w, x.view(), None, !self.periodic);
+                &*x + &w
+            }
+            other => other.retract(x, v),
+        }
+    }
+
     fn step_first_order<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,
@@ -621,6 +752,20 @@ impl Solver {
 
         if let Inner::Pso { .. } = &self.inner {
             return self.step_pso(obj, x);
+        }
+        if matches!(self.inner, Inner::Rtr { .. }) {
+            let (value, egrad) = obj.value_and_gradient(x.view());
+            let rgrad = self.horizontal_grad(x, &egrad);
+            let gnorm = l2(&rgrad);
+            if gnorm < self.control.gtol {
+                return Ok(Report {
+                    value,
+                    coords: x.clone(),
+                    steps: self.steps,
+                    grad_norm: gnorm,
+                });
+            }
+            return self.step_rtr(obj, x, value, &rgrad, &egrad, None);
         }
 
         let (mut value, mut grad) = if cached {
@@ -878,7 +1023,9 @@ impl Solver {
                     *prev_y = Some(&grad - &gold);
                 }
             }
-            Inner::Pso { .. } | Inner::Newton { .. } | Inner::Dogleg { .. } => unreachable!(),
+            Inner::Pso { .. } | Inner::Newton { .. } | Inner::Dogleg { .. } | Inner::Rtr { .. } => {
+                unreachable!()
+            }
         }
 
         let delta = &*x - &start;
@@ -1054,6 +1201,9 @@ impl Inner {
                 prev_y: None,
             },
             Method::Dogleg => Inner::Dogleg {
+                radius: istep.max(1e-8),
+            },
+            Method::Rtr => Inner::Rtr {
                 radius: istep.max(1e-8),
             },
         }

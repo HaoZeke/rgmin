@@ -108,6 +108,15 @@ pub enum Method {
     /// Nocedal and Wright, algorithm 4.1,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
     Dogleg,
+    /// Riemannian trust region with truncated CG (manopt `trustregions` + `tCG`).
+    ///
+    /// tCG runs in the tangent; the accepted increment is retracted.
+    /// Euclidean `step_hess` uses the supplied Hessian; `step` uses a
+    /// finite-difference Riemannian Hessian. Radius updates reuse
+    /// [`crate::trust`].
+    ///
+    /// Absil, Baker, Gallivan, <https://doi.org/10.1007/s10208-005-0179-9>.
+    Rtr,
 }
 
 impl Method {

@@ -110,3 +110,18 @@ model minimizer along -g) and the Newton point, taking whichever the
 radius allows. It is the classical picture the Steihaug path
 generalizes: CG's first iterate is the Cauchy step, its limit is the
 Newton step, and truncation by the boundary lands in between.
+
+5 Riemannian trust regions (manopt tCG)
+---------------------------------------
+
+On a manifold the same model lives in the tangent: ``tCG`` is
+Steihaug-Toint with a caller-supplied Hessian action, then the
+accepted increment is retracted (``Method::Rtr``, ``src/rtr.rs``).
+Absil, Baker, Gallivan, *Trust-region methods on Riemannian
+manifolds*,
+`10.1007/s10208-005-0179-9 <https://doi.org/10.1007/s10208-005-0179-9>`_.
+The Euclidean dogleg path is unchanged (``Method::Dogleg``). A
+finite-difference Riemannian Hessian (manopt ``getHessianFD``) covers
+first-order oracles: retract a scaled tangent, transport the new
+Riemannian gradient back, divide. The sphere's ``ehess2rhess``
+subtracts the Weingarten term ``(x . egrad) u`` before projecting.

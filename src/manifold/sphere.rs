@@ -21,8 +21,24 @@ fn nrm(a: &Array1<f64>) -> f64 {
 
 impl Manifold for Sphere {
     fn project(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
-        let s = dot(x, v);
-        Array1::from_iter(x.iter().zip(v.iter()).map(|(xi, vi)| vi - s * xi))
+        let s = crate::vecops::dot(x.view(), v.view());
+        let mut out = v.clone();
+        crate::vecops::axpy(-s, x.view(), &mut out);
+        out
+    }
+
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        u: &Array1<f64>,
+    ) -> Array1<f64> {
+        // manopt spherefactory: proj(ehess - (x . egrad) u)
+        let s = crate::vecops::dot(x.view(), egrad.view());
+        let mut w = ehess.clone();
+        crate::vecops::axpy(-s, u.view(), &mut w);
+        self.project(x, &w)
     }
 
     fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
@@ -63,5 +79,18 @@ mod tests {
         let v = array![0.1, 0.0, -0.2];
         let y = Sphere.retract(&x, &v);
         assert!((nrm(&y) - 1.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn ehess2rhess_stays_tangent() {
+        let x = array![1.0, 0.0, 0.0];
+        let egrad = array![0.5, 1.0, 0.0];
+        let ehess = array![0.2, 0.3, 0.4];
+        let u = array![0.0, 1.0, 0.0];
+        let h = Sphere.ehess2rhess(&x, &egrad, &ehess, &u);
+        assert!(dot(&x, &h).abs() < 1e-15);
+        // Weingarten: proj(ehess) - (x.egrad) u = (0, 0.3, 0.4) - 0.5 (0, 1, 0)
+        assert!((h[1] + 0.2).abs() < 1e-15);
+        assert!((h[2] - 0.4).abs() < 1e-15);
     }
 }

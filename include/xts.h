@@ -49,7 +49,7 @@ typedef struct xts_abi_stamp_t {
 
 #define XTS_ABI_VERSION_MAJOR 1
 #define XTS_ABI_VERSION_MINOR 14
-#define XTS_ABI_LAYOUT_REVISION 4
+#define XTS_ABI_LAYOUT_REVISION 5
 
 /** Solver selector. \c XTS_LBFGS is the production unconstrained method. */
 typedef enum xts_method_t {
@@ -73,8 +73,14 @@ typedef enum xts_method_t {
     XTS_FIRE = 17,
     XTS_BB = 18,
     XTS_DOGLEG = 19,
-    XTS_FIRE2 = 20
+    XTS_FIRE2 = 20,
+    XTS_RTR = 21
 } xts_method_t;
+#ifndef RGMIN_RTR
+#define RGMIN_RTR XTS_RTR
+#define RGMIN_DOGLEG XTS_DOGLEG
+#define RGMIN_FIRE2 XTS_FIRE2
+#endif
 
 /** Conjugacy coefficient β. Closed leaf subset of dest Conjugacy
  *  (src/nlcg). Integers are dest declaration order. Hybrid stays

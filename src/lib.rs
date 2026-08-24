@@ -62,6 +62,8 @@ pub mod scg;
 mod session;
 mod step;
 mod trust;
+/// Riemannian trust region (manopt `trustregions` + `tCG`).
+pub mod rtr;
 /// Sella IRCTrustRegion / Gonzalez--Schlegel mass-weighted sphere.
 pub mod irc_trust;
 /// Sella QuasiNewton / QuasiNewtonIRC restricted step.
@@ -104,3 +106,4 @@ pub use qn_step::QnStep;
 pub use report::Report;
 pub use scg::{DirectionalCurvature, ScgParams, minimize_scg, minimize_scg_exact};
 pub use session::Solver;
+pub use rtr::{rhess_ehess, rhess_fd, tcg};

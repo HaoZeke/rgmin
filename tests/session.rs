@@ -1046,6 +1046,129 @@ fn dogleg_kills_a_quadratic() {
     assert!(x.iter().all(|v| v.abs() < 1e-6));
 }
 
+#[test]
+fn rtr_euclidean_quadratic_descends() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::{Array2, ArrayView1};
+    use rgmin::HessianObjective;
+
+    struct Quad;
+    impl Objective<f64> for Quad {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-1e6, -1e6], array![1e6, 1e6], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            5.0 * x[0] * x[0] + 0.5 * x[1] * x[1]
+        }
+    }
+    impl Gradient<f64> for Quad {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> ndarray::Array1<f64> {
+            array![10.0 * x[0], x[1]]
+        }
+    }
+    impl DifferentiableObjective<f64> for Quad {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, ndarray::Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+    impl HessianObjective for Quad {
+        fn hessian(&self, _x: ArrayView1<f64>) -> Array2<f64> {
+            Array2::from_shape_vec((2, 2), vec![10.0, 0.0, 0.0, 1.0]).unwrap()
+        }
+    }
+
+    let obj = Quad;
+    let mut x = array![2.0, -3.0];
+    let f0 = obj.eval(x.view());
+    let mut solver = Solver::new(
+        Method::Rtr,
+        Control {
+            maxiter: 10,
+            gtol: 1e-10,
+            istep: 4.0,
+            maxmove: None,
+        },
+        2,
+    );
+    let rep = solver.step_hess(&obj, &mut x).unwrap();
+    assert!(rep.value < f0, "RTR on a Euclidean quadratic did not descend");
+    for _ in 0..7 {
+        let rep = solver.step_hess(&obj, &mut x).unwrap();
+        if rep.grad_norm < 1e-10 {
+            break;
+        }
+    }
+    assert!(obj.eval(x.view()) < 1e-10, "RTR value {}", obj.eval(x.view()));
+}
+
+#[test]
+fn rtr_step_on_sphere_stays_on_the_sphere() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::ManifoldKind;
+
+    struct Ray;
+    impl Objective<f64> for Ray {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-2.0, -2.0, -2.0], array![2.0, 2.0, 2.0], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            0.5 * (x[0] * x[0] + 2.0 * x[1] * x[1] + 3.0 * x[2] * x[2])
+        }
+    }
+    impl Gradient<f64> for Ray {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> ndarray::Array1<f64> {
+            array![x[0], 2.0 * x[1], 3.0 * x[2]]
+        }
+    }
+    impl DifferentiableObjective<f64> for Ray {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, ndarray::Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = Ray;
+    let n = (3.0_f64).sqrt();
+    let mut x = array![1.0 / n, 1.0 / n, 1.0 / n];
+    let f0 = obj.eval(x.view());
+    let mut solver = Solver::new(
+        Method::Rtr,
+        Control {
+            maxiter: 20,
+            gtol: 1e-8,
+            istep: 0.3,
+            maxmove: None,
+        },
+        3,
+    );
+    solver.set_manifold(ManifoldKind::Sphere);
+    let _ = solver.step(&obj, &mut x).unwrap();
+    let nrm = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+    assert!((nrm - 1.0).abs() < 1e-10, "RTR left the sphere {x:?}");
+    for _ in 0..19 {
+        let _ = solver.step(&obj, &mut x).unwrap();
+        let nrm = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+        assert!((nrm - 1.0).abs() < 1e-10, "RTR left the sphere {x:?}");
+    }
+    assert!(obj.eval(x.view()) <= f0 + 1e-12, "RTR raised the Rayleigh quotient");
+}
+
 /// The energy policy's fallback faces the same test as the steps it
 /// replaces: an oracle that rises in every direction must come back
 /// unmoved rather than accepting an uphill steepest step the policy

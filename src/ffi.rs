@@ -64,7 +64,7 @@ pub struct rgmin_abi_stamp_t {
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
 pub const RGMIN_ABI_VERSION_MINOR: u16 = 14;
-pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
+pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 5;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
 #[repr(C)]
@@ -112,6 +112,8 @@ pub enum rgmin_method_t {
     RGMIN_DOGLEG = 19,
     /// FIRE 2.0 (Guénolé 2020).
     RGMIN_FIRE2 = 20,
+    /// Riemannian trust region with truncated CG.
+    RGMIN_RTR = 21,
 }
 
 /// Closed leaf conjugacy. Integers match dest [`Conjugacy`] declaration
@@ -370,6 +372,7 @@ fn method_from_c(m: rgmin_method_t, memory: usize) -> Method {
         rgmin_method_t::RGMIN_FIRE2 => Method::Fire {
             kind: crate::FireKind::V2,
         },
+        rgmin_method_t::RGMIN_RTR => Method::Rtr,
     }
 }
 

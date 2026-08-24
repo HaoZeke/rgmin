@@ -162,6 +162,19 @@ pub trait Manifold {
     fn egrad2rgrad(&self, x: &Array1<f64>, egrad: &Array1<f64>) -> Array1<f64> {
         self.project(x, egrad)
     }
+    /// Ambient Euclidean Hessian action `ehess` along tangent `u` to a
+    /// Riemannian Hessian action. Default is the tangent project of `ehess`.
+    /// The sphere subtracts the Weingarten term `(x . egrad) u`.
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        u: &Array1<f64>,
+    ) -> Array1<f64> {
+        let _ = (egrad, u);
+        self.project(x, ehess)
+    }
     /// Retraction of the tangent step `v` at `x`. Same length as `x`.
     fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64>;
     /// Vector transport of `v` from `x_from` to `x_to`.
@@ -202,6 +215,19 @@ impl Manifold for ManifoldKind {
             Self::Spd => Spd.project(x, v),
             Self::Symmetric => Symmetric.project(x, v),
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.project(x, v),
+        }
+    }
+
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        u: &Array1<f64>,
+    ) -> Array1<f64> {
+        match self {
+            Self::Sphere => Sphere.ehess2rhess(x, egrad, ehess, u),
+            other => other.project(x, ehess),
         }
     }
 

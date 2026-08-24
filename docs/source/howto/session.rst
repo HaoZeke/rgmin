@@ -26,7 +26,10 @@ Rust
     let report = solver.step(&obj, &mut x).unwrap();
 
 ``step`` is one outer iteration. ``step_hess`` / ``step_hess_fg`` take a
-host Hessian. ``forget`` drops pair history, conjugacy, and moments.
+host Hessian. ``Method::Rtr`` (C ``RGMIN_RTR``) is the Riemannian
+trust region: tCG in the tangent, then retract; ``step`` uses a
+finite-difference Hessian, ``step_hess`` the host matrix.
+``forget`` drops pair history, conjugacy, and moments.
 ``set_atom_maxmove`` is the eOn per-atom clip.
 ``set_project_rigid`` projects translations and rotations on isolated
 clusters.

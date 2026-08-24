@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Riemannian trust region (`Method::Rtr`): manopt `trustregions` +
+  truncated CG in the tangent, then retract. Euclidean `step_hess`
+  uses the supplied Hessian; `step` uses a finite-difference
+  Riemannian Hessian. Radius updates reuse the existing dogleg
+  helpers. C token 21 (`RGMIN_RTR`).
 - `ManifoldKind::Symmetric`: manopt `symmetricfactory`. Packed
   row-major `n^2`. Projection is symmetrization, retraction is
   `X + U`, transport is the identity. C token 14.

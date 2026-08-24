@@ -42,6 +42,7 @@ enum class Method {
     Bb = RGMIN_BB,
     Dogleg = RGMIN_DOGLEG,
     Fire2 = RGMIN_FIRE2,
+    Rtr = RGMIN_RTR,
 };
 
 struct Control {
