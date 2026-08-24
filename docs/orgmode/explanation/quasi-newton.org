@@ -47,6 +47,17 @@ Every dot and axpy in the crate's two-loop routes through the
 backend (serial, ~par~, and by design a later device backend) is a
 detail behind four functions.
 
+On a non-Euclidean session manifold the same two-loop is manopt
+~rlbfgs~ (Huang, Absil, Gallivan). The gradient is the Riemannian
+one (~egrad2rgrad~). After each accepted retract every stored
+~(s_i, y_i)~ is vector-transported into the new tangent, then the
+newest pair is recorded as ~s = T(step)~, ~y = g_+ - T(g)~.
+Embedded geometries with a Euclidean ambient metric (sphere,
+MwRigid, ...) keep the Euclidean inner product on the tangent, so
+~vecops::dot~ is the Riemannian pairing. Euclidean transport is
+the identity and the recorded pair is the usual ~x_+ - x~,
+~g_+ - g~.
+
 * Stale pairs and the cautious update
 
 A pair with y . s <= 0 would corrupt the inverse model, so the update

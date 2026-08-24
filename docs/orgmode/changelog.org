@@ -6,6 +6,11 @@
 
 ** Unreleased
 
+Riemannian L-BFGS (manopt ~rlbfgs~) on ~Method::Lbfgs~ /
+~Method::rlbfgs~. The session takes ~egrad2rgrad~ and transports
+stored ~(s, y)~ pairs into the current tangent after each accepted
+retract. Euclidean transport is the identity.
+
 Symmetric matrices (~symmetric~ / ~RGMIN_MANIFOLD_SYMMETRIC~ = 14):
 manopt ~symmetricfactory~. Packed row-major ~n^2~. Projection is
 symmetrization, retraction is ~X + U~, transport is the identity.

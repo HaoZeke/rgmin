@@ -81,7 +81,10 @@ Rust
 
 First-order steps retract the taken increment. Quasi-Newton
 directions are projected into the tangent, then retracted by the
-accept rule.
+accept rule. ``Method::Lbfgs`` / ``Method::rlbfgs`` is manopt
+``rlbfgs`` on a non-Euclidean token: ``egrad2rgrad`` supplies the
+Riemannian gradient and stored ``(s, y)`` pairs are transported
+into the current tangent after each accepted retract.
 
 C
 ~

@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Riemannian L-BFGS (manopt `rlbfgs`) on `Method::Lbfgs` /
+  `Method::rlbfgs`: the session takes `egrad2rgrad` and transports
+  stored `(s, y)` pairs into the current tangent after each
+  accepted retract. Euclidean transport is the identity, so the
+  existing two-loop arm is unchanged. Tests cover Sphere Rayleigh
+  and MwRigid.
 - `ManifoldKind::Symmetric`: manopt `symmetricfactory`. Packed
   row-major `n^2`. Projection is symmetrization, retraction is
   `X + U`, transport is the identity. C token 14.
