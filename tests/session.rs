@@ -405,7 +405,7 @@ fn bb_sphere_second_step_uses_transported_pairs() {
         istep: 0.2,
         maxmove: None,
     };
-    let mut bb = Solver::new(Method::Bb, ctrl, 3);
+    let mut bb = Solver::new(Method::Bb, ctrl.clone(), 3);
     let mut sd = Solver::new(Method::Steepest, ctrl, 3);
     bb.set_manifold(ManifoldKind::Sphere);
     sd.set_manifold(ManifoldKind::Sphere);
