@@ -5,8 +5,9 @@
 
 use ndarray::{array, Array1, ArrayView1};
 use rgmin::manifold::{
-    is_skewsymmetric, is_spd, is_symmetric, ComplexCircle, Manifold, Multinomial, MwRigid, Oblique,
-    SkewSymmetric, Spd, Sphere, Stiefel, StiefelNp, Symmetric,
+    is_euclidean_complex, is_skewsymmetric, is_spd, is_symmetric, ComplexCircle, EuclideanComplex,
+    Manifold, Multinomial, MwRigid, Oblique, SkewSymmetric, Spd, Sphere, Stiefel, StiefelNp,
+    Symmetric,
 };
 use rgmin::IrcTrust;
 use rgmin::{
@@ -205,6 +206,27 @@ fn skewsymmetric_retract_stays_on_the_set() {
     let w = SkewSymmetric.transport(&x, &y, &v);
     assert!((w[1] - 0.3).abs() < 1e-15);
     assert!((w[2] + 0.1).abs() < 1e-15);
+}
+
+/// manopt euclideancomplexfactory: interleaved C^n, retraction is
+/// translation, and the point is not forced onto the sphere.
+#[test]
+fn euclidean_complex_retract_stays_on_the_set() {
+    let m = EuclideanComplex::new(2);
+    let x = array![1.0, 0.5, -0.25, 2.0];
+    let v = array![0.2, -0.1, 0.3, 0.4];
+    let y = m.retract(&x, &v);
+    assert!(is_euclidean_complex(&y), "left C^2 {y:?}");
+    assert!((y[0] - 1.2).abs() < 1e-15);
+    assert!((y[1] - 0.4).abs() < 1e-15);
+    assert!((y[2] - 0.05).abs() < 1e-15);
+    assert!((y[3] - 2.4).abs() < 1e-15);
+    let t = m.project(&x, &v);
+    assert!((t[0] - 0.2).abs() < 1e-15);
+    let w = m.transport(&x, &y, &v);
+    assert!((w[1] + 0.1).abs() < 1e-15);
+    let fro = y.iter().map(|a| a * a).sum::<f64>().sqrt();
+    assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {y:?}");
 }
 
 /// A quadratic bowl carrying its exact directional curvature. SCG with
