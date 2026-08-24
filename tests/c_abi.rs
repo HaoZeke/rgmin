@@ -937,3 +937,97 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_forget(null);
     }
 }
+
+/// Minus the real trace on packed U(2): -(U_00 + U_11).
+unsafe extern "C" fn minus_re_tr_eval(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    value_out: *mut f64,
+) -> rgmin_status_t {
+    let (p, n) = unsafe { cpu_f64(x) };
+    assert_eq!(n, 8);
+    unsafe { *value_out = -(*p + *p.add(6)) };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn minus_re_tr_grad(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    g: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let (_p, n) = unsafe { cpu_f64(x) };
+    assert_eq!(n, 8);
+    let (gp, gn) = unsafe { cpu_f64(g as *const _) };
+    assert_eq!(gn, 8);
+    unsafe {
+        for i in 0..8 {
+            *(gp as *mut f64).add(i) = 0.0;
+        }
+        *(gp as *mut f64) = -1.0;
+        *(gp as *mut f64).add(6) = -1.0;
+    }
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+/// Token 16 / set_unitary must take a packed U(n) step that stays on
+/// the group. The setter-smoke above overwrites to Euclidean before
+/// the Rosenbrock step, so it never covers this path.
+#[test]
+fn c_abi_unitary_step_stays_on_the_set() {
+    use ndarray::Array1;
+    use rgmin::ffi::{rgmin_manifold_t, rgmin_solver_set_manifold, rgmin_solver_set_unitary};
+    use rgmin::manifold::is_unitary;
+
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_UNITARY as i32, 16);
+
+    let ctrl = rgmin_control_t {
+        maxiter: 20,
+        gtol: 1e-8,
+        istep: 0.15,
+        memory: 8,
+        maxmove: 0.0,
+    };
+    // U(2) is packed interleaved (re, im) row-major, length 8.
+    let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_STEEPEST, &ctrl, 8) };
+    assert!(!session.is_null());
+    unsafe {
+        // Token 16 alone defaults to n = 1. U(n) for n > 1 is
+        // rgmin_solver_set_unitary.
+        rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_UNITARY);
+        rgmin_solver_set_unitary(session, 2);
+        rgmin_solver_set_accept(session, rgmin_accept_t::RGMIN_ACCEPT_NONE);
+    }
+
+    // Hadamard-like unitary: 1/sqrt(2) * [1, 1; i, -i].
+    let s = 0.5_f64.sqrt();
+    let mut x = [s, 0.0, s, 0.0, 0.0, s, 0.0, -s];
+    assert!(
+        is_unitary(&Array1::from(x.to_vec())),
+        "fixture left U(2) {x:?}"
+    );
+
+    let mut out = rgmin_report_t {
+        value: 0.0,
+        steps: 0,
+        grad_norm: 0.0,
+    };
+    let xt = unsafe { rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), 8) };
+    let st = unsafe {
+        rgmin_solver_step(
+            session,
+            Some(minus_re_tr_eval),
+            Some(minus_re_tr_grad),
+            std::ptr::null_mut(),
+            xt,
+            &mut out,
+        )
+    };
+    unsafe { rgmin_tensor_free(xt) };
+    assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+    assert!(out.value.is_finite());
+    assert!(
+        is_unitary(&Array1::from(x.to_vec())),
+        "C step left U(2) {x:?}"
+    );
+    unsafe { rgmin_solver_free(session) };
+}
