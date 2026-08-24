@@ -738,6 +738,83 @@ fn complex_circle_session_stays_on_the_set() {
 }
 
 #[test]
+fn unitary_session_stays_on_the_set() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::manifold::is_unitary;
+    use rgmin::ManifoldKind;
+
+    /// Minus the real trace. Minimizer is the identity in U(2).
+    struct MinusReTr;
+    impl Objective<f64> for MinusReTr {
+        fn dim(&self) -> usize {
+            8
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| {
+                Bounds::new(Array1::from_elem(8, -2.0), Array1::from_elem(8, 2.0), 0.0)
+            })
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            -(x[0] + x[6])
+        }
+    }
+    impl Gradient<f64> for MinusReTr {
+        fn dim(&self) -> usize {
+            8
+        }
+        fn grad(&self, _x: ArrayView1<f64>) -> Array1<f64> {
+            array![-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0]
+        }
+    }
+    impl DifferentiableObjective<f64> for MinusReTr {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = MinusReTr;
+    // Hadamard-like unitary: 1/sqrt(2) * [1, 1; i, -i].
+    let s = 0.5_f64.sqrt();
+    let mut x = array![s, 0.0, s, 0.0, 0.0, s, 0.0, -s];
+    let mut solver = Solver::new(
+        Method::Steepest,
+        Control {
+            maxiter: 20,
+            gtol: 1e-8,
+            istep: 0.15,
+            maxmove: None,
+        },
+        8,
+    );
+    solver.set_manifold(ManifoldKind::unitary(2));
+    solver.set_accept(rgmin::Accept::None);
+    assert!(is_unitary(&x));
+    for _ in 0..20 {
+        let _ = solver.step(&obj, &mut x).unwrap();
+        assert!(is_unitary(&x), "left U(2) {x:?}");
+    }
+}
+
+#[test]
+fn unitary_rejects_a_3n_cluster() {
+    let obj = Rosenbrock::<114>::new();
+    let mut x = Array1::from_elem(114, 0.1);
+    let mut solver = Solver::new(Method::Steepest, control(), 114);
+    solver.set_manifold(rgmin::ManifoldKind::unitary(2));
+    let err = solver.step(&obj, &mut x).unwrap_err();
+    match err {
+        rgmin::Error::ManifoldDim { kind, got } => {
+            assert_eq!(kind, "unitary");
+            assert_eq!(got, 114);
+        }
+        other => panic!("expected ManifoldDim, got {other:?}"),
+    }
+}
+
+#[test]
 fn complex_circle_rejects_a_3n_cluster() {
     let obj = Rosenbrock::<114>::new();
     let mut x = Array1::from_elem(114, 0.1);
