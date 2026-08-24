@@ -81,6 +81,10 @@ Setters
     | ``set_masses``        | Per-atom masses for ``mw_rigid`` (Page–McIver)          |
     +-----------------------+---------------------------------------------------------+
 
+``Method::rcg()`` (alias of Polak-Ribiere ``Method::Nlcg``) is manopt
+``conjugategradient`` once ``set_manifold`` is not Euclidean:
+``egrad2rgrad`` plus transport of the previous direction.
+
 When to use ``rgmin_minimize`` instead
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

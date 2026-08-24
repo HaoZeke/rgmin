@@ -81,7 +81,10 @@ Rust
 
 First-order steps retract the taken increment. Quasi-Newton
 directions are projected into the tangent, then retracted by the
-accept rule.
+accept rule. Nonlinear CG (``Method::rcg`` / ``Method::Nlcg``)
+converts the Euclidean gradient with ``egrad2rgrad`` and transports
+the previous search direction into the arrival tangent before the
+beta formula (manopt ``conjugategradient``).
 
 C
 ~

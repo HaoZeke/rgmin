@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Riemannian NLCG: `Method::Nlcg` / `Method::rcg()` on a non-Euclidean
+  `ManifoldKind` uses `egrad2rgrad` and transports the previous search
+  direction before the β formula (manopt `conjugategradient`). The
+  Euclidean arm is the identity-transport special case.
 - `ManifoldKind::Symmetric`: manopt `symmetricfactory`. Packed
   row-major `n^2`. Projection is symmetrization, retraction is
   `X + U`, transport is the identity. C token 14.
