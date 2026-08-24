@@ -8,8 +8,8 @@ use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
 use crate::method::Method;
-use crate::newton::{HessianObjective, minimize_newton};
-use crate::nlcg::{Conjugacy, ConjugacyContext, Restart};
+use crate::newton::{minimize_newton, HessianObjective};
+use crate::nlcg::{search_direction, Conjugacy, ConjugacyContext, Restart};
 use crate::pso::minimize_pso;
 use crate::qn::{minimize_bfgs, minimize_lbfgs, minimize_sd, minimize_sr1, minimize_sr2};
 use crate::report::Report;
@@ -161,7 +161,7 @@ where
     }
     pos = obj.bounds().clip(pos.view());
     let (mut value, mut grad) = obj.value_and_gradient(pos.view());
-    let mut dir = grad.mapv(|g| -g);
+    let mut dir = search_direction(grad.view(), grad.view(), 0.0, 1.0);
     let mut g_old = grad.clone();
     let mut d_old = dir.clone();
     let mut istep = control.istep;
@@ -191,7 +191,7 @@ where
         if restart.should_restart(&ctx) {
             beta = 0.0;
         }
-        dir = Array1::from_iter(grad.iter().zip(d_old.iter()).map(|(g, d)| -g + beta * d));
+        dir = search_direction(grad.view(), d_old.view(), beta, 1.0);
         g_old.assign(&grad);
         d_old.assign(&dir);
         istep = next_istep(lsstep, control);

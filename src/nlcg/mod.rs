@@ -1,6 +1,13 @@
 //! Nonlinear CG: conjugacy coefficient and restart.
+//!
+//! Euclidean formulas are Nocedal and Wright chapter 5. On a
+//! non-Euclidean [`crate::ManifoldKind`] the session transports
+//! `g_{k-1}` and `d_{k-1}` into the arrival tangent before these
+//! formulas (manopt `conjugategradient`).
 
-use ndarray::ArrayView1;
+use ndarray::{Array1, ArrayView1};
+
+use crate::vecops;
 
 /// Shared vectors for a β evaluation.
 #[derive(Clone, Debug)]
@@ -176,8 +183,26 @@ impl Conjugacy {
     }
 }
 
+/// Search direction `-istep g + beta d` through [`crate::vecops`].
+///
+/// `d` is the previous direction after any vector transport into the
+/// current tangent. `beta = 0` is steepest descent and ignores `d`.
+pub fn search_direction(
+    gradient: ArrayView1<'_, f64>,
+    transported_direction: ArrayView1<'_, f64>,
+    beta: f64,
+    istep: f64,
+) -> Array1<f64> {
+    let mut dir = Array1::zeros(gradient.len());
+    vecops::axpy(-istep, gradient, &mut dir);
+    if beta != 0.0 {
+        vecops::axpy(beta, transported_direction, &mut dir);
+    }
+    dir
+}
+
 fn dot(a: ArrayView1<'_, f64>, b: ArrayView1<'_, f64>) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    vecops::dot(a, b)
 }
 
 fn div(num: f64, den: f64) -> f64 {
@@ -355,5 +380,23 @@ mod tests {
         // |g·g_old| / ||g||^2 = 0.2 / 1 = 0.2 >= 0.1
         assert!(Restart::njws().should_restart(&ctx2));
         assert!(!Restart::Never.should_restart(&ctx2));
+    }
+
+    #[test]
+    fn search_direction_is_steepest_when_beta_is_zero() {
+        let g = array![2.0, -4.0];
+        let d = array![9.0, 9.0];
+        let s = search_direction(g.view(), d.view(), 0.0, 0.5);
+        assert!((s[0] + 1.0).abs() < 1e-15);
+        assert!((s[1] - 2.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn search_direction_adds_the_transported_term() {
+        let g = array![1.0, 0.0];
+        let d = array![0.0, 2.0];
+        let s = search_direction(g.view(), d.view(), 0.5, 1.0);
+        assert!((s[0] + 1.0).abs() < 1e-15);
+        assert!((s[1] - 1.0).abs() < 1e-15);
     }
 }
