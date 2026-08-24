@@ -3,16 +3,15 @@
 //! Coverage here is behavioural, not ceremonial: each test states the
 //! contract the API promises and fails when the contract does.
 
-use ndarray::{array, Array1, ArrayView1};
-use rgmin::manifold::{
-    is_spd, is_symmetric, ComplexCircle, Manifold, Multinomial, MwRigid, Oblique, Spd, Sphere,
-    Stiefel, StiefelNp, Symmetric,
-};
-use rgmin::IrcTrust;
-use rgmin::{
-    minimize_scg_exact, Conjugacy, Control, DirectionalCurvature, Restart, ScgParams,
-};
 use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+use ndarray::{Array1, ArrayView1, array};
+use rgmin::IrcTrust;
+use rgmin::manifold::{
+    Centered, ComplexCircle, Manifold, Multinomial, MwRigid, Oblique, Positive, RealPhase, Spd,
+    Sphere, Stiefel, StiefelNp, Symmetric, is_positive, is_realphase, is_spd, is_symmetric,
+    max_mean_abs_centered,
+};
+use rgmin::{Conjugacy, Control, DirectionalCurvature, Restart, ScgParams, minimize_scg_exact};
 
 /// Stiefel at p = 1 is the sphere, in all three operations, which is
 /// the whole content of the type: divergence in any one of them means
@@ -24,10 +23,7 @@ fn stiefel_p1_is_the_sphere_in_all_three_operations() {
     let y = array![0.0, 1.0, 0.0];
     assert_eq!(Stiefel.project(&x, &v), Sphere.project(&x, &v));
     assert_eq!(Stiefel.retract(&x, &v), Sphere.retract(&x, &v));
-    assert_eq!(
-        Stiefel.transport(&x, &y, &v),
-        Sphere.transport(&x, &y, &v)
-    );
+    assert_eq!(Stiefel.transport(&x, &y, &v), Sphere.transport(&x, &y, &v));
 }
 
 /// Oblique OB(3,2) is a product of two spheres: each column stays unit.
@@ -133,7 +129,10 @@ fn irc_trust_is_not_the_unit_sphere() {
     let p = tr.project(&s);
     assert!(tr.on_bound(&p, 1e-12));
     let eucl = p.iter().map(|v| v * v).sum::<f64>().sqrt();
-    assert!((eucl - 1.0).abs() > 1e-3, "must not be unit-sphere projection");
+    assert!(
+        (eucl - 1.0).abs() > 1e-3,
+        "must not be unit-sphere projection"
+    );
     let sphere = Sphere.project(&Array1::from(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0]), &s);
     assert!((sphere[0] - p[0]).abs() > 1e-6 || (tr.cons(&p) - 0.1).abs() < 1e-12);
 }
@@ -152,7 +151,6 @@ fn spd_retract_stays_on_the_set() {
     let w = Spd.transport(&x, &y, &v);
     assert!((w[1] - w[2]).abs() < 1e-15);
 }
-
 
 /// manopt complexcirclefactory: each (re, im) pair stays on S^1.
 /// The product is not the sphere in the ambient even dimension.
@@ -188,6 +186,49 @@ fn symmetric_retract_stays_on_the_set() {
     assert!(det < 0.0, "must not force SPD {y:?}");
 }
 
+/// manopt positivefactory: componentwise exp retraction stays in the
+/// open positive orthant.
+#[test]
+fn positive_retract_stays_positive() {
+    let x = array![0.2, 1.5, 3.0];
+    let v = array![0.4, -2.0, 1.0];
+    let y = Positive.retract(&x, &v);
+    assert!(is_positive(&y), "left the positive orthant {y:?}");
+    let t = Positive.project(&x, &v);
+    assert!((t[0] - 0.4).abs() < 1e-15);
+}
+
+/// Product of S^0: retraction of a sign vector stays on {+/-1}.
+#[test]
+fn realphase_retract_stays_on_signs() {
+    let x = array![1.0, -1.0, 1.0];
+    let v = array![4.0, -3.0, 0.5];
+    let y = RealPhase.retract(&x, &v);
+    assert!(is_realphase(&y), "left {{+/-1}}^n {y:?}");
+    assert!((y[0] - 1.0).abs() < 1e-15);
+    assert!((y[1] + 1.0).abs() < 1e-15);
+    assert!((y[2] - 1.0).abs() < 1e-15);
+    let t = RealPhase.project(&x, &v);
+    assert!(t.iter().all(|&ti| ti.abs() < 1e-15), "{t:?}");
+}
+
+/// manopt centeredmatrixfactory (both rows and columns): the projected
+/// matrix has vanishing row means and column means.
+#[test]
+fn centered_project_has_zero_row_and_column_means() {
+    let m = Centered::new(2, 3);
+    let x = array![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let v = array![1.0, 0.0, -1.0, 2.0, 3.0, 4.0];
+    let t = m.project(&x, &v);
+    let flat: Vec<f64> = t.iter().copied().collect();
+    let worst = max_mean_abs_centered(2, 3, &flat);
+    assert!(worst < 1e-14, "means {worst} t={t:?}");
+    let y = m.retract(&x, &v);
+    let yflat: Vec<f64> = y.iter().copied().collect();
+    let yworst = max_mean_abs_centered(2, 3, &yflat);
+    assert!(yworst < 1e-14, "means {yworst} y={y:?}");
+}
+
 /// A quadratic bowl carrying its exact directional curvature. SCG with
 /// the exact path must reach the minimum without the finite-difference
 /// probe's extra gradient.
@@ -200,11 +241,7 @@ impl Objective<f64> for CurvedBowl {
     fn bounds(&self) -> &Bounds<f64> {
         static BOUNDS: std::sync::OnceLock<Bounds<f64>> = std::sync::OnceLock::new();
         BOUNDS.get_or_init(|| {
-            Bounds::new(
-                Array1::from_elem(4, -1e12),
-                Array1::from_elem(4, 1e12),
-                0.0,
-            )
+            Bounds::new(Array1::from_elem(4, -1e12), Array1::from_elem(4, 1e12), 0.0)
         })
     }
     fn eval(&self, x: ArrayView1<f64>) -> f64 {
@@ -232,7 +269,12 @@ impl DifferentiableObjective<f64> for CurvedBowl {
 
 impl DirectionalCurvature for CurvedBowl {
     fn directional_curvature(&self, _x: ArrayView1<f64>, d: ArrayView1<f64>) -> Option<f64> {
-        Some(d.iter().enumerate().map(|(i, v)| (i + 1) as f64 * v * v).sum())
+        Some(
+            d.iter()
+                .enumerate()
+                .map(|(i, v)| (i + 1) as f64 * v * v)
+                .sum(),
+        )
     }
 }
 
@@ -241,7 +283,10 @@ fn scg_exact_reaches_the_bowl_floor_on_supplied_curvature() {
     let rep = minimize_scg_exact(
         &CurvedBowl,
         array![1.0, -2.0, 3.0, -4.0],
-        &Control { maxiter: 200, ..Control::default() },
+        &Control {
+            maxiter: 200,
+            ..Control::default()
+        },
         &ScgParams::default(),
         Conjugacy::PolakRibiere,
         Restart::Njws { threshold: 0.1 },

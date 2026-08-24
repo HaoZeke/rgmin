@@ -14,14 +14,20 @@
 //! matrix-manifold embeddings, not a 3N cluster.
 //! [`ManifoldKind::Symmetric`] is manopt `symmetricfactory`.
 //! [`ManifoldKind::ComplexCircle`] is manopt `complexcirclefactory`.
+//! [`ManifoldKind::Positive`] is manopt `positivefactory`.
+//! [`ManifoldKind::RealPhase`] is the product of 0-spheres.
+//! [`ManifoldKind::Centered`] is manopt `centeredmatrixfactory`.
 
 use ndarray::Array1;
 
+mod centered;
 mod complex_circle;
 mod euclidean;
 mod multinomial;
 mod mw_rigid;
 mod oblique;
+mod positive;
+mod realphase;
 mod rigid_quotient;
 mod se3;
 mod so3;
@@ -30,20 +36,23 @@ mod sphere;
 mod stiefel;
 mod symmetric;
 
+pub use centered::{Centered, max_mean_abs as max_mean_abs_centered};
 pub use complex_circle::ComplexCircle;
 pub use euclidean::Euclidean;
 pub use multinomial::Multinomial;
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
+pub use positive::{Positive, is_positive};
+pub use realphase::{RealPhase, is_realphase};
 pub use rigid_quotient::RigidQuotient;
 pub use se3::Se3;
 pub use so3::So3;
-pub use spd::{is_spd, pack as pack_spd, side as side_spd, unpack as unpack_spd, Spd};
+pub use spd::{Spd, is_spd, pack as pack_spd, side as side_spd, unpack as unpack_spd};
 pub use sphere::Sphere;
 pub use stiefel::{Stiefel, StiefelNp};
 pub use symmetric::{
-    inner as inner_sym, is_symmetric, pack as pack_sym, side as side_sym,
-    typical_dist as typical_dist_sym, unpack as unpack_sym, Symmetric,
+    Symmetric, inner as inner_sym, is_symmetric, pack as pack_sym, side as side_sym,
+    typical_dist as typical_dist_sym, unpack as unpack_sym,
 };
 
 /// Which embedded geometry a session retracts onto.
@@ -99,6 +108,21 @@ pub enum ManifoldKind {
         /// Number of unit-modulus complex entries.
         n: usize,
     },
+    /// Strictly positive orthant \(\{x_i > 0\}\).
+    /// manopt `positivefactory`. Length \(n \ge 1\).
+    Positive,
+    /// Product of 0-spheres \(\{\pm 1\}^n\). manopt `realphasefactory`
+    /// as a product of \(S^0\), not the Fourier-phase submanifold.
+    RealPhase,
+    /// Doubly-centered `m x n` real matrices, packed row-major
+    /// length `m*n`. manopt `centeredmatrixfactory` with both row
+    /// and column means removed. Construct with [`ManifoldKind::centered`].
+    Centered {
+        /// Number of rows.
+        m: usize,
+        /// Number of columns.
+        n: usize,
+    },
 }
 
 impl ManifoldKind {
@@ -129,6 +153,11 @@ impl ManifoldKind {
         Self::ComplexCircle { n }
     }
 
+    /// Doubly-centered `m x n` matrices. Packed row-major, length `m*n`.
+    pub fn centered(m: usize, n: usize) -> Self {
+        Self::Centered { m, n }
+    }
+
     /// C ABI / INI token.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -144,6 +173,9 @@ impl ManifoldKind {
             Self::Spd => "spd",
             Self::Symmetric => "symmetric",
             Self::ComplexCircle { .. } => "complex_circle",
+            Self::Positive => "positive",
+            Self::RealPhase => "realphase",
+            Self::Centered { .. } => "centered",
         }
     }
 }
@@ -184,6 +216,9 @@ impl Manifold for ManifoldKind {
             Self::Spd => Spd.required_dim(n),
             Self::Symmetric => Symmetric.required_dim(n),
             Self::ComplexCircle { n: cn } => ComplexCircle { n: *cn }.required_dim(n),
+            Self::Positive => Positive.required_dim(n),
+            Self::RealPhase => RealPhase.required_dim(n),
+            Self::Centered { m, n: cn } => Centered { m: *m, n: *cn }.required_dim(n),
         }
     }
 
@@ -202,6 +237,9 @@ impl Manifold for ManifoldKind {
             Self::Spd => Spd.project(x, v),
             Self::Symmetric => Symmetric.project(x, v),
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.project(x, v),
+            Self::Positive => Positive.project(x, v),
+            Self::RealPhase => RealPhase.project(x, v),
+            Self::Centered { m, n } => Centered { m: *m, n: *n }.project(x, v),
         }
     }
 
@@ -220,6 +258,9 @@ impl Manifold for ManifoldKind {
             Self::Spd => Spd.retract(x, v),
             Self::Symmetric => Symmetric.retract(x, v),
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.retract(x, v),
+            Self::Positive => Positive.retract(x, v),
+            Self::RealPhase => RealPhase.retract(x, v),
+            Self::Centered { m, n } => Centered { m: *m, n: *n }.retract(x, v),
         }
     }
 
@@ -238,6 +279,9 @@ impl Manifold for ManifoldKind {
             Self::Spd => Spd.transport(x_from, x_to, v),
             Self::Symmetric => Symmetric.transport(x_from, x_to, v),
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.transport(x_from, x_to, v),
+            Self::Positive => Positive.transport(x_from, x_to, v),
+            Self::RealPhase => RealPhase.transport(x_from, x_to, v),
+            Self::Centered { m, n } => Centered { m: *m, n: *n }.transport(x_from, x_to, v),
         }
     }
 }
