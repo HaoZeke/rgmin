@@ -936,7 +936,7 @@ impl Solver {
         if matches!(self.inner, Inner::Lbfgs(_)) {
             let step = match (self.accept, lbfgs_step.as_ref()) {
                 (Accept::None, Some(d)) => d.clone(),
-                _ => self.project_vec(&start, &(x - &start)),
+                _ => self.project_vec(&start, &(&*x - &start)),
             };
             self.record_lbfgs_pair(&start, x, &gold, &grad, &step);
         }
