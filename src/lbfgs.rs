@@ -14,6 +14,9 @@
 //! <https://doi.org/10.1007/978-0-387-40065-5>.
 //! Wolfe, *Convergence Conditions for Ascent Methods*,
 //! <https://doi.org/10.1137/1011036>.
+//! Huang, Absil, Gallivan, *A Riemannian BFGS Method for Nonconvex
+//! Optimization Problems*, <https://doi.org/10.1007/978-3-319-39929-4_60>
+//! (manopt `rlbfgs`: stored pairs live in the current tangent).
 
 use ndarray::{Array1, ArrayView1};
 
@@ -203,10 +206,21 @@ impl Lbfgs {
         self.push_pair(s, y, None);
     }
 
-    /// Drop the newest pair, then push. Used after a manifold retract.
-    pub(crate) fn replace_newest(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) {
-        let _ = self.memory.pop();
-        self.push_pair(s, y, gnorm);
+    /// Stored (s, y) pairs, oldest first. The two-loop reads these
+    /// as tangent vectors at the current point.
+    pub(crate) fn stored_pairs(&self) -> impl Iterator<Item = (&Array1<f64>, &Array1<f64>)> {
+        self.memory.iter().map(|p| (&p.s, &p.y))
+    }
+
+    /// Write transported (s, y) after a retract. `rho` is kept
+    /// (Huang / manopt `rlbfgs`); the transporter is not assumed
+    /// isometric.
+    pub(crate) fn replace_transported(&mut self, pairs: Vec<(Array1<f64>, Array1<f64>)>) {
+        debug_assert_eq!(pairs.len(), self.memory.len());
+        for (p, (s, y)) in self.memory.iter_mut().zip(pairs) {
+            p.s = s;
+            p.y = y;
+        }
     }
 
     pub(crate) fn push_pair(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) {
@@ -637,5 +651,43 @@ impl Lbfgs {
             self.push(&*pos - &old, &*grad - &gold);
         }
         *istep = next_istep(lsstep, control);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::array;
+
+    #[test]
+    fn replace_transported_writes_s_y_and_keeps_rho() {
+        let mut opt = Lbfgs::with_capacity(2);
+        opt.push(array![1.0, 0.0], array![2.0, 0.0]);
+        let rho0 = opt.memory[0].rho;
+        assert!((rho0 - 0.5).abs() < 1e-15);
+        opt.replace_transported(vec![(array![0.0, 1.0], array![0.0, 3.0])]);
+        let (s, y) = opt.stored_pairs().next().unwrap();
+        assert!((s[0]).abs() < 1e-15);
+        assert!((s[1] - 1.0).abs() < 1e-15);
+        assert!((y[1] - 3.0).abs() < 1e-15);
+        assert!((opt.memory[0].rho - rho0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn two_loop_reads_transported_pairs() {
+        let mut opt = Lbfgs::with_capacity(1);
+        opt.push(array![1.0, 0.0], array![1.0, 1.0]);
+        let d0 = opt.two_loop(array![1.0, 0.0].view());
+        // 90-degree rotation of the stored pair (Huang transporter).
+        opt.replace_transported(vec![(array![0.0, 1.0], array![-1.0, 1.0])]);
+        let d1 = opt.two_loop(array![1.0, 0.0].view());
+        assert!(
+            (d0[0] - d1[0]).abs() + (d0[1] - d1[1]).abs() > 1e-8,
+            "two-loop ignored the transported pair: {d0:?} {d1:?}"
+        );
+        assert!((d0[0] + 1.5).abs() < 1e-12, "pre-transport {d0:?}");
+        assert!((d0[1] - 0.5).abs() < 1e-12, "pre-transport {d0:?}");
+        assert!((d1[0] + 0.5).abs() < 1e-12, "post-transport {d1:?}");
+        assert!((d1[1] + 0.5).abs() < 1e-12, "post-transport {d1:?}");
     }
 }

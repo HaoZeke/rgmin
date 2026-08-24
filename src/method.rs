@@ -29,10 +29,17 @@ pub enum Method {
     Bfgs,
     /// Limited-memory BFGS two-loop recursion (Nocedal-Wright 7.4).
     ///
+    /// On a non-Euclidean [`crate::ManifoldKind`] the session is
+    /// manopt `rlbfgs`: `egrad2rgrad` supplies the Riemannian
+    /// gradient and stored `(s, y)` pairs are vector-transported
+    /// into the current tangent (Huang, Absil, Gallivan).
+    ///
     /// Nocedal, *Updating quasi-Newton matrices with limited storage*,
     /// <https://doi.org/10.1090/s0025-5718-1980-0572855-7>.
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    /// Huang, Absil, Gallivan,
+    /// <https://doi.org/10.1007/978-3-319-39929-4_60>.
     Lbfgs {
         /// Correction pairs kept (`m`). Typical 5 to 20.
         memory: usize,
@@ -122,6 +129,13 @@ impl Method {
     /// L-BFGS with `m = 10` correction pairs.
     pub fn lbfgs() -> Self {
         Self::Lbfgs { memory: 10 }
+    }
+
+    /// Riemannian L-BFGS (manopt `rlbfgs`). Same memory as
+    /// [`Self::lbfgs`]. Geometry comes from
+    /// [`crate::Solver::set_manifold`].
+    pub fn rlbfgs() -> Self {
+        Self::lbfgs()
     }
 
     /// Adam with Kingma-Ba defaults.
