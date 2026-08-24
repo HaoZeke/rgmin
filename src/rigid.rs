@@ -13,6 +13,30 @@ pub(crate) fn project_out_rot_trans(vec: &mut Array1<f64>, pos: ArrayView1<f64>)
     project_horizontal(vec, pos, None, true);
 }
 
+/// Cartesian force to the MW dual: \(v_i / m_{\mathrm{atom}(i)}\).
+///
+/// Page–McIver rgrad on Cartesians. A missing or mismatched mass
+/// list is unit mass (the identity). A non-positive mass freezes
+/// that atom.
+pub(crate) fn scale_inv_mass(v: &Array1<f64>, masses: Option<&[f64]>) -> Array1<f64> {
+    let n = v.len();
+    if n < 3 || n % 3 != 0 {
+        return v.clone();
+    }
+    let nat = n / 3;
+    let Some(m) = masses.filter(|m| m.len() == nat) else {
+        return v.clone();
+    };
+    let mut w = v.clone();
+    for i in 0..nat {
+        let inv = if m[i] > 1.0e-18 { 1.0 / m[i] } else { 0.0 };
+        w[3 * i] *= inv;
+        w[3 * i + 1] *= inv;
+        w[3 * i + 2] *= inv;
+    }
+    w
+}
+
 /// Horizontal space of \(R^{3N}/\mathrm{SE}(3)\) or \(R^{3N}/T(3)\).
 ///
 /// `rotate` is Sella `proj_rot`: false under PBC (the cell kills
@@ -156,6 +180,17 @@ mod tests {
         let masses = [12.0, 1.0, 1.0];
         project_horizontal(&mut v, pos.view(), Some(&masses), true);
         assert!(l2(&v) < 1e-10, "{v:?}");
+    }
+
+    #[test]
+    fn inv_mass_scales_per_atom() {
+        let v = array![2.0, 0.0, 0.0, 2.0, 0.0, 0.0];
+        let masses = [1.0, 4.0];
+        let w = scale_inv_mass(&v, Some(&masses));
+        assert!((w[0] - 2.0).abs() < 1e-15);
+        assert!((w[3] - 0.5).abs() < 1e-15);
+        let unit = scale_inv_mass(&v, None);
+        assert_eq!(unit, v);
     }
 
     #[test]

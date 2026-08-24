@@ -59,10 +59,15 @@ pub enum Method {
         /// Denominator floor.
         eps: f64,
     },
-    /// Steepest descent: `d = -g` every step.
+    /// Riemannian steepest descent: `d = -rgrad`, then retract.
+    ///
+    /// Euclidean `rgrad` is the ambient gradient. Every
+    /// [`crate::manifold::ManifoldKind`] uses that kind's projector
+    /// and the session retraction (manopt `steepestdescent`).
     ///
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    /// Absil, Mahony, Sepulchre, <https://doi.org/10.1515/9781400830244>.
     Steepest,
     /// Shifted Newton on a caller-supplied dense Hessian.
     ///

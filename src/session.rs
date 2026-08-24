@@ -23,8 +23,9 @@ use crate::pso::{random_velocity, update_swarm, Particle, RNG_SEED};
 use crate::qn::{bfgs_inverse_update, solve_dense, sr1_inverse_update, sr2_hessian_update};
 use crate::qn_step::QnStep;
 use crate::report::Report;
-use crate::rigid::{project_horizontal, project_out_rot_trans};
+use crate::rigid::{project_horizontal, project_out_rot_trans, scale_inv_mass};
 use crate::step::{l2, scale_step, scale_step_atom};
+use crate::vecops;
 use crate::trust::{
     accept_ratio, dogleg_direction, predicted_reduction, reduction_ratio, update_radius,
 };
@@ -296,6 +297,21 @@ impl Solver {
             project_out_rot_trans(&mut g, x.view());
         }
         g
+    }
+
+    /// Riemannian gradient at `x`. Euclidean and the other embedded
+    /// kinds reuse [`Self::horizontal_grad`]. `MwRigid` dualizes the
+    /// Cartesian force by per-atom `1/m` (Page–McIver) and then
+    /// applies the mass-weighted Eckart projector.
+    fn riemannian_grad(&self, x: &Array1<f64>, egrad: &Array1<f64>) -> Array1<f64> {
+        match self.manifold {
+            ManifoldKind::MwRigid => {
+                let masses = self.masses.as_ref().and_then(|m| m.as_slice());
+                let scaled = scale_inv_mass(egrad, masses);
+                self.project_vec(x, &scaled)
+            }
+            _ => self.horizontal_grad(x, egrad),
+        }
     }
 
     /// Vector transport. Quotient manifolds project at the arrival point.
@@ -628,7 +644,12 @@ impl Solver {
         } else {
             obj.value_and_gradient(x.view())
         };
-        grad = self.horizontal_grad(x, &grad);
+        // Cached last_grad is already rgrad. A fresh oracle is ambient.
+        if cached {
+            grad = self.horizontal_grad(x, &grad);
+        } else {
+            grad = self.riemannian_grad(x, &grad);
+        }
         let gnorm = l2(&grad);
         if gnorm < self.control.gtol {
             return Ok(Report {
@@ -681,7 +702,10 @@ impl Solver {
                 }
             }
             Inner::Steepest => {
-                let dir = grad.mapv(|g| -g * self.istep);
+                let rgrad = vecops::Vector::from_host(grad.clone());
+                let mut dir = vecops::Vector::zeros_cpu(grad.len());
+                vecops::vaxpy(-self.istep, &rgrad, &mut dir);
+                let dir = dir.into_host();
                 let (npos, nval, ngrad, _) = accept_step(
                     obj,
                     x,
@@ -892,13 +916,21 @@ impl Solver {
 
         let delta = &*x - &start;
         let y = self.manifold.retract(&start, &delta);
+        let moved = x
+            .iter()
+            .zip(start.iter())
+            .any(|(a, b)| (*a - *b).abs() > 1e-15);
         if y.iter().zip(x.iter()).any(|(a, b)| (*a - *b).abs() > 1e-15) {
             *x = y;
             let ev = obj.value_and_gradient(x.view());
             value = ev.0;
-            grad = ev.1;
+            grad = self.riemannian_grad(x, &ev.1);
+        } else if moved {
+            // accept_step's ngrad is the ambient oracle at the new point.
+            grad = self.riemannian_grad(x, &grad);
+        } else {
+            grad = self.horizontal_grad(x, &grad);
         }
-        grad = self.horizontal_grad(x, &grad);
 
         let pair = if matches!(self.inner, Inner::Lbfgs(_))
             && x.iter().zip(start.iter()).any(|(a, b)| a != b)
