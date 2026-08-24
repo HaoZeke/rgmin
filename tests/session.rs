@@ -287,6 +287,147 @@ fn sphere_rayleigh_stays_on_the_sphere() {
 }
 
 #[test]
+fn bb_sphere_rayleigh_stays_on_the_set_and_descends() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::ManifoldKind;
+
+    struct Ray;
+    impl Objective<f64> for Ray {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-2.0, -2.0, -2.0], array![2.0, 2.0, 2.0], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            0.5 * (x[0] * x[0] + 2.0 * x[1] * x[1] + 3.0 * x[2] * x[2])
+        }
+    }
+    impl Gradient<f64> for Ray {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> ndarray::Array1<f64> {
+            array![x[0], 2.0 * x[1], 3.0 * x[2]]
+        }
+    }
+    impl DifferentiableObjective<f64> for Ray {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, ndarray::Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = Ray;
+    let n = (1.0_f64 + 1.0 + 1.0).sqrt();
+    let mut x = array![1.0 / n, 1.0 / n, 1.0 / n];
+    let f0 = obj.eval(x.view());
+    let mut solver = Solver::new(
+        Method::rbb(),
+        Control {
+            maxiter: 40,
+            gtol: 1e-8,
+            istep: 0.2,
+            maxmove: None,
+        },
+        3,
+    );
+    solver.set_manifold(ManifoldKind::Sphere);
+    solver.set_accept(rgmin::Accept::None);
+    let mut last = None;
+    for _ in 0..40 {
+        let rep = solver.step(&obj, &mut x).unwrap();
+        last = Some(rep);
+        let nrm = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+        assert!((nrm - 1.0).abs() < 1e-10, "left the sphere {x:?}");
+        if last.as_ref().unwrap().grad_norm < 1e-8 {
+            break;
+        }
+    }
+    let rep = last.unwrap();
+    assert!(
+        rep.value < f0 - 1e-3,
+        "BB did not descend on the sphere: {f0} -> {}",
+        rep.value
+    );
+    assert!(
+        (rep.value - 0.5).abs() < 1e-3,
+        "missed the Rayleigh minimizer: value {} at {x:?}",
+        rep.value
+    );
+    assert!(x[0].abs() > 0.99, "not at e1 {x:?}");
+}
+
+#[test]
+fn bb_sphere_second_step_uses_transported_pairs() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::ManifoldKind;
+
+    struct Ray;
+    impl Objective<f64> for Ray {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-2.0, -2.0, -2.0], array![2.0, 2.0, 2.0], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            0.5 * (x[0] * x[0] + 2.0 * x[1] * x[1] + 3.0 * x[2] * x[2])
+        }
+    }
+    impl Gradient<f64> for Ray {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> ndarray::Array1<f64> {
+            array![x[0], 2.0 * x[1], 3.0 * x[2]]
+        }
+    }
+    impl DifferentiableObjective<f64> for Ray {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, ndarray::Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = Ray;
+    let n = (1.0_f64 + 1.0 + 1.0).sqrt();
+    let x0 = array![1.0 / n, 1.0 / n, 1.0 / n];
+    let mut xb = x0.clone();
+    let mut xs = x0;
+    let ctrl = Control {
+        maxiter: 4,
+        gtol: 1e-12,
+        istep: 0.2,
+        maxmove: None,
+    };
+    let mut bb = Solver::new(Method::Bb, ctrl, 3);
+    let mut sd = Solver::new(Method::Steepest, ctrl, 3);
+    bb.set_manifold(ManifoldKind::Sphere);
+    sd.set_manifold(ManifoldKind::Sphere);
+    bb.set_accept(rgmin::Accept::None);
+    sd.set_accept(rgmin::Accept::None);
+    let _ = bb.step(&obj, &mut xb).unwrap();
+    let _ = sd.step(&obj, &mut xs).unwrap();
+    assert!(
+        (xb[0] - xs[0]).abs() + (xb[1] - xs[1]).abs() + (xb[2] - xs[2]).abs() < 1e-12,
+        "first BB step must match steepest: {xb:?} {xs:?}"
+    );
+    let _ = bb.step(&obj, &mut xb).unwrap();
+    let _ = sd.step(&obj, &mut xs).unwrap();
+    assert!(
+        (xb[0] - xs[0]).abs() + (xb[1] - xs[1]).abs() + (xb[2] - xs[2]).abs() > 1e-12,
+        "second BB step must use transported (s, y): {xb:?} {xs:?}"
+    );
+    let nrm = (xb[0] * xb[0] + xb[1] * xb[1] + xb[2] * xb[2]).sqrt();
+    assert!((nrm - 1.0).abs() < 1e-10, "left the sphere {xb:?}");
+}
+
+#[test]
 fn stiefel_p1_matches_sphere_retract() {
     use rgmin::{Manifold, ManifoldKind};
     let x = array![0.0, 1.0, 0.0];
@@ -890,6 +1031,90 @@ fn rigid_quotient_drops_translation_and_keeps_3n() {
         "COM drifted {com0:?} -> {com1:?}"
     );
     assert!((com1[1] - com0[1]).abs() < 1e-8);
+}
+
+#[test]
+fn bb_mw_rigid_keeps_com_and_descends() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+
+    struct Pair;
+    impl Objective<f64> for Pair {
+        fn dim(&self) -> usize {
+            9
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| {
+                Bounds::new(Array1::from_elem(9, -4.0), Array1::from_elem(9, 4.0), 0.0)
+            })
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            let d01 = (x[0] - x[3]).powi(2) + (x[1] - x[4]).powi(2) + (x[2] - x[5]).powi(2);
+            let d02 = (x[0] - x[6]).powi(2) + (x[1] - x[7]).powi(2) + (x[2] - x[8]).powi(2);
+            0.5 * ((d01.sqrt() - 1.0).powi(2) + (d02.sqrt() - 1.0).powi(2))
+        }
+    }
+    impl Gradient<f64> for Pair {
+        fn dim(&self) -> usize {
+            9
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            let e = 1e-6;
+            let f0 = self.eval(x);
+            let mut g = Array1::zeros(9);
+            let mut y = x.to_owned();
+            for i in 0..9 {
+                y[i] += e;
+                g[i] = (self.eval(y.view()) - f0) / e;
+                y[i] = x[i];
+            }
+            g
+        }
+    }
+    impl DifferentiableObjective<f64> for Pair {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = Pair;
+    let mut x = array![0.0, 0.0, 0.0, 1.2, 0.0, 0.0, 0.0, 1.2, 0.0];
+    let f0 = obj.eval(x.view());
+    let mut solver = Solver::new(Method::rbb(), control(), 9);
+    solver.set_manifold(rgmin::ManifoldKind::MwRigid);
+    solver.set_masses(array![1.0, 2.0, 3.0]);
+    solver.set_accept(rgmin::Accept::None);
+    let m = [1.0, 2.0, 3.0];
+    let mtot = 6.0;
+    let mw_com = |x: &Array1<f64>| -> [f64; 3] {
+        let mut c = [0.0; 3];
+        for a in 0..3 {
+            for d in 0..3 {
+                c[d] += m[a] * x[3 * a + d];
+            }
+        }
+        [c[0] / mtot, c[1] / mtot, c[2] / mtot]
+    };
+    let com0 = mw_com(&x);
+    let mut last = f0;
+    for _ in 0..20 {
+        let rep = solver.step(&obj, &mut x).unwrap();
+        last = rep.value;
+        assert_eq!(x.len(), 9);
+        let com = mw_com(&x);
+        assert!(
+            (com[0] - com0[0]).abs() < 1e-7
+                && (com[1] - com0[1]).abs() < 1e-7
+                && (com[2] - com0[2]).abs() < 1e-7,
+            "mass-weighted COM drifted {com0:?} -> {com:?}"
+        );
+    }
+    assert!(
+        last < f0 - 1e-4,
+        "BB on MwRigid did not descend: {f0} -> {last}"
+    );
 }
 
 #[test]
