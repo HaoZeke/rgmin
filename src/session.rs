@@ -205,6 +205,11 @@ impl Solver {
         self.set_manifold(ManifoldKind::ComplexCircle { n });
     }
 
+    /// \(\mathrm{U}(n)\), packed interleaved row-major length `2 n^2`.
+    pub fn set_unitary(&mut self, n: usize) {
+        self.set_manifold(ManifoldKind::Unitary { n });
+    }
+
     /// Per-atom masses for [`ManifoldKind::MwRigid`] (Page–McIver / Eckart).
     /// Empty clears them (unit mass).
     pub fn set_masses(&mut self, masses: Array1<f64>) {
