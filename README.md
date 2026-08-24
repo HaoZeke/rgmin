@@ -27,7 +27,7 @@ HiGHS (`Q = I`) onto a box, trust region, or equalities.
 
 A session can retract onto an embedded manifold (`set_manifold`):
 Euclidean (default), sphere, SO(3), Stiefel `St(n,1)`, SE(3),
-SPD (affine-invariant, row-major `n x n`).
+SE(n) (`set_se_n`), SPD (affine-invariant, row-major `n x n`).
 
 Conjugacy: Fletcher-Reeves, Polak-Ribiere, Hestenes-Stiefel, Dai-Yuan,
 conjugate descent, Hager-Zhang, Liu-Storey, FR-PR, HybridizedConj.

@@ -6,6 +6,14 @@ Changelog
 Unreleased
 ~~~~~~~~~~
 
+SE(n) (``se_n`` / ``RGMIN_MANIFOLD_SE_N`` = 16): manopt
+``specialeuclideanfactory(n)`` at ``k = 1``. Packed row-major ``R``
+then ``t``, length ``n^2 + n``, ``n >= 2``. Projection is
+``R skew(R^T H)`` on the rotation and the identity on ``t``.
+Retraction is QR of ``R + V`` with ``det = +1``, plus ``t + u``.
+Transport is projection at the arrival point. Distinct from
+``Se3``. A 3N cluster is rejected. Stamp layout 5.
+
 Symmetric matrices (``symmetric`` / ``RGMIN_MANIFOLD_SYMMETRIC`` = 14):
 manopt ``symmetricfactory``. Packed row-major ``n^2``. Projection is
 symmetrization, retraction is ``X + U``, transport is the identity.

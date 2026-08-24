@@ -44,6 +44,8 @@ Tokens
     +-------------------+---------------------------------------+-------------------------------------------+
     | ``Se3``           | row-major ``R`` then ``t``, length 12 | SO(3) on the rotation, Euclidean on ``t`` |
     +-------------------+---------------------------------------+-------------------------------------------+
+    | ``SeN { n }``     | row-major ``R`` then ``t``, ``n^2+n`` | QR on the rotation, Euclidean on ``t``    |
+    +-------------------+---------------------------------------+-------------------------------------------+
     | ``ComplexCircle`` | interleaved ``(re,im)``, length 2n   | ``sign(z+v)`` per pair                    |
     +-------------------+---------------------------------------+-------------------------------------------+
 
@@ -56,11 +58,12 @@ gpr\ :sub:`optim`\ ``IRCDriver`` (https://doi.org/10.1063/1.454172,
 https://doi.org/10.1063/1.434152). Call ``set_masses`` with N atomic masses;
 unit mass makes ``MwRigid`` identical to ``RigidQuotient``.
 
-``Sphere``, ``So3``, ``Stiefel``, ``Se3``, and ``ComplexCircle`` are
+``Sphere``, ``So3``, ``Stiefel``, ``Se3``, ``SeN``, and ``ComplexCircle`` are
 matrix-manifold embeddings. ``So3`` rejects any length other than 9.
-``Se3`` rejects any length other than 12. ``ComplexCircle { n }``
-rejects any length other than ``2 n``. They do not pack or
-prefix-interpret a 3N cluster.
+``Se3`` rejects any length other than 12. ``SeN { n }`` rejects any
+length other than ``n^2 + n``. ``ComplexCircle { n }`` rejects any
+length other than ``2 n``. They do not pack or prefix-interpret a
+3N cluster.
 
 Euclidean is the default. Existing eOn / rgpot / eindir paths do
 not change until a host calls the setter.
@@ -95,6 +98,7 @@ C
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SO3);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_STIEFEL);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SE3);
+    rgmin_solver_set_se_n(s, 2);
     rgmin_solver_set_complex_circle(s, 4);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SYMMETRIC);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN);
@@ -119,6 +123,12 @@ Packing notes
 
 - ``Se3`` is twelve numbers: the same 9-vector, then a translation.
   It is one rigid body, not N atoms.
+
+- ``SeN { n }`` / ``set_se_n(n)`` is manopt
+  ``specialeuclideanfactory(n)``: row-major ``n^2`` then ``t`` of
+  length ``n``, packed ``n^2 + n``, ``n >= 2``. Product geometry
+  ``SO(n) x R^n``. It is not the sphere and not a 3N cluster.
+  SE(3) stays the ``Se3`` token.
 
 - ``Stiefel`` is ``St(n,1)``. A frame with ``p > 1`` is not a length
   token: ``n p`` does not name ``p``.
