@@ -120,8 +120,14 @@ Packing notes
 - ``Se3`` is twelve numbers: the same 9-vector, then a translation.
   It is one rigid body, not N atoms.
 
-- ``Stiefel`` is ``St(n,1)``. A frame with ``p > 1`` is not a length
-  token: ``n p`` does not name ``p``.
+- ``Stiefel`` is manopt ``stiefelfactory(n, 1)``: a unit column,
+  proj/retr/transp match the sphere. The inner product is the
+  Frobenius Euclidean dot via ``vecops``. Typical distance is ``1``
+  (``sqrt(p k)`` at ``p = 1``, ``k = 1``), not ``pi``.
+  ``StiefelP { n, p }`` / ``set_stiefel(n, p)`` for ``p > 1`` is a
+  different token: column-major ``n p``, projection
+  ``U - X sym(X^T U)``, QR retraction. A 3N cluster is
+  ``RigidQuotient``, not this packing.
 
 - ``ComplexCircle { n }`` is manopt ``complexcirclefactory(n)``:
   interleaved ``(re, im)`` pairs, length ``2 n``. Each pair is

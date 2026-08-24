@@ -1,6 +1,11 @@
 //! Stiefel \(\mathrm{St}(n,p)\): orthonormal n-by-p frames.
 //!
-//! `p = 1` is packed as a length-\(n\) unit vector and is the sphere.
+//! `p = 1` is manopt `stiefelfactory(n, 1)`: a length-\(n\) unit
+//! vector. Projection, QR retraction, and transport match the
+//! sphere. The inner product is the Frobenius / Euclidean dot
+//! (`d1(:).'*d2(:)`). Typical distance is \(\sqrt{p k} = 1\) at
+//! `k = 1` (not \(\pi\); that is `spherefactory`).
+//!
 //! `p > 1` is packed column-major (manopt `X(:)`), length `n*p`,
 //! with \(X^\top X = I_p\). Projection is \(U - X\,\mathrm{sym}(X^\top U)\).
 //! Retraction is thin QR with positive diagonal (manopt `retr_qr`).
@@ -11,13 +16,24 @@
 
 use ndarray::{Array1, ArrayView1};
 
-use crate::vecops::{axpy, dot, nrm2};
+use crate::vecops::{self, axpy, dot, nrm2};
 
 use super::{sphere::Sphere, Manifold};
 
 /// Stiefel with \(p=1\), packed as a length-\(n\) unit vector.
+/// manopt `stiefelfactory(n, 1)`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stiefel;
+
+/// Frobenius inner product. manopt `M.inner = d1(:).'*d2(:)`.
+pub fn inner(u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+    vecops::dot(u.view(), v.view())
+}
+
+/// manopt `M.typicaldist = @() sqrt(p*k)` at `p = 1`, `k = 1`.
+pub fn typical_dist() -> f64 {
+    1.0
+}
 
 impl Manifold for Stiefel {
     fn project(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
@@ -197,10 +213,103 @@ mod tests {
         let y = array![0.0, 1.0, 0.0];
         assert_eq!(Stiefel.project(&x, &v), Sphere.project(&x, &v));
         assert_eq!(Stiefel.retract(&x, &v), Sphere.retract(&x, &v));
-        assert_eq!(
-            Stiefel.transport(&x, &y, &v),
-            Sphere.transport(&x, &y, &v)
+        assert_eq!(Stiefel.transport(&x, &y, &v), Sphere.transport(&x, &y, &v));
+        let r = Stiefel.egrad2rgrad(&x, &v);
+        assert_eq!(r, Stiefel.project(&x, &v));
+        assert_eq!(r, Sphere.egrad2rgrad(&x, &v));
+    }
+
+    #[test]
+    fn p1_retract_stays_on_the_set() {
+        let x = array![0.0, 1.0, 0.0];
+        let v = array![0.1, 0.0, -0.2];
+        let y = Stiefel.retract(&x, &v);
+        assert!(
+            (vecops::nrm2(y.view()) - 1.0).abs() < 1e-14,
+            "left St(n,1) {y:?}"
         );
+        let z = Stiefel.retract(&x, &Array1::zeros(3));
+        assert!((vecops::nrm2(z.view()) - 1.0).abs() < 1e-15);
+        for i in 0..3 {
+            assert!((z[i] - x[i]).abs() < 1e-15, "zero step {z:?} != {x:?}");
+        }
+        assert!(Stiefel.required_dim(y.len()).is_ok());
+    }
+
+    #[test]
+    fn p1_project_is_tangent() {
+        let x = array![1.0, 0.0, 0.0];
+        let v = array![2.0, 3.0, 4.0];
+        let t = Stiefel.project(&x, &v);
+        assert!(inner(&x, &t).abs() < 1e-15, "x·t = {}", inner(&x, &t));
+        assert!((t[1] - 3.0).abs() < 1e-15);
+        assert!((t[2] - 4.0).abs() < 1e-15);
+        assert!(t[0].abs() < 1e-15);
+        let tt = Stiefel.project(&x, &t);
+        for i in 0..3 {
+            assert!((tt[i] - t[i]).abs() < 1e-15, "P^2 != P {tt:?} != {t:?}");
+        }
+    }
+
+    #[test]
+    fn p1_transport_is_projection_at_arrival() {
+        let x = array![1.0, 0.0, 0.0];
+        let v = Stiefel.project(&x, &array![0.0, 0.3, -0.4]);
+        let y = Stiefel.retract(&x, &v);
+        let w = array![0.2, -0.1, 0.5];
+        let t = Stiefel.transport(&x, &y, &w);
+        assert!(
+            inner(&y, &t).abs() < 1e-14,
+            "arrival x·T(v) = {} at {y:?} t={t:?}",
+            inner(&y, &t)
+        );
+        let p = Stiefel.project(&y, &w);
+        for i in 0..3 {
+            assert!(
+                (t[i] - p[i]).abs() < 1e-15,
+                "transp != proj(y) {t:?} != {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn frobenius_inner_and_typical_dist() {
+        let u = array![1.0, 2.0, 3.0];
+        let v = array![4.0, -1.0, 0.5];
+        assert!((inner(&u, &v) - 3.5).abs() < 1e-15);
+        assert!((typical_dist() - 1.0).abs() < 1e-15);
+        assert!((typical_dist() - std::f64::consts::PI).abs() > 1.0);
+        assert!((vecops::nrm2(u.view()) - inner(&u, &u).sqrt()).abs() < 1e-15);
+    }
+
+    #[test]
+    fn p_greater_than_one_is_stiefel_p_not_this_token() {
+        use crate::manifold::ManifoldKind;
+        assert_eq!(
+            ManifoldKind::stiefel(4, 2),
+            ManifoldKind::StiefelP { n: 4, p: 2 }
+        );
+        assert_ne!(ManifoldKind::stiefel(4, 2), ManifoldKind::Stiefel);
+        assert_eq!(ManifoldKind::stiefel(5, 1), ManifoldKind::Stiefel);
+        assert_eq!(ManifoldKind::stiefel(5, 1).stiefel_p(), 1);
+        assert_eq!(ManifoldKind::stiefel(4, 2).stiefel_p(), 2);
+        assert!(StiefelNp::new(4, 1).is_err());
+        assert!(StiefelNp::new(4, 2).is_ok());
+    }
+
+    #[test]
+    fn a_3n_cluster_is_not_stiefel() {
+        use crate::manifold::ManifoldKind;
+        assert_ne!(ManifoldKind::Stiefel, ManifoldKind::RigidQuotient);
+        assert_ne!(ManifoldKind::Stiefel, ManifoldKind::MwRigid);
+        assert_ne!(ManifoldKind::stiefel(114, 1), ManifoldKind::RigidQuotient);
+        let packed = ManifoldKind::stiefel(38, 3);
+        assert_eq!(packed, ManifoldKind::StiefelP { n: 38, p: 3 });
+        assert_ne!(packed, ManifoldKind::Stiefel);
+        assert_ne!(packed, ManifoldKind::RigidQuotient);
+        assert!(packed.required_dim(114).is_ok());
+        assert!(ManifoldKind::RigidQuotient.required_dim(114).is_ok());
+        assert_ne!(packed.as_str(), ManifoldKind::RigidQuotient.as_str());
     }
 
     #[test]

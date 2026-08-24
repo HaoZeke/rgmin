@@ -288,20 +288,110 @@ fn sphere_rayleigh_stays_on_the_sphere() {
 
 #[test]
 fn stiefel_p1_matches_sphere_retract() {
+    use rgmin::manifold::{inner_stiefel, typical_dist_stiefel};
     use rgmin::{Manifold, ManifoldKind};
     let x = array![0.0, 1.0, 0.0];
     let v = array![0.1, 0.0, -0.2];
     let ys = ManifoldKind::Sphere.retract(&x, &v);
     let yv = ManifoldKind::Stiefel.retract(&x, &v);
     assert!((&ys - &yv).mapv(f64::abs).sum() < 1e-15);
+    assert_eq!(
+        ManifoldKind::Stiefel.project(&x, &v),
+        ManifoldKind::Sphere.project(&x, &v)
+    );
+    assert_eq!(
+        ManifoldKind::Stiefel.transport(&x, &ys, &v),
+        ManifoldKind::Sphere.transport(&x, &ys, &v)
+    );
     assert_eq!(ManifoldKind::Stiefel.stiefel_p(), 1);
     assert_eq!(ManifoldKind::stiefel(3, 1), ManifoldKind::Stiefel);
+    assert!((typical_dist_stiefel() - 1.0).abs() < 1e-15);
+    assert!((inner_stiefel(&yv, &yv).sqrt() - 1.0).abs() < 1e-14);
+}
+
+#[test]
+fn stiefel_p_greater_than_one_is_stiefel_p_not_this_token() {
+    use rgmin::ManifoldKind;
+    let kind = ManifoldKind::stiefel(4, 2);
+    assert_eq!(kind, ManifoldKind::StiefelP { n: 4, p: 2 });
+    assert_ne!(kind, ManifoldKind::Stiefel);
+    assert_eq!(kind.as_str(), "stiefel");
+    assert_eq!(ManifoldKind::Stiefel.as_str(), "stiefel");
+    assert_eq!(kind.stiefel_p(), 2);
+}
+
+#[test]
+fn a_3n_cluster_is_not_stiefel() {
+    use rgmin::ManifoldKind;
+    assert_ne!(ManifoldKind::RigidQuotient, ManifoldKind::Stiefel);
+    assert_ne!(ManifoldKind::MwRigid, ManifoldKind::Stiefel);
+    assert_ne!(ManifoldKind::stiefel(114, 1), ManifoldKind::RigidQuotient);
+    let packed = ManifoldKind::stiefel(38, 3);
+    assert_eq!(packed, ManifoldKind::StiefelP { n: 38, p: 3 });
+    assert_ne!(packed, ManifoldKind::RigidQuotient);
+    assert_ne!(packed, ManifoldKind::Stiefel);
+}
+
+#[test]
+fn stiefel_p1_session_step_stays_on_the_set() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::manifold::inner_stiefel;
+    use rgmin::{Manifold, ManifoldKind};
+
+    struct Ray;
+    impl Objective<f64> for Ray {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-2.0, -2.0, -2.0], array![2.0, 2.0, 2.0], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            0.5 * (x[0] * x[0] + 2.0 * x[1] * x[1] + 3.0 * x[2] * x[2])
+        }
+    }
+    impl Gradient<f64> for Ray {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            array![x[0], 2.0 * x[1], 3.0 * x[2]]
+        }
+    }
+    impl DifferentiableObjective<f64> for Ray {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = Ray;
+    let n = (1.0_f64 + 1.0 + 1.0).sqrt();
+    let mut x = array![1.0 / n, 1.0 / n, 1.0 / n];
+    assert!((inner_stiefel(&x, &x).sqrt() - 1.0).abs() < 1e-15);
+    let mut solver = Solver::new(Method::Steepest, control(), 3);
+    solver.set_stiefel(3, 1);
+    solver.set_accept(rgmin::Accept::None);
+    solver.step(&obj, &mut x).unwrap();
+    let nrm = inner_stiefel(&x, &x).sqrt();
+    assert!((nrm - 1.0).abs() < 1e-14, "left St(n,1) {x:?}");
+    let g = Gradient::grad(&obj, x.view());
+    let r = ManifoldKind::Stiefel.egrad2rgrad(&x, &g);
+    assert!(
+        inner_stiefel(&x, &r).abs() < 1e-14,
+        "rgrad not tangent at {x:?}: x·r = {}",
+        inner_stiefel(&x, &r)
+    );
 }
 
 #[test]
 fn stiefel_p2_retract_stays_orthonormal() {
     use rgmin::{Manifold, ManifoldKind};
     let kind = ManifoldKind::stiefel(4, 2);
+    assert_eq!(kind, ManifoldKind::StiefelP { n: 4, p: 2 });
+    assert_ne!(kind, ManifoldKind::Stiefel);
     assert_eq!(kind.stiefel_p(), 2);
     assert!(kind.required_dim(8).is_ok());
     assert!(kind.required_dim(7).is_err());
@@ -1067,11 +1157,7 @@ fn an_uphill_everywhere_oracle_is_refused_not_moved() {
         };
         (r, g)
     });
-    let mut solver = rgmin::Solver::new(
-        rgmin::Method::Steepest,
-        rgmin::Control::default(),
-        6,
-    );
+    let mut solver = rgmin::Solver::new(rgmin::Method::Steepest, rgmin::Control::default(), 6);
     solver.set_accept(rgmin::Accept::Energy);
     let mut x = Array1::from(vec![0.0; 6]);
     let rep = solver.step(&obj, &mut x).expect("step runs");

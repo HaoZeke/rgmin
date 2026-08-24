@@ -194,8 +194,10 @@ impl Solver {
         self.set_manifold(ManifoldKind::Oblique { n, m });
     }
 
-    /// Stiefel \(\mathrm{St}(n,p)\). `p = 1` is the sphere packing.
-    /// `p > 1` is column-major, length `n*p`.
+    /// Stiefel \(\mathrm{St}(n,p)\). manopt `stiefelfactory`.
+    /// `p = 1` is [`ManifoldKind::Stiefel`] (sphere packing).
+    /// `p > 1` is [`ManifoldKind::StiefelP`], column-major length `n*p`.
+    /// A 3N cluster is [`ManifoldKind::RigidQuotient`], not this token.
     pub fn set_stiefel(&mut self, n: usize, p: usize) {
         self.set_manifold(ManifoldKind::stiefel(n, p));
     }

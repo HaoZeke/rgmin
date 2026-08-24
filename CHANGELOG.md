@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Stiefel factory parity with manopt `stiefelfactory(n, 1)`:
+  projection, QR retraction, and transport match the sphere,
+  Frobenius inner product through `vecops`, typical distance `1`
+  (not `pi`). `p > 1` is `StiefelP`, not this token. A 3N cluster
+  is `RigidQuotient`, not Stiefel. A session steepest step on
+  `St(n,1)` stays on the unit sphere.
 - `ManifoldKind::Symmetric`: manopt `symmetricfactory`. Packed
   row-major `n^2`. Projection is symmetrization, retraction is
   `X + U`, transport is the identity. C token 14.
