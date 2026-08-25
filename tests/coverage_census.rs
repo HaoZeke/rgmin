@@ -7,9 +7,9 @@ use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
 use ndarray::{Array1, ArrayView1, array};
 use rgmin::IrcTrust;
 use rgmin::manifold::{
-    ComplexCircle, Constant, EuclideanComplex, Manifold, Multinomial, MwRigid, Oblique,
+    ComplexCircle, Constant, EuclideanComplex, Manifold, Multinomial, MwRigid, Oblique, Positive,
     SkewSymmetric, Spd, Sphere, SphereComplex, Stiefel, StiefelNp, Symmetric, is_constant,
-    is_euclidean_complex, is_skewsymmetric, is_spd, is_sphere_complex, is_symmetric,
+    is_euclidean_complex, is_positive, is_skewsymmetric, is_spd, is_sphere_complex, is_symmetric,
 };
 use rgmin::{Conjugacy, Control, DirectionalCurvature, Restart, ScgParams, minimize_scg_exact};
 
@@ -261,6 +261,23 @@ fn sphere_complex_retract_stays_on_the_set() {
     let w = m.transport(&x, &y, &v);
     let p = m.project(&y, &v);
     assert!((&w - &p).mapv(f64::abs).sum() < 1e-14);
+}
+
+/// manopt positivefactory: retraction stays entrywise positive and is
+/// not sphere-normalization.
+#[test]
+fn positive_retract_stays_on_the_set() {
+    let m = Positive::new(3);
+    let x = array![1.0, 2.0, 0.5];
+    let v = array![0.1, -0.5, 0.2];
+    let y = m.retract(&x, &v);
+    assert!(is_positive(&y), "left the positive orthant {y:?}");
+    let t = m.project(&x, &v);
+    assert!((&t - &v).mapv(f64::abs).sum() < 1e-15);
+    let w = m.transport(&x, &y, &v);
+    assert!((&w - &v).mapv(f64::abs).sum() < 1e-15);
+    let fro = y.iter().map(|a| a * a).sum::<f64>().sqrt();
+    assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {y:?}");
 }
 
 /// A quadratic bowl carrying its exact directional curvature. SCG with

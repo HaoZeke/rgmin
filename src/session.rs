@@ -233,6 +233,11 @@ impl Solver {
         self.set_manifold(ManifoldKind::SphereComplex { n });
     }
 
+    /// Positive orthant of packed length `n`. manopt `positivefactory`.
+    pub fn set_positive(&mut self, n: usize) {
+        self.set_manifold(ManifoldKind::Positive { n });
+    }
+
     /// Per-atom masses for [`ManifoldKind::MwRigid`] (Page–McIver / Eckart).
     /// Empty clears them (unit mass).
     pub fn set_masses(&mut self, masses: Array1<f64>) {

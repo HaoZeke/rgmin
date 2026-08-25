@@ -11,7 +11,7 @@
 //! \(R^{3N}/\mathrm{SE}(3)\)) or [`ManifoldKind::MwRigid`] (Page–McIver
 //! mass-weighted Eckart, the IRC metric). Sphere / SO(3)-9 / SE(3)-12
 //! / Symmetric-n² / SPD-n² / ComplexCircle-2n / EuclideanComplex-2n
-//! / Constant-n / Oblique-nm are matrix-manifold embeddings, not a 3N cluster.
+//! / Constant-n / Positive-n / Oblique-nm are matrix-manifold embeddings, not a 3N cluster.
 //! [`ManifoldKind::Symmetric`] is manopt `symmetricfactory`.
 //! [`ManifoldKind::SkewSymmetric`] is manopt `skewsymmetricfactory`.
 //! [`ManifoldKind::ComplexCircle`] is manopt `complexcirclefactory`.
@@ -22,6 +22,7 @@
 //! [`ManifoldKind::MultinomialSymmetric`] is manopt
 //! `multinomialsymmetricfactory`.
 //! [`ManifoldKind::SphereComplex`] is manopt `spherecomplexfactory`.
+//! [`ManifoldKind::Positive`] is manopt `positivefactory`.
 
 use ndarray::Array1;
 
@@ -34,6 +35,7 @@ mod multinomial_ds;
 mod multinomial_sym;
 mod mw_rigid;
 mod oblique;
+mod positive;
 mod rigid_quotient;
 mod se3;
 mod skewsymmetric;
@@ -63,6 +65,10 @@ pub use multinomial_sym::{
 };
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
+pub use positive::{
+    Positive, inner as inner_pos, is_positive, pack as pack_pos, typical_dist as typical_dist_pos,
+    unpack as unpack_pos,
+};
 pub use rigid_quotient::RigidQuotient;
 pub use se3::Se3;
 pub use skewsymmetric::{
@@ -170,6 +176,13 @@ pub enum ManifoldKind {
         /// Complex dimension.
         n: usize,
     },
+    /// Positive orthant \(\mathbb{R}_{++}^n\). Packed length `n`.
+    /// manopt `positivefactory(n)` (second dim defaults to 1).
+    /// Not the reserved SPD / grassmann / hyperbolic tokens.
+    Positive {
+        /// Packed length of the strictly positive vector.
+        n: usize,
+    },
 }
 
 impl ManifoldKind {
@@ -228,6 +241,11 @@ impl ManifoldKind {
         Self::SphereComplex { n }
     }
 
+    /// Positive orthant of packed length `n`. manopt `positivefactory(n)`.
+    pub fn positive(n: usize) -> Self {
+        Self::Positive { n }
+    }
+
     /// C ABI / INI token.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -249,6 +267,7 @@ impl ManifoldKind {
             Self::MultinomialDoublyStochastic { .. } => "multinomialdoublystochastic",
             Self::MultinomialSymmetric { .. } => "multinomialsymmetric",
             Self::SphereComplex { .. } => "spherecomplex",
+            Self::Positive { .. } => "positive",
         }
     }
 }
@@ -299,6 +318,7 @@ impl Manifold for ManifoldKind {
                 MultinomialSymmetric { n: *sn }.required_dim(n)
             }
             Self::SphereComplex { n: cn } => SphereComplex { n: *cn }.required_dim(n),
+            Self::Positive { n: pn } => Positive { n: *pn }.required_dim(n),
         }
     }
 
@@ -325,6 +345,7 @@ impl Manifold for ManifoldKind {
             }
             Self::MultinomialSymmetric { n } => MultinomialSymmetric { n: *n }.project(x, v),
             Self::SphereComplex { n } => SphereComplex { n: *n }.project(x, v),
+            Self::Positive { n } => Positive { n: *n }.project(x, v),
         }
     }
 
@@ -351,6 +372,7 @@ impl Manifold for ManifoldKind {
             }
             Self::MultinomialSymmetric { n } => MultinomialSymmetric { n: *n }.retract(x, v),
             Self::SphereComplex { n } => SphereComplex { n: *n }.retract(x, v),
+            Self::Positive { n } => Positive { n: *n }.retract(x, v),
         }
     }
 
@@ -379,6 +401,7 @@ impl Manifold for ManifoldKind {
                 MultinomialSymmetric { n: *n }.transport(x_from, x_to, v)
             }
             Self::SphereComplex { n } => SphereComplex { n: *n }.transport(x_from, x_to, v),
+            Self::Positive { n } => Positive { n: *n }.transport(x_from, x_to, v),
         }
     }
 
@@ -407,6 +430,7 @@ impl Manifold for ManifoldKind {
                 MultinomialSymmetric { n: *n }.egrad2rgrad(x, egrad)
             }
             Self::SphereComplex { n } => SphereComplex { n: *n }.egrad2rgrad(x, egrad),
+            Self::Positive { n } => Positive { n: *n }.egrad2rgrad(x, egrad),
         }
     }
 }
