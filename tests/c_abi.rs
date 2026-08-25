@@ -857,11 +857,11 @@ fn c_abi_respects_maxmove_when_initial_step_is_larger() {
 fn c_abi_every_setter_survives_live_and_null_sessions() {
     use rgmin::ffi::{
         rgmin_manifold_t, rgmin_qn_step_t, rgmin_solver_forget, rgmin_solver_set_atom_maxmove,
-        rgmin_solver_set_cautious, rgmin_solver_set_constant, rgmin_solver_set_euclidean_complex,
-        rgmin_solver_set_extra_updates, rgmin_solver_set_manifold, rgmin_solver_set_masses,
-        rgmin_solver_set_maxmove, rgmin_solver_set_multinomial_ds,
-        rgmin_solver_set_multinomial_sym, rgmin_solver_set_oblique, rgmin_solver_set_periodic,
-        rgmin_solver_set_centered_matrix, rgmin_solver_set_positive,
+        rgmin_solver_set_cautious, rgmin_solver_set_centered_matrix, rgmin_solver_set_constant,
+        rgmin_solver_set_euclidean_complex, rgmin_solver_set_extra_updates,
+        rgmin_solver_set_manifold, rgmin_solver_set_masses, rgmin_solver_set_maxmove,
+        rgmin_solver_set_multinomial_ds, rgmin_solver_set_multinomial_sym,
+        rgmin_solver_set_oblique, rgmin_solver_set_periodic, rgmin_solver_set_positive,
         rgmin_solver_set_project_rigid, rgmin_solver_set_qn_step, rgmin_solver_set_sphere_complex,
         rgmin_solver_set_stiefel,
     };

@@ -1572,11 +1572,7 @@ pub unsafe extern "C" fn rgmin_solver_set_centered_matrix(
     if solver.is_null() {
         return;
     }
-    unsafe {
-        (*solver)
-            .solver
-            .set_centered_matrix(m, n, center_rows != 0)
-    };
+    unsafe { (*solver).solver.set_centered_matrix(m, n, center_rows != 0) };
 }
 
 /// Per-atom masses for `RGMIN_MANIFOLD_MW_RIGID`. `n_atoms == 0` or a

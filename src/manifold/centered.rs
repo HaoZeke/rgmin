@@ -235,7 +235,10 @@ mod tests {
         let x = array![1.0, 2.0, -3.0, -1.0, -2.0, 3.0];
         let v = array![0.2, -0.1, 0.4, 0.1, 0.3, -0.2];
         let y = m.retract(&x, &v);
-        assert!(is_centered(&y, 2, 3, true), "left the row-centered set {y:?}");
+        assert!(
+            is_centered(&y, 2, 3, true),
+            "left the row-centered set {y:?}"
+        );
         assert!((y[0] + y[3]).abs() < 1e-14);
         assert!((y[1] + y[4]).abs() < 1e-14);
         assert!((y[2] + y[5]).abs() < 1e-14);

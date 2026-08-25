@@ -340,14 +340,12 @@ impl Manifold for ManifoldKind {
             }
             Self::SphereComplex { n: cn } => SphereComplex { n: *cn }.required_dim(n),
             Self::Positive { n: pn } => Positive { n: *pn }.required_dim(n),
-            Self::CenteredMatrix { m, n: cn, rows } => {
-                CenteredMatrix {
-                    m: *m,
-                    n: *cn,
-                    rows: *rows,
-                }
-                .required_dim(n)
+            Self::CenteredMatrix { m, n: cn, rows } => CenteredMatrix {
+                m: *m,
+                n: *cn,
+                rows: *rows,
             }
+            .required_dim(n),
         }
     }
 
