@@ -57,7 +57,10 @@ pub use multinomial_ds::{
     MultinomialDoublyStochastic, inner as inner_ds, is_doubly_stochastic, pack as pack_ds,
     side as side_ds, typical_dist as typical_dist_ds, unpack as unpack_ds,
 };
-pub use multinomial_sym::MultinomialSymmetric;
+pub use multinomial_sym::{
+    MultinomialSymmetric, inner as inner_mnsym, is_symmetric_doubly_stochastic, pack as pack_mnsym,
+    side as side_mnsym, typical_dist as typical_dist_mnsym, unpack as unpack_mnsym,
+};
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
 pub use rigid_quotient::RigidQuotient;
@@ -211,6 +214,12 @@ impl ManifoldKind {
         Self::MultinomialDoublyStochastic { n }
     }
 
+    /// Symmetric doubly-stochastic n-by-n, packed length `n^2`.
+    /// manopt `multinomialsymmetricfactory`.
+    pub fn multinomial_sym(n: usize) -> Self {
+        Self::MultinomialSymmetric { n }
+    }
+
     /// C ABI / INI token.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -278,9 +287,7 @@ impl Manifold for ManifoldKind {
             Self::MultinomialDoublyStochastic { n: dn } => {
                 MultinomialDoublyStochastic { n: *dn }.required_dim(n)
             }
-            Self::MultinomialSymmetric { n: sn } => {
-                MultinomialSymmetric { n: *sn }.required_dim(n)
-            }
+            Self::MultinomialSymmetric { n: sn } => MultinomialSymmetric { n: *sn }.required_dim(n),
             Self::SphereComplex { n: cn } => SphereComplex { n: *cn }.required_dim(n),
         }
     }

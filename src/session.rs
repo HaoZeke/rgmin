@@ -221,6 +221,12 @@ impl Solver {
         self.set_manifold(ManifoldKind::MultinomialDoublyStochastic { n });
     }
 
+    /// Symmetric doubly-stochastic n-by-n, packed length `n^2`.
+    /// manopt `multinomialsymmetricfactory`.
+    pub fn set_multinomial_sym(&mut self, n: usize) {
+        self.set_manifold(ManifoldKind::MultinomialSymmetric { n });
+    }
+
     /// Per-atom masses for [`ManifoldKind::MwRigid`] (Page–McIver / Eckart).
     /// Empty clears them (unit mass).
     pub fn set_masses(&mut self, masses: Array1<f64>) {
