@@ -19,10 +19,10 @@ use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
 use ndarray::{Array1, Array2, ArrayView1};
 
 use crate::{
-    lowest_mode, minimize_method, minimize_method_hess, minimize_scg, minimize_scg_exact, Accept,
-    ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind, Error,
-    HessianOracle, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart,
-    ScgParams, Solver,
+    Accept, ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind,
+    Error, HessianOracle, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart,
+    ScgParams, Solver, lowest_mode, minimize_method, minimize_method_hess, minimize_scg,
+    minimize_scg_exact,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
@@ -63,7 +63,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 15;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 16;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -329,9 +329,7 @@ fn conjugacy_from_c(raw: i32) -> Result<Conjugacy, rgmin_status_t> {
         6 => Ok(Conjugacy::LiuStorey),
         7 => Ok(Conjugacy::FrPr),
         other => {
-            set_last_error(&format!(
-                "rgmin_minimize_scg: unknown conjugacy {other}"
-            ));
+            set_last_error(&format!("rgmin_minimize_scg: unknown conjugacy {other}"));
             Err(rgmin_status_t::RGMIN_INVALID_PARAMETER)
         }
     }
@@ -956,14 +954,7 @@ pub unsafe extern "C" fn rgmin_minimize_scg(
             scratch: Scratch::new(),
         };
         let report = if obj.curv.is_some() {
-            minimize_scg_exact(
-                &obj,
-                Array1::from(init),
-                &control,
-                &scg,
-                conjugacy,
-                restart,
-            )
+            minimize_scg_exact(&obj, Array1::from(init), &control, &scg, conjugacy, restart)
         } else {
             minimize_scg(
                 &obj.inner,
@@ -1222,7 +1213,10 @@ pub unsafe extern "C" fn rgmin_solver_create(
         set_last_error("rgmin_solver_create: null ctrl or dim=0");
         return std::ptr::null_mut();
     }
-    if matches!(method, rgmin_method_t::RGMIN_NEWTON | rgmin_method_t::RGMIN_RFO) {
+    if matches!(
+        method,
+        rgmin_method_t::RGMIN_NEWTON | rgmin_method_t::RGMIN_RFO
+    ) {
         // Allowed: step_hess is the verb. Create still succeeds.
     }
     let c = unsafe { &*ctrl };
@@ -1280,7 +1274,10 @@ pub enum rgmin_qn_step_t {
 
 /// eOn `lbfgs_step`. Legal on an `RGMIN_LBFGS` session with [`rgmin_solver_step_hess`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_qn_step(solver: *mut rgmin_solver_t, step: rgmin_qn_step_t) {
+pub unsafe extern "C" fn rgmin_solver_set_qn_step(
+    solver: *mut rgmin_solver_t,
+    step: rgmin_qn_step_t,
+) {
     if solver.is_null() {
         return;
     }
@@ -1306,7 +1303,10 @@ pub enum rgmin_accept_t {
 
 /// eOn `lbfgs_accept`. Legal on any session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_accept(solver: *mut rgmin_solver_t, accept: rgmin_accept_t) {
+pub unsafe extern "C" fn rgmin_solver_set_accept(
+    solver: *mut rgmin_solver_t,
+    accept: rgmin_accept_t,
+) {
     if solver.is_null() {
         return;
     }
@@ -1347,7 +1347,11 @@ pub unsafe extern "C" fn rgmin_solver_set_extra_updates(solver: *mut rgmin_solve
 
 /// Li-Fukushima cautious pair filter. `eps <= 0` disables it.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_cautious(solver: *mut rgmin_solver_t, eps: f64, alpha: f64) {
+pub unsafe extern "C" fn rgmin_solver_set_cautious(
+    solver: *mut rgmin_solver_t,
+    eps: f64,
+    alpha: f64,
+) {
     if solver.is_null() {
         return;
     }
@@ -1403,6 +1407,9 @@ pub enum rgmin_manifold_t {
     /// Complex Euclidean C^n. Packed interleaved, length 2n.
     /// Token defaults to n = 1; use rgmin_solver_set_euclidean_complex.
     RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX = 16,
+    /// Singleton {A} of packed length n. manopt `constantfactory`.
+    /// Token defaults to n = 1; use rgmin_solver_set_constant.
+    RGMIN_MANIFOLD_CONSTANT = 17,
 }
 
 #[unsafe(no_mangle)]
@@ -1425,7 +1432,10 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
         rgmin_manifold_t::RGMIN_MANIFOLD_COMPLEX_CIRCLE => ManifoldKind::ComplexCircle { n: 1 },
         rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC => ManifoldKind::Symmetric,
         rgmin_manifold_t::RGMIN_MANIFOLD_SKEWSYMMETRIC => ManifoldKind::SkewSymmetric,
-        rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX => ManifoldKind::EuclideanComplex { n: 1 },
+        rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX => {
+            ManifoldKind::EuclideanComplex { n: 1 }
+        }
+        rgmin_manifold_t::RGMIN_MANIFOLD_CONSTANT => ManifoldKind::Constant { n: 1 },
         rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN => ManifoldKind::Euclidean,
     };
     unsafe { (*solver).solver.set_manifold(kind) };
@@ -1434,11 +1444,7 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
 /// Oblique \(\mathrm{OB}(n,m)\): product of `m` unit spheres in `R^n`.
 /// Packed column-major, length `n*m`. Not a 3N cluster.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_oblique(
-    solver: *mut rgmin_solver_t,
-    n: usize,
-    m: usize,
-) {
+pub unsafe extern "C" fn rgmin_solver_set_oblique(solver: *mut rgmin_solver_t, n: usize, m: usize) {
     if solver.is_null() {
         return;
     }
@@ -1448,11 +1454,7 @@ pub unsafe extern "C" fn rgmin_solver_set_oblique(
 /// Stiefel \(\mathrm{St}(n,p)\). `p = 1` is the sphere packing.
 /// `p > 1` is packed column-major, length `n*p`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_stiefel(
-    solver: *mut rgmin_solver_t,
-    n: usize,
-    p: usize,
-) {
+pub unsafe extern "C" fn rgmin_solver_set_stiefel(solver: *mut rgmin_solver_t, n: usize, p: usize) {
     if solver.is_null() {
         return;
     }
@@ -1470,14 +1472,20 @@ pub unsafe extern "C" fn rgmin_solver_set_complex_circle(solver: *mut rgmin_solv
 
 /// Complex Euclidean \(\mathbb{C}^n\). Packed interleaved, length `2 n`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_euclidean_complex(
-    solver: *mut rgmin_solver_t,
-    n: usize,
-) {
+pub unsafe extern "C" fn rgmin_solver_set_euclidean_complex(solver: *mut rgmin_solver_t, n: usize) {
     if solver.is_null() {
         return;
     }
     unsafe { (*solver).solver.set_euclidean_complex(n) };
+}
+
+/// Singleton of packed length `n`. manopt `constantfactory`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_constant(solver: *mut rgmin_solver_t, n: usize) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_constant(n) };
 }
 
 /// Per-atom masses for `RGMIN_MANIFOLD_MW_RIGID`. `n_atoms == 0` or a
@@ -1793,10 +1801,9 @@ fn c_oracle_hess(
             let mut s = hscratch.lock().expect("ffi scratch");
             let xt = s.x_tensor(xv);
             let mut h = Array2::zeros((n, n));
-            let ht = s.out.point_at(
-                h.as_slice_mut().expect("contiguous").as_mut_ptr(),
-                n * n,
-            );
+            let ht = s
+                .out
+                .point_at(h.as_slice_mut().expect("contiguous").as_mut_ptr(), n * n);
             let st = unsafe { hess_fn(user, xt, ht) };
             if st != rgmin_status_t::RGMIN_SUCCESS {
                 // A failed Hessian is no Hessian: NaN poisons the
@@ -1871,10 +1878,9 @@ fn c_oracle_hess_fg(
             let mut s = hscratch.lock().expect("ffi scratch");
             let xt = s.x_tensor(xv);
             let mut h = Array2::zeros((n, n));
-            let ht = s.out.point_at(
-                h.as_slice_mut().expect("contiguous").as_mut_ptr(),
-                n * n,
-            );
+            let ht = s
+                .out
+                .point_at(h.as_slice_mut().expect("contiguous").as_mut_ptr(), n * n);
             let st = unsafe { hess_fn(user, xt, ht) };
             if st != rgmin_status_t::RGMIN_SUCCESS {
                 return Array2::from_elem((n, n), f64::NAN);
@@ -1950,20 +1956,11 @@ mod conjugacy_abi_tests {
 
     #[test]
     fn conjugacy_from_c_is_dest_leaf_order() {
-        assert_eq!(
-            conjugacy_from_c(0).unwrap(),
-            Conjugacy::FletcherReeves
-        );
+        assert_eq!(conjugacy_from_c(0).unwrap(), Conjugacy::FletcherReeves);
         assert_eq!(conjugacy_from_c(1).unwrap(), Conjugacy::PolakRibiere);
-        assert_eq!(
-            conjugacy_from_c(2).unwrap(),
-            Conjugacy::HestenesStiefel
-        );
+        assert_eq!(conjugacy_from_c(2).unwrap(), Conjugacy::HestenesStiefel);
         assert_eq!(conjugacy_from_c(3).unwrap(), Conjugacy::DaiYuan);
-        assert_eq!(
-            conjugacy_from_c(4).unwrap(),
-            Conjugacy::ConjugateDescent
-        );
+        assert_eq!(conjugacy_from_c(4).unwrap(), Conjugacy::ConjugateDescent);
         assert_eq!(conjugacy_from_c(5).unwrap(), Conjugacy::HagerZhang);
         assert_eq!(conjugacy_from_c(6).unwrap(), Conjugacy::LiuStorey);
         assert_eq!(conjugacy_from_c(7).unwrap(), Conjugacy::FrPr);
