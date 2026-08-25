@@ -63,7 +63,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 18;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 19;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -1416,7 +1416,8 @@ pub enum rgmin_manifold_t {
     /// Symmetric doubly-stochastic n-by-n. Token defaults to n = 2;
     /// use rgmin_solver_set_multinomial_sym. Reserved 7-10 unused.
     RGMIN_MANIFOLD_MULTINOMIAL_SYM = 19,
-    /// Complex unit sphere C^n, packed 2n. Token defaults to n = 1.
+    /// Complex unit sphere C^n, packed 2n. Token defaults to n = 1;
+    /// use rgmin_solver_set_sphere_complex. Reserved 7-10 unused.
     RGMIN_MANIFOLD_SPHERE_COMPLEX = 20,
 }
 
@@ -1521,6 +1522,16 @@ pub unsafe extern "C" fn rgmin_solver_set_multinomial_sym(solver: *mut rgmin_sol
         return;
     }
     unsafe { (*solver).solver.set_multinomial_sym(n) };
+}
+
+/// Complex unit sphere in \(\mathbb{C}^n\). Packed interleaved, length `2 n`.
+/// manopt `spherecomplexfactory`. Token 20 defaults to n = 1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_sphere_complex(solver: *mut rgmin_solver_t, n: usize) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_sphere_complex(n) };
 }
 
 /// Per-atom masses for `RGMIN_MANIFOLD_MW_RIGID`. `n_atoms == 0` or a

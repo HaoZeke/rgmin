@@ -72,7 +72,9 @@ pub use skewsymmetric::{
 pub use so3::So3;
 pub use spd::{Spd, is_spd, pack as pack_spd, side as side_spd, unpack as unpack_spd};
 pub use sphere::Sphere;
-pub use sphere_complex::SphereComplex;
+pub use sphere_complex::{
+    SphereComplex, inner as inner_scplx, is_sphere_complex, typical_dist as typical_dist_scplx,
+};
 pub use stiefel::{Stiefel, StiefelNp};
 pub use symmetric::{
     Symmetric, inner as inner_sym, is_symmetric, pack as pack_sym, side as side_sym,
@@ -218,6 +220,12 @@ impl ManifoldKind {
     /// manopt `multinomialsymmetricfactory`.
     pub fn multinomial_sym(n: usize) -> Self {
         Self::MultinomialSymmetric { n }
+    }
+
+    /// Complex unit sphere in \(\mathbb{C}^n\). Packed length `2 n`.
+    /// manopt `spherecomplexfactory`.
+    pub fn sphere_complex(n: usize) -> Self {
+        Self::SphereComplex { n }
     }
 
     /// C ABI / INI token.
