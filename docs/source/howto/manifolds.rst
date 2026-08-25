@@ -97,6 +97,7 @@ C
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SE3);
     rgmin_solver_set_complex_circle(s, 4);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SYMMETRIC);
+    rgmin_solver_set_multinomial_ds(s, 3);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN);
 
 Changing the manifold drops method memory (``forget``).
@@ -132,6 +133,15 @@ Packing notes
   symmetric matrix packed row-major (``n^2``). Projection is
   symmetrization. Retraction is ``X + U``. Transport is the
   identity. It is not the SPD cone and not a 3N cluster.
+
+- ``MultinomialDoublyStochastic { n }`` is manopt
+  ``multinomialdoublystochasticfactory``: an ``n x n`` positive
+  doubly-stochastic matrix packed row-major (``n^2``, ``n >= 2``).
+  Projection is Fisher-orthogonal onto ``V 1 = V^T 1 = 0``.
+  Retraction is ``X ⊙ exp(V ⊘ X)`` then Sinkhorn. Transport is
+  projection at arrival. It is not the simplex, not the sphere,
+  and not a 3N cluster. C token 18
+  (``rgmin_solver_set_multinomial_ds``). Tokens 7-10 stay reserved.
 
 - ``set_project_rigid`` is the same horizontal projection as
   ``RigidQuotient`` and stays available on Euclidean.

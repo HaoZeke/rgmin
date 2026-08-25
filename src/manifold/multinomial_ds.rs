@@ -344,6 +344,46 @@ mod tests {
     }
 
     #[test]
+    fn retract_from_off_center_stays_on_set() {
+        let m = MultinomialDoublyStochastic { n: 2 };
+        let x = array![0.7, 0.3, 0.3, 0.7];
+        let v = array![0.05, -0.05, -0.05, 0.05];
+        let y = m.retract(&x, &v);
+        assert!(y.iter().all(|&yi| yi > 0.0), "left the interior {y:?}");
+        let (rows, cols) = row_col_sums(2, &y);
+        assert!((rows[0] - 1.0).abs() < 1e-10, "row0 {}", rows[0]);
+        assert!((rows[1] - 1.0).abs() < 1e-10, "row1 {}", rows[1]);
+        assert!((cols[0] - 1.0).abs() < 1e-10, "col0 {}", cols[0]);
+        assert!((cols[1] - 1.0).abs() < 1e-10, "col1 {}", cols[1]);
+        assert!(is_doubly_stochastic(&y));
+    }
+
+    #[test]
+    fn project_is_fisher_orthogonal() {
+        let m = MultinomialDoublyStochastic { n: 2 };
+        let x = array![0.7, 0.3, 0.3, 0.7];
+        let v = array![1.0, 0.0, 0.0, 0.0];
+        let t = m.project(&x, &v);
+        let (rows, cols) = row_col_sums(2, &t);
+        assert!(rows[0].abs() < 1e-10, "row0 {}", rows[0]);
+        assert!(rows[1].abs() < 1e-10, "row1 {}", rows[1]);
+        assert!(cols[0].abs() < 1e-10, "col0 {}", cols[0]);
+        assert!(cols[1].abs() < 1e-10, "col1 {}", cols[1]);
+        // Residual ./ X is of the form alpha_i + beta_j.
+        let resid = [
+            (v[0] - t[0]) / x[0],
+            (v[1] - t[1]) / x[1],
+            (v[2] - t[2]) / x[2],
+            (v[3] - t[3]) / x[3],
+        ];
+        let cycle = resid[0] + resid[3] - resid[1] - resid[2];
+        assert!(cycle.abs() < 1e-10, "not Fisher dual residual {resid:?}");
+        // Euclidean (X-free) projection is a different vector here.
+        let euc00 = v[0] - 0.5 - 0.5 + 0.25;
+        assert!((t[0] - euc00).abs() > 1e-6, "collapsed to Euclidean {t:?}");
+    }
+
+    #[test]
     fn project_is_tangent_off_barycenter() {
         let m = MultinomialDoublyStochastic { n: 2 };
         let seed = array![0.7, 0.3, 0.3, 0.7];
