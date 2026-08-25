@@ -17,6 +17,8 @@
 //! [`ManifoldKind::ComplexCircle`] is manopt `complexcirclefactory`.
 //! [`ManifoldKind::EuclideanComplex`] is manopt `euclideancomplexfactory`.
 //! [`ManifoldKind::Constant`] is manopt `constantfactory`.
+//! [`ManifoldKind::MultinomialDoublyStochastic`] is manopt
+//! `multinomialdoublystochasticfactory`.
 
 use ndarray::Array1;
 
@@ -25,6 +27,7 @@ mod constant;
 mod euclidean;
 mod euclidean_complex;
 mod multinomial;
+mod multinomial_ds;
 mod mw_rigid;
 mod oblique;
 mod rigid_quotient;
@@ -45,6 +48,7 @@ pub use euclidean_complex::{
     EuclideanComplex, inner as inner_cplx, is_euclidean_complex, typical_dist as typical_dist_cplx,
 };
 pub use multinomial::Multinomial;
+pub use multinomial_ds::MultinomialDoublyStochastic;
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
 pub use rigid_quotient::RigidQuotient;
@@ -132,6 +136,13 @@ pub enum ManifoldKind {
         /// Packed length of the singleton.
         n: usize,
     },
+    /// Doubly-stochastic n-by-n, row-major n², `n >= 2`.
+    /// manopt `multinomialdoublystochasticfactory`.
+    /// Not the reserved SPD / grassmann / hyperbolic tokens.
+    MultinomialDoublyStochastic {
+        /// Side length.
+        n: usize,
+    },
 }
 
 impl ManifoldKind {
@@ -190,6 +201,7 @@ impl ManifoldKind {
             Self::ComplexCircle { .. } => "complex_circle",
             Self::EuclideanComplex { .. } => "euclidean_complex",
             Self::Constant { .. } => "constant",
+            Self::MultinomialDoublyStochastic { .. } => "multinomialdoublystochastic",
         }
     }
 }
@@ -233,6 +245,9 @@ impl Manifold for ManifoldKind {
             Self::ComplexCircle { n: cn } => ComplexCircle { n: *cn }.required_dim(n),
             Self::EuclideanComplex { n: en } => EuclideanComplex { n: *en }.required_dim(n),
             Self::Constant { n: kn } => Constant { n: *kn }.required_dim(n),
+            Self::MultinomialDoublyStochastic { n: dn } => {
+                MultinomialDoublyStochastic { n: *dn }.required_dim(n)
+            }
         }
     }
 
@@ -254,6 +269,9 @@ impl Manifold for ManifoldKind {
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.project(x, v),
             Self::EuclideanComplex { n } => EuclideanComplex { n: *n }.project(x, v),
             Self::Constant { n } => Constant { n: *n }.project(x, v),
+            Self::MultinomialDoublyStochastic { n } => {
+                MultinomialDoublyStochastic { n: *n }.project(x, v)
+            }
         }
     }
 
@@ -275,6 +293,9 @@ impl Manifold for ManifoldKind {
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.retract(x, v),
             Self::EuclideanComplex { n } => EuclideanComplex { n: *n }.retract(x, v),
             Self::Constant { n } => Constant { n: *n }.retract(x, v),
+            Self::MultinomialDoublyStochastic { n } => {
+                MultinomialDoublyStochastic { n: *n }.retract(x, v)
+            }
         }
     }
 
@@ -296,6 +317,9 @@ impl Manifold for ManifoldKind {
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.transport(x_from, x_to, v),
             Self::EuclideanComplex { n } => EuclideanComplex { n: *n }.transport(x_from, x_to, v),
             Self::Constant { n } => Constant { n: *n }.transport(x_from, x_to, v),
+            Self::MultinomialDoublyStochastic { n } => {
+                MultinomialDoublyStochastic { n: *n }.transport(x_from, x_to, v)
+            }
         }
     }
 }

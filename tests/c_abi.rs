@@ -1100,6 +1100,7 @@ fn c_abi_constant_stays_on_the_set() {
     let fro = x.iter().map(|a| a * a).sum::<f64>().sqrt();
     assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {x:?}");
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_CONSTANT as i32, 17);
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL_DS as i32, 18);
     assert_eq!(
         rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX as i32,
         16

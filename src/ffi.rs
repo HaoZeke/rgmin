@@ -1410,6 +1410,9 @@ pub enum rgmin_manifold_t {
     /// Singleton {A} of packed length n. manopt `constantfactory`.
     /// Token defaults to n = 1; use rgmin_solver_set_constant.
     RGMIN_MANIFOLD_CONSTANT = 17,
+    /// Doubly-stochastic n-by-n, packed n². Token defaults to n = 2.
+    /// Reserved 7-10 unused.
+    RGMIN_MANIFOLD_MULTINOMIAL_DS = 18,
 }
 
 #[unsafe(no_mangle)]
@@ -1436,6 +1439,9 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
             ManifoldKind::EuclideanComplex { n: 1 }
         }
         rgmin_manifold_t::RGMIN_MANIFOLD_CONSTANT => ManifoldKind::Constant { n: 1 },
+        rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL_DS => {
+            ManifoldKind::MultinomialDoublyStochastic { n: 2 }
+        }
         rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN => ManifoldKind::Euclidean,
     };
     unsafe { (*solver).solver.set_manifold(kind) };
