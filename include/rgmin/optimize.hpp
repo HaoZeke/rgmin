@@ -263,6 +263,18 @@ public:
         }
         return Report{out.value, out.steps, out.grad_norm};
     }
+
+    Report step_hess(rgmin_eval_fn eval, rgmin_grad_fn grad, rgmin_hess_fn hess,
+                     void* user, DLManagedTensorVersioned* x) {
+        rgmin_report_t out{};
+        rgmin_status_t st =
+            rgmin_solver_step_hess(ptr_, eval, grad, hess, user, x, &out);
+        if (st != RGMIN_SUCCESS) {
+            char const* msg = rgmin_last_error();
+            throw std::runtime_error(msg ? msg : "rgmin_solver_step_hess failed");
+        }
+        return Report{out.value, out.steps, out.grad_norm};
+    }
 };
 
 namespace nlcg {
