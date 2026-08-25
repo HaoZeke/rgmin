@@ -19,6 +19,8 @@
 //! [`ManifoldKind::Constant`] is manopt `constantfactory`.
 //! [`ManifoldKind::MultinomialDoublyStochastic`] is manopt
 //! `multinomialdoublystochasticfactory`.
+//! [`ManifoldKind::MultinomialSymmetric`] is manopt
+//! `multinomialsymmetricfactory`.
 
 use ndarray::Array1;
 
@@ -28,6 +30,7 @@ mod euclidean;
 mod euclidean_complex;
 mod multinomial;
 mod multinomial_ds;
+mod multinomial_sym;
 mod mw_rigid;
 mod oblique;
 mod rigid_quotient;
@@ -49,6 +52,7 @@ pub use euclidean_complex::{
 };
 pub use multinomial::Multinomial;
 pub use multinomial_ds::MultinomialDoublyStochastic;
+pub use multinomial_sym::MultinomialSymmetric;
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
 pub use rigid_quotient::RigidQuotient;
@@ -143,6 +147,12 @@ pub enum ManifoldKind {
         /// Side length.
         n: usize,
     },
+    /// Symmetric doubly-stochastic n-by-n, row-major n², `n >= 2`.
+    /// manopt `multinomialsymmetricfactory`.
+    MultinomialSymmetric {
+        /// Side length.
+        n: usize,
+    },
 }
 
 impl ManifoldKind {
@@ -202,6 +212,7 @@ impl ManifoldKind {
             Self::EuclideanComplex { .. } => "euclidean_complex",
             Self::Constant { .. } => "constant",
             Self::MultinomialDoublyStochastic { .. } => "multinomialdoublystochastic",
+            Self::MultinomialSymmetric { .. } => "multinomialsymmetric",
         }
     }
 }
@@ -248,6 +259,9 @@ impl Manifold for ManifoldKind {
             Self::MultinomialDoublyStochastic { n: dn } => {
                 MultinomialDoublyStochastic { n: *dn }.required_dim(n)
             }
+            Self::MultinomialSymmetric { n: sn } => {
+                MultinomialSymmetric { n: *sn }.required_dim(n)
+            }
         }
     }
 
@@ -272,6 +286,7 @@ impl Manifold for ManifoldKind {
             Self::MultinomialDoublyStochastic { n } => {
                 MultinomialDoublyStochastic { n: *n }.project(x, v)
             }
+            Self::MultinomialSymmetric { n } => MultinomialSymmetric { n: *n }.project(x, v),
         }
     }
 
@@ -296,6 +311,7 @@ impl Manifold for ManifoldKind {
             Self::MultinomialDoublyStochastic { n } => {
                 MultinomialDoublyStochastic { n: *n }.retract(x, v)
             }
+            Self::MultinomialSymmetric { n } => MultinomialSymmetric { n: *n }.retract(x, v),
         }
     }
 
@@ -319,6 +335,9 @@ impl Manifold for ManifoldKind {
             Self::Constant { n } => Constant { n: *n }.transport(x_from, x_to, v),
             Self::MultinomialDoublyStochastic { n } => {
                 MultinomialDoublyStochastic { n: *n }.transport(x_from, x_to, v)
+            }
+            Self::MultinomialSymmetric { n } => {
+                MultinomialSymmetric { n: *n }.transport(x_from, x_to, v)
             }
         }
     }
