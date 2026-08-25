@@ -116,7 +116,14 @@ fn first_order_accept_none_moves_a_nonconservative_force() {
         }
     }
 
-    for method in [Method::Steepest, Method::Bfgs, Method::lbfgs()] {
+    for method in [
+        Method::Steepest,
+        Method::Bfgs,
+        Method::lbfgs(),
+        Method::polak_ribiere(),
+        Method::Sr1,
+        Method::Sr2,
+    ] {
         let obj = ConstantForce;
         let mut x = array![0.0, 0.0];
         let mut ctrl = control();
