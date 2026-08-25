@@ -21,6 +21,7 @@
 //! `multinomialdoublystochasticfactory`.
 //! [`ManifoldKind::MultinomialSymmetric`] is manopt
 //! `multinomialsymmetricfactory`.
+//! [`ManifoldKind::SphereComplex`] is manopt `spherecomplexfactory`.
 
 use ndarray::Array1;
 
@@ -39,6 +40,7 @@ mod skewsymmetric;
 mod so3;
 mod spd;
 mod sphere;
+mod sphere_complex;
 mod stiefel;
 mod symmetric;
 
@@ -64,6 +66,7 @@ pub use skewsymmetric::{
 pub use so3::So3;
 pub use spd::{Spd, is_spd, pack as pack_spd, side as side_spd, unpack as unpack_spd};
 pub use sphere::Sphere;
+pub use sphere_complex::SphereComplex;
 pub use stiefel::{Stiefel, StiefelNp};
 pub use symmetric::{
     Symmetric, inner as inner_sym, is_symmetric, pack as pack_sym, side as side_sym,
@@ -153,6 +156,12 @@ pub enum ManifoldKind {
         /// Side length.
         n: usize,
     },
+    /// Complex unit sphere in \(\mathbb{C}^n\), packed `2 n`.
+    /// manopt `spherecomplexfactory`. Not the real sphere.
+    SphereComplex {
+        /// Complex dimension.
+        n: usize,
+    },
 }
 
 impl ManifoldKind {
@@ -213,6 +222,7 @@ impl ManifoldKind {
             Self::Constant { .. } => "constant",
             Self::MultinomialDoublyStochastic { .. } => "multinomialdoublystochastic",
             Self::MultinomialSymmetric { .. } => "multinomialsymmetric",
+            Self::SphereComplex { .. } => "spherecomplex",
         }
     }
 }
@@ -262,6 +272,7 @@ impl Manifold for ManifoldKind {
             Self::MultinomialSymmetric { n: sn } => {
                 MultinomialSymmetric { n: *sn }.required_dim(n)
             }
+            Self::SphereComplex { n: cn } => SphereComplex { n: *cn }.required_dim(n),
         }
     }
 
@@ -287,6 +298,7 @@ impl Manifold for ManifoldKind {
                 MultinomialDoublyStochastic { n: *n }.project(x, v)
             }
             Self::MultinomialSymmetric { n } => MultinomialSymmetric { n: *n }.project(x, v),
+            Self::SphereComplex { n } => SphereComplex { n: *n }.project(x, v),
         }
     }
 
@@ -312,6 +324,7 @@ impl Manifold for ManifoldKind {
                 MultinomialDoublyStochastic { n: *n }.retract(x, v)
             }
             Self::MultinomialSymmetric { n } => MultinomialSymmetric { n: *n }.retract(x, v),
+            Self::SphereComplex { n } => SphereComplex { n: *n }.retract(x, v),
         }
     }
 
@@ -339,6 +352,7 @@ impl Manifold for ManifoldKind {
             Self::MultinomialSymmetric { n } => {
                 MultinomialSymmetric { n: *n }.transport(x_from, x_to, v)
             }
+            Self::SphereComplex { n } => SphereComplex { n: *n }.transport(x_from, x_to, v),
         }
     }
 }

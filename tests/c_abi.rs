@@ -1102,6 +1102,7 @@ fn c_abi_constant_stays_on_the_set() {
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_CONSTANT as i32, 17);
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL_DS as i32, 18);
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL_SYM as i32, 19);
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE_COMPLEX as i32, 20);
     assert_eq!(
         rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX as i32,
         16

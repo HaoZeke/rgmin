@@ -1415,6 +1415,8 @@ pub enum rgmin_manifold_t {
     RGMIN_MANIFOLD_MULTINOMIAL_DS = 18,
     /// Symmetric doubly-stochastic n-by-n. Token defaults to n = 2.
     RGMIN_MANIFOLD_MULTINOMIAL_SYM = 19,
+    /// Complex unit sphere C^n, packed 2n. Token defaults to n = 1.
+    RGMIN_MANIFOLD_SPHERE_COMPLEX = 20,
 }
 
 #[unsafe(no_mangle)]
@@ -1447,6 +1449,7 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
         rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL_SYM => {
             ManifoldKind::MultinomialSymmetric { n: 2 }
         }
+        rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE_COMPLEX => ManifoldKind::SphereComplex { n: 1 },
         rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN => ManifoldKind::Euclidean,
     };
     unsafe { (*solver).solver.set_manifold(kind) };
