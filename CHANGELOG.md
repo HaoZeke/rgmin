@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ManifoldKind::MultinomialDoublyStochastic`: manopt
+  `multinomialdoublystochasticfactory`. Packed row-major `n^2`,
+  `n >= 2`. Fisher-orthogonal projection solves the
+  `[I X; X^T I]` saddle, retraction is `X ⊙ exp(V ⊘ X)` then
+  Sinkhorn, transport is projection at arrival. C token 18.
+  Tokens 7-10 stay reserved.
 - `ManifoldKind::Constant`: manopt `constantfactory`. Singleton of
   packed length `n`. Projection and transport are the zero
   tangent, retraction is the fixed point. C token 17. Tokens 7-10

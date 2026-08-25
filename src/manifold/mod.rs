@@ -302,6 +302,15 @@ impl Manifold for ManifoldKind {
         }
     }
 
+    fn egrad2rgrad(&self, x: &Array1<f64>, egrad: &Array1<f64>) -> Array1<f64> {
+        match self {
+            Self::MultinomialDoublyStochastic { n } => {
+                MultinomialDoublyStochastic { n: *n }.egrad2rgrad(x, egrad)
+            }
+            _ => self.project(x, egrad),
+        }
+    }
+
     fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         match self {
             Self::Euclidean => Euclidean.retract(x, v),
