@@ -93,8 +93,8 @@ impl Manifold for MultinomialDoublyStochastic {
             return v.clone();
         }
         let vm = self.mat(v);
-        let mut r = Array1::zeros(n);
-        let mut c = Array1::zeros(n);
+        let mut r = Array1::<f64>::zeros(n);
+        let mut c = Array1::<f64>::zeros(n);
         let mut total = 0.0;
         for i in 0..n {
             for j in 0..n {
@@ -103,7 +103,9 @@ impl Manifold for MultinomialDoublyStochastic {
                 total += vm[(i, j)];
             }
         }
-        let shift = total / (2.0 * (n * n) as f64);
+        // V_ij - r_i/n - c_j/n + (1^T V)/n^2 so both row and column
+        // sums vanish (one consistent choice of the additive gauge).
+        let shift = total / (n * n) as f64;
         let mut out = Array2::<f64>::zeros((n, n));
         for i in 0..n {
             for j in 0..n {
