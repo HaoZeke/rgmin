@@ -57,7 +57,10 @@ pub use multinomial_ds::{
     MultinomialDoublyStochastic, inner as inner_ds, is_doubly_stochastic, pack as pack_ds,
     side as side_ds, typical_dist as typical_dist_ds, unpack as unpack_ds,
 };
-pub use multinomial_sym::MultinomialSymmetric;
+pub use multinomial_sym::{
+    MultinomialSymmetric, inner as inner_msym, is_symmetric_doubly_stochastic, pack as pack_msym,
+    side as side_msym, typical_dist as typical_dist_msym, unpack as unpack_msym,
+};
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
 pub use rigid_quotient::RigidQuotient;
@@ -209,6 +212,12 @@ impl ManifoldKind {
     /// manopt `multinomialdoublystochasticfactory`.
     pub fn multinomial_ds(n: usize) -> Self {
         Self::MultinomialDoublyStochastic { n }
+    }
+
+    /// Symmetric doubly-stochastic n-by-n, packed length `n^2`.
+    /// manopt `multinomialsymmetricfactory`.
+    pub fn multinomial_sym(n: usize) -> Self {
+        Self::MultinomialSymmetric { n }
     }
 
     /// C ABI / INI token.
