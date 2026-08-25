@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 
 use eindir_core::{DifferentiableObjective, Objective};
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, ArrayView1};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -481,6 +481,49 @@ impl Solver {
         self.last_pos = Some(x.clone());
         self.last_value = value;
         self.last_grad = grad.clone();
+    }
+
+    /// Record `s = x+ - x`, `y = g+ - g` from the caller's previous outer.
+    ///
+    /// A dimer (or any one-oracle-per-outer walker) cannot answer the
+    /// second eval [`Self::step`] would take at the trial point. The
+    /// pair that belongs in L-BFGS memory is the one between successive
+    /// outers, not a frozen-gradient inner trial (that writes `y = 0`
+    /// and wrecks the two-loop).
+    pub fn push_pair(&mut self, s: ArrayView1<f64>, y: ArrayView1<f64>) -> bool {
+        if s.len() != self.dim || y.len() != self.dim {
+            return false;
+        }
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.push(s.to_owned(), y.to_owned());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Two-loop direction `d = -H g` with no evaluation and no push.
+    pub fn search_direction(&self, g: ArrayView1<f64>) -> Result<Array1<f64>> {
+        if g.len() != self.dim {
+            return Err(Error::Dim {
+                dim: self.dim,
+                got: g.len(),
+            });
+        }
+        let dir = match &self.inner {
+            // Two-loop only. search_direction would try HiGHS from
+            // whatever x the caller did not pass; the dimer waist is
+            // the Nocedal pair book, not a boxed QP.
+            Inner::Lbfgs(solver) => solver.direction(g),
+            _ => g.mapv(|v| -v),
+        };
+        if dir.iter().any(|v| !v.is_finite()) {
+            return Err(Error::Oracle {
+                what: "non-finite search direction",
+            });
+        }
+        Ok(dir)
     }
 
     /// Drop method memory. The next step is a cold start from the current `x`.

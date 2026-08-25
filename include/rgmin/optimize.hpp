@@ -208,6 +208,12 @@ public:
     int set_box(double const* lower, double const* upper, std::size_t n) {
         return rgmin_solver_set_box(ptr_, lower, upper, n);
     }
+    int push_pair(double const* s, double const* y, std::size_t n) {
+        return rgmin_solver_push_pair(ptr_, s, y, n);
+    }
+    int search_direction(double const* grad, double* dir, std::size_t n) {
+        return rgmin_solver_search_direction(ptr_, grad, dir, n);
+    }
     int set_trust(double radius) { return rgmin_solver_set_trust(ptr_, radius); }
     int add_equality(std::size_t const* idx, double const* coef, std::size_t nnz,
                      double rhs) {

@@ -1719,3 +1719,34 @@ fn an_uphill_everywhere_oracle_is_refused_not_moved() {
         "a refused step must leave the position where it stood"
     );
 }
+
+#[test]
+fn one_eval_outer_pairs_reach_the_quadratic_bowl() {
+    // Dimer translation supplies one gradient per outer and cannot
+    // answer a trial eval. The pair that belongs in memory is the one
+    // between successive outers.
+    let mut solver = Solver::new(Method::lbfgs(), control(), 2);
+    let mut x = array![1.0, 1.0];
+    let mut prev: Option<(Array1<f64>, Array1<f64>)> = None;
+    for _ in 0..40 {
+        let g = x.mapv(|v| 2.0 * v);
+        if g.iter().map(|v| v * v).sum::<f64>().sqrt() < 1e-8 {
+            break;
+        }
+        if let Some((px, pg)) = prev {
+            assert!(solver.push_pair((&x - &px).view(), (&g - &pg).view()));
+        }
+        let dir = solver.search_direction(g.view()).unwrap();
+        let mut step = dir;
+        let n = step.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if n > 0.2 {
+            step *= 0.2 / n;
+        }
+        prev = Some((x.clone(), g.clone()));
+        x = x + step;
+    }
+    assert!(
+        x.iter().all(|v| v.abs() < 1e-4),
+        "one-eval L-BFGS stalled at {x:?}"
+    );
+}

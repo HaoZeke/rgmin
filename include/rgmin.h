@@ -314,6 +314,16 @@ rgmin_status_t rgmin_solver_step_hess_fg(rgmin_solver_t *solver,
                                      rgmin_evalgrad_fn evalgrad, rgmin_hess_fn hess,
                                      void *user, DLManagedTensorVersioned *x,
                                      rgmin_report_t *out);
+/** Record `s = x+ - x`, `y = g+ - g` from the caller's previous outer.
+ *  Does not evaluate. Returns 0 on success. A near-zero `y` is refused
+ *  by the L-BFGS pair gate and still returns 0. */
+int32_t rgmin_solver_push_pair(rgmin_solver_t *solver, const double *s,
+                             const double *y, size_t n);
+/** Two-loop `d = -H g` with no evaluation and no push. Empty memory
+ *  is steepest descent (`-g`). Writes \a n entries to \a dir. */
+rgmin_status_t rgmin_solver_search_direction(rgmin_solver_t *solver,
+                                          const double *grad, double *dir,
+                                          size_t n);
 
 /** Directional curvature `d^T H(x) d`. Non-success falls back to the probe. */
 typedef rgmin_status_t (*rgmin_curv_fn)(void *user, const DLManagedTensorVersioned *x,

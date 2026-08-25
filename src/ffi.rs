@@ -1894,6 +1894,65 @@ pub unsafe extern "C" fn rgmin_solver_step_fg(
     }
 }
 
+/// Record `s`, `y` from the caller's previous outer. No evaluation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_push_pair(
+    solver: *mut rgmin_solver_t,
+    s: *const f64,
+    y: *const f64,
+    n: usize,
+) -> i32 {
+    if solver.is_null() || s.is_null() || y.is_null() {
+        set_last_error("rgmin_solver_push_pair: null argument");
+        return 1;
+    }
+    let dim = unsafe { (*solver).solver.dim() };
+    if n != dim {
+        set_last_error("rgmin_solver_push_pair: n does not match session dim");
+        return 1;
+    }
+    let sv = unsafe { std::slice::from_raw_parts(s, n) };
+    let yv = unsafe { std::slice::from_raw_parts(y, n) };
+    let ok = unsafe {
+        (*solver)
+            .solver
+            .push_pair(ndarray::ArrayView1::from(sv), ndarray::ArrayView1::from(yv))
+    };
+    i32::from(!ok)
+}
+
+/// Two-loop `d = -H g`. No evaluation and no push.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_search_direction(
+    solver: *mut rgmin_solver_t,
+    grad: *const f64,
+    dir: *mut f64,
+    n: usize,
+) -> rgmin_status_t {
+    if solver.is_null() || grad.is_null() || dir.is_null() {
+        set_last_error("rgmin_solver_search_direction: null argument");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let dim = unsafe { (*solver).solver.dim() };
+    if n != dim {
+        set_last_error("rgmin_solver_search_direction: n does not match session dim");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let gv = unsafe { std::slice::from_raw_parts(grad, n) };
+    match unsafe {
+        (*solver)
+            .solver
+            .search_direction(ndarray::ArrayView1::from(gv))
+    } {
+        Ok(d) => {
+            let out = unsafe { std::slice::from_raw_parts_mut(dir, n) };
+            out.copy_from_slice(d.as_slice().unwrap());
+            rgmin_status_t::RGMIN_SUCCESS
+        }
+        Err(e) => status_from_error(&e),
+    }
+}
+
 /// One Newton / RFO iteration with a fused `(f, g)` callback.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_step_hess_fg(
