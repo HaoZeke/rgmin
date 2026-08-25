@@ -248,10 +248,10 @@ mod tests {
     fn retract_is_translation_then_center() {
         let m = CenteredMatrix::new(2, 2, false);
         let x = array![1.0, -1.0, 2.0, -2.0];
-        let v = array![0.2, 0.2, -0.1, -0.1];
+        let v = array![0.2, -0.2, -0.1, 0.1];
         let y = m.retract(&x, &v);
-        assert!((y[0] - 1.0).abs() < 1e-15, "{y:?}");
-        assert!((y[1] + 1.0).abs() < 1e-15, "{y:?}");
+        assert!((y[0] - 1.2).abs() < 1e-15, "{y:?}");
+        assert!((y[1] + 1.2).abs() < 1e-15, "{y:?}");
         assert!((y[2] - 1.9).abs() < 1e-15, "{y:?}");
         assert!((y[3] + 1.9).abs() < 1e-15, "{y:?}");
     }
