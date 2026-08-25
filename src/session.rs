@@ -790,35 +790,45 @@ impl Solver {
         let gold = grad.clone();
         match &mut self.inner {
             Inner::Lbfgs(solver) => {
-                // Two-loop direction, then the session Accept. take_step
-                // inside step_objective always refuses nval >= value, so
-                // a non-conservative band force (NEB) never moves.
-                let dir = solver.search_direction(x.view(), grad.view());
-                let old = x.clone();
-                let gold = grad.clone();
-                let (npos, nval, ngrad, moved) = accept_step(
-                    obj,
-                    x,
-                    value,
-                    &gold,
-                    &dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
-                );
-                if !moved {
-                    if self.accept == Accept::None {
+                // Accept::None: take the clipped two-loop step. The NEB
+                // band force is not a gradient of the reported energy, so
+                // step_objective (nval < value) never moves.
+                // Accept::Energy: Wolfe line search in step_objective.
+                if self.accept == Accept::None {
+                    let dir = solver.search_direction(x.view(), grad.view());
+                    let old = x.clone();
+                    let gold = grad.clone();
+                    let (npos, nval, ngrad, moved) = accept_step(
+                        obj,
+                        x,
+                        value,
+                        &gold,
+                        &dir,
+                        &self.control,
+                        self.accept,
+                        &mut self.e_hist,
+                        self.atom_maxmove,
+                        self.manifold,
+                    );
+                    if !moved {
                         return Err(Error::Oracle {
                             what: "non-finite value or gradient",
                         });
                     }
-                } else {
                     *x = npos;
                     value = nval;
                     grad = ngrad;
                     solver.push(&*x - &old, &grad - &gold);
+                } else {
+                    solver.step_objective(
+                        obj,
+                        x,
+                        &mut value,
+                        &mut grad,
+                        &mut self.istep,
+                        self.linesearch,
+                        &self.control,
+                    );
                 }
             }
             Inner::Steepest => {
