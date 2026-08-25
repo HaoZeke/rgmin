@@ -1,7 +1,7 @@
 //! Persistent Session: one step is one outer iteration.
 
 use eindir_core::objectives::Rosenbrock;
-use ndarray::{array, Array1};
+use ndarray::{Array1, array};
 use rgmin::{Control, Method, Solver};
 
 fn control() -> Control {
@@ -757,8 +757,8 @@ fn complex_circle_rejects_a_3n_cluster() {
 fn symmetric_session_stays_on_the_set() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
     use ndarray::ArrayView1;
-    use rgmin::manifold::is_symmetric;
     use rgmin::ManifoldKind;
+    use rgmin::manifold::is_symmetric;
 
     struct FrobeniusI;
     impl Objective<f64> for FrobeniusI {
@@ -833,8 +833,8 @@ fn symmetric_rejects_a_3n_cluster() {
 fn skewsymmetric_session_stays_on_the_set() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
     use ndarray::ArrayView1;
-    use rgmin::manifold::is_skewsymmetric;
     use rgmin::ManifoldKind;
+    use rgmin::manifold::is_skewsymmetric;
 
     // Frobenius distance to J = [[0, 1], [-1, 0]]. Identity is not on the set.
     struct FrobeniusJ;
@@ -896,8 +896,8 @@ fn skewsymmetric_session_stays_on_the_set() {
 fn euclidean_complex_session_stays_on_the_set() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
     use ndarray::ArrayView1;
-    use rgmin::manifold::is_euclidean_complex;
     use rgmin::ManifoldKind;
+    use rgmin::manifold::is_euclidean_complex;
 
     struct CplxBowl;
     impl Objective<f64> for CplxBowl {
@@ -969,6 +969,86 @@ fn euclidean_complex_rejects_a_3n_cluster() {
     match err {
         rgmin::Error::ManifoldDim { kind, got } => {
             assert_eq!(kind, "euclidean_complex");
+            assert_eq!(got, 114);
+        }
+        other => panic!("expected ManifoldDim, got {other:?}"),
+    }
+}
+
+#[test]
+fn constant_session_stays_on_the_set() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::ManifoldKind;
+    use rgmin::manifold::is_constant;
+
+    struct Bowl;
+    impl Objective<f64> for Bowl {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| {
+                Bounds::new(Array1::from_elem(3, -4.0), Array1::from_elem(3, 4.0), 0.0)
+            })
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            0.5 * x.iter().map(|a| a * a).sum::<f64>()
+        }
+    }
+    impl Gradient<f64> for Bowl {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            x.to_owned()
+        }
+    }
+    impl DifferentiableObjective<f64> for Bowl {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = Bowl;
+    let start = array![1.25, -0.5, 2.0];
+    let mut x = start.clone();
+    let mut solver = Solver::new(
+        Method::Steepest,
+        Control {
+            maxiter: 20,
+            gtol: 1e-8,
+            istep: 0.1,
+            maxmove: None,
+        },
+        3,
+    );
+    solver.set_manifold(ManifoldKind::constant(3));
+    solver.set_accept(rgmin::Accept::None);
+    for _ in 0..20 {
+        let _ = solver.step(&obj, &mut x).unwrap();
+        assert!(is_constant(&x, 3), "left the singleton {x:?}");
+        assert!(
+            (&x - &start).mapv(f64::abs).sum() < 1e-15,
+            "moved off A {x:?}"
+        );
+    }
+    let fro = x.iter().map(|a| a * a).sum::<f64>().sqrt();
+    assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {x:?}");
+}
+
+#[test]
+fn constant_rejects_a_3n_cluster() {
+    let obj = Rosenbrock::<114>::new();
+    let mut x = Array1::from_elem(114, 0.1);
+    let mut solver = Solver::new(Method::Steepest, control(), 114);
+    solver.set_manifold(rgmin::ManifoldKind::constant(2));
+    let err = solver.step(&obj, &mut x).unwrap_err();
+    match err {
+        rgmin::Error::ManifoldDim { kind, got } => {
+            assert_eq!(kind, "constant");
             assert_eq!(got, 114);
         }
         other => panic!("expected ManifoldDim, got {other:?}"),
@@ -1229,11 +1309,7 @@ fn an_uphill_everywhere_oracle_is_refused_not_moved() {
         };
         (r, g)
     });
-    let mut solver = rgmin::Solver::new(
-        rgmin::Method::Steepest,
-        rgmin::Control::default(),
-        6,
-    );
+    let mut solver = rgmin::Solver::new(rgmin::Method::Steepest, rgmin::Control::default(), 6);
     solver.set_accept(rgmin::Accept::Energy);
     let mut x = Array1::from(vec![0.0; 6]);
     let rep = solver.step(&obj, &mut x).expect("step runs");
