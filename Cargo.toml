@@ -18,7 +18,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
 default = []
-capi = []
+capi = ["highs"]
 par = ["dep:rayon"]
 highs = ["dep:highs", "dep:highs-sys"]
 
