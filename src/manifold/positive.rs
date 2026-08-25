@@ -132,7 +132,13 @@ impl Manifold for Positive {
             for (yi, vi) in ys.iter_mut().zip(v.iter()) {
                 let step = (*vi / *yi).exp();
                 *yi *= step;
-                if !yi.is_finite() || *yi <= 0.0 {
+                // Overflow stays large (MAX); underflow/NaN stay at EPSILON.
+                if *yi > 0.0 && yi.is_finite() {
+                    continue;
+                }
+                if yi.is_infinite() && *yi > 0.0 {
+                    *yi = f64::MAX;
+                } else {
                     *yi = f64::EPSILON;
                 }
             }
@@ -251,6 +257,17 @@ mod tests {
         let y = m.retract(&x, &v);
         assert!(is_positive(&y), "underflow left the open orthant {y:?}");
         assert!(y[0] >= f64::EPSILON);
+    }
+
+    #[test]
+    fn large_positive_step_stays_large() {
+        let m = Positive { n: 1 };
+        let x = array![1.0];
+        let v = array![800.0];
+        let y = m.retract(&x, &v);
+        assert!(is_positive(&y), "overflow left the open orthant {y:?}");
+        assert!(y[0] >= 1.0, "overflow must not snap toward 0 {y:?}");
+        assert_eq!(y[0], f64::MAX);
     }
 
     #[test]
