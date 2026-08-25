@@ -11,11 +11,12 @@ Algorithms live only in Rust. A session takes one stepper step on an
 embedded manifold and reports. Saddle, band, and IRC sessions live in
 [`rgsaddle`](https://github.com/OmniPotentRPC/rgsaddle).
 
-C and C++ keep the old `xts::optimize` names through an hourglass C ABI
-(`rgmin_solver_t` / `rgmin_minimize`) that carries **dlpk**
+C and C++ reach the Rust solvers through `include/rgmin.h`
+(`rgmin_solver_t` / `rgmin_minimize`) over **dlpk**
 `DLManagedTensorVersioned` tensors.
-`include/xts/optimize.hpp` is the C++ wrapper; `include/xts/xtensor.hpp`
-adapts `xt::xarray`. There is no second solver implementation in C++.
+`include/rgmin/optimize.hpp` is the C++ RAII wrap (`namespace rgmin`).
+`include/xts.h` and `include/xts/optimize.hpp` are compatibility
+aliases for old hosts. There is no second solver implementation in C++.
 
 CPU f64 is wired now. A non-CPU tensor returns `RGMIN_UNSUPPORTED_DEVICE`
 so a CUDA path does not change the ABI.
