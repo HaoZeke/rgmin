@@ -976,6 +976,86 @@ fn euclidean_complex_rejects_a_3n_cluster() {
 }
 
 #[test]
+fn constant_session_stays_on_the_set() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::manifold::is_constant;
+    use rgmin::ManifoldKind;
+
+    struct Bowl;
+    impl Objective<f64> for Bowl {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| {
+                Bounds::new(Array1::from_elem(3, -4.0), Array1::from_elem(3, 4.0), 0.0)
+            })
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            0.5 * x.iter().map(|a| a * a).sum::<f64>()
+        }
+    }
+    impl Gradient<f64> for Bowl {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            x.to_owned()
+        }
+    }
+    impl DifferentiableObjective<f64> for Bowl {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = Bowl;
+    let start = array![1.5, -0.25, 4.0];
+    let mut x = start.clone();
+    let mut solver = Solver::new(
+        Method::Steepest,
+        Control {
+            maxiter: 20,
+            gtol: 1e-8,
+            istep: 0.1,
+            maxmove: None,
+        },
+        3,
+    );
+    solver.set_manifold(ManifoldKind::constant(3));
+    solver.set_accept(rgmin::Accept::None);
+    let _ = solver.step(&obj, &mut x).unwrap();
+    assert!(is_constant(&x), "left the singleton {x:?}");
+    assert!((&x - &start).mapv(f64::abs).sum() < 1e-15);
+    let fro = x.iter().map(|a| a * a).sum::<f64>().sqrt();
+    assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {x:?}");
+    for _ in 0..19 {
+        let _ = solver.step(&obj, &mut x).unwrap();
+        assert!(is_constant(&x), "left the singleton {x:?}");
+        assert!((&x - &start).mapv(f64::abs).sum() < 1e-15);
+    }
+}
+
+#[test]
+fn constant_rejects_a_3n_cluster() {
+    let obj = Rosenbrock::<114>::new();
+    let mut x = Array1::from_elem(114, 0.1);
+    let mut solver = Solver::new(Method::Steepest, control(), 114);
+    solver.set_manifold(rgmin::ManifoldKind::constant(3));
+    let err = solver.step(&obj, &mut x).unwrap_err();
+    match err {
+        rgmin::Error::ManifoldDim { kind, got } => {
+            assert_eq!(kind, "constant");
+            assert_eq!(got, 114);
+        }
+        other => panic!("expected ManifoldDim, got {other:?}"),
+    }
+}
+
+#[test]
 fn skewsymmetric_rejects_a_3n_cluster() {
     let obj = Rosenbrock::<114>::new();
     let mut x = Array1::from_elem(114, 0.1);

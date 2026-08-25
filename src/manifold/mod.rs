@@ -11,15 +11,17 @@
 //! \(R^{3N}/\mathrm{SE}(3)\)) or [`ManifoldKind::MwRigid`] (Page–McIver
 //! mass-weighted Eckart, the IRC metric). Sphere / SO(3)-9 / SE(3)-12
 //! / Symmetric-n² / SPD-n² / ComplexCircle-2n / EuclideanComplex-2n
-//! / Oblique-nm are matrix-manifold embeddings, not a 3N cluster.
+//! / Constant-n / Oblique-nm are matrix-manifold embeddings, not a 3N cluster.
 //! [`ManifoldKind::Symmetric`] is manopt `symmetricfactory`.
 //! [`ManifoldKind::SkewSymmetric`] is manopt `skewsymmetricfactory`.
 //! [`ManifoldKind::ComplexCircle`] is manopt `complexcirclefactory`.
 //! [`ManifoldKind::EuclideanComplex`] is manopt `euclideancomplexfactory`.
+//! [`ManifoldKind::Constant`] is manopt `constantfactory`.
 
 use ndarray::Array1;
 
 mod complex_circle;
+mod constant;
 mod euclidean;
 mod euclidean_complex;
 mod multinomial;
@@ -35,6 +37,10 @@ mod stiefel;
 mod symmetric;
 
 pub use complex_circle::ComplexCircle;
+pub use constant::{
+    inner as inner_const, is_constant, pack as pack_const, typical_dist as typical_dist_const,
+    unpack as unpack_const, Constant,
+};
 pub use euclidean::Euclidean;
 pub use euclidean_complex::{
     inner as inner_cplx, is_euclidean_complex, typical_dist as typical_dist_cplx, EuclideanComplex,
@@ -120,6 +126,13 @@ pub enum ManifoldKind {
         /// Number of complex entries.
         n: usize,
     },
+    /// Singleton `{A}` of packed length `n`. manopt `constantfactory`.
+    /// 0-dimensional: retract stays at the point, tangent is `{0}`.
+    /// Not the sphere and not a 3N cluster packing.
+    Constant {
+        /// Ambient length of the fixed point.
+        n: usize,
+    },
 }
 
 impl ManifoldKind {
@@ -155,6 +168,11 @@ impl ManifoldKind {
         Self::EuclideanComplex { n }
     }
 
+    /// Singleton of packed length `n`. manopt `constantfactory`.
+    pub fn constant(n: usize) -> Self {
+        Self::Constant { n }
+    }
+
     /// C ABI / INI token.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -172,6 +190,7 @@ impl ManifoldKind {
             Self::SkewSymmetric => "skewsymmetric",
             Self::ComplexCircle { .. } => "complex_circle",
             Self::EuclideanComplex { .. } => "euclidean_complex",
+            Self::Constant { .. } => "constant",
         }
     }
 }
@@ -214,6 +233,7 @@ impl Manifold for ManifoldKind {
             Self::SkewSymmetric => SkewSymmetric.required_dim(n),
             Self::ComplexCircle { n: cn } => ComplexCircle { n: *cn }.required_dim(n),
             Self::EuclideanComplex { n: en } => EuclideanComplex { n: *en }.required_dim(n),
+            Self::Constant { n: kn } => Constant { n: *kn }.required_dim(n),
         }
     }
 
@@ -234,6 +254,7 @@ impl Manifold for ManifoldKind {
             Self::SkewSymmetric => SkewSymmetric.project(x, v),
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.project(x, v),
             Self::EuclideanComplex { n } => EuclideanComplex { n: *n }.project(x, v),
+            Self::Constant { n } => Constant { n: *n }.project(x, v),
         }
     }
 
@@ -254,6 +275,7 @@ impl Manifold for ManifoldKind {
             Self::SkewSymmetric => SkewSymmetric.retract(x, v),
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.retract(x, v),
             Self::EuclideanComplex { n } => EuclideanComplex { n: *n }.retract(x, v),
+            Self::Constant { n } => Constant { n: *n }.retract(x, v),
         }
     }
 
@@ -274,6 +296,7 @@ impl Manifold for ManifoldKind {
             Self::SkewSymmetric => SkewSymmetric.transport(x_from, x_to, v),
             Self::ComplexCircle { n } => ComplexCircle { n: *n }.transport(x_from, x_to, v),
             Self::EuclideanComplex { n } => EuclideanComplex { n: *n }.transport(x_from, x_to, v),
+            Self::Constant { n } => Constant { n: *n }.transport(x_from, x_to, v),
         }
     }
 }

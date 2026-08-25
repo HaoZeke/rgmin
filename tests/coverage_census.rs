@@ -5,9 +5,9 @@
 
 use ndarray::{array, Array1, ArrayView1};
 use rgmin::manifold::{
-    is_euclidean_complex, is_skewsymmetric, is_spd, is_symmetric, ComplexCircle, EuclideanComplex,
-    Manifold, Multinomial, MwRigid, Oblique, SkewSymmetric, Spd, Sphere, Stiefel, StiefelNp,
-    Symmetric,
+    is_constant, is_euclidean_complex, is_skewsymmetric, is_spd, is_symmetric, ComplexCircle,
+    Constant, EuclideanComplex, Manifold, Multinomial, MwRigid, Oblique, SkewSymmetric, Spd,
+    Sphere, Stiefel, StiefelNp, Symmetric,
 };
 use rgmin::IrcTrust;
 use rgmin::{
@@ -225,6 +225,24 @@ fn euclidean_complex_retract_stays_on_the_set() {
     assert!((t[0] - 0.2).abs() < 1e-15);
     let w = m.transport(&x, &y, &v);
     assert!((w[1] + 0.1).abs() < 1e-15);
+    let fro = y.iter().map(|a| a * a).sum::<f64>().sqrt();
+    assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {y:?}");
+}
+
+/// manopt constantfactory: 0-dim singleton. Retract stays at the
+/// point, project and transport vanish, and the point is not the sphere.
+#[test]
+fn constant_retract_stays_on_the_set() {
+    let m = Constant::new(3);
+    let x = array![1.5, -0.25, 4.0];
+    let v = array![0.2, -0.1, 0.3];
+    let y = m.retract(&x, &v);
+    assert!(is_constant(&y), "left the singleton {y:?}");
+    assert!((&y - &x).mapv(f64::abs).sum() < 1e-15);
+    let t = m.project(&x, &v);
+    assert!(t.iter().all(|a| *a == 0.0));
+    let w = m.transport(&x, &y, &v);
+    assert!(w.iter().all(|a| *a == 0.0));
     let fro = y.iter().map(|a| a * a).sum::<f64>().sqrt();
     assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {y:?}");
 }

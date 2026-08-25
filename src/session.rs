@@ -210,6 +210,11 @@ impl Solver {
         self.set_manifold(ManifoldKind::EuclideanComplex { n });
     }
 
+    /// Singleton of packed length `n`. manopt `constantfactory`.
+    pub fn set_constant(&mut self, n: usize) {
+        self.set_manifold(ManifoldKind::Constant { n });
+    }
+
     /// Per-atom masses for [`ManifoldKind::MwRigid`] (Page–McIver / Eckart).
     /// Empty clears them (unit mass).
     pub fn set_masses(&mut self, masses: Array1<f64>) {
