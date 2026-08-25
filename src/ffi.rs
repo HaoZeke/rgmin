@@ -19,10 +19,10 @@ use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
 use ndarray::{Array1, Array2, ArrayView1};
 
 use crate::{
-    Accept, ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind,
-    Error, HessianOracle, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart,
-    ScgParams, Solver, lowest_mode, minimize_method, minimize_method_hess, minimize_scg,
-    minimize_scg_exact,
+    lowest_mode, minimize_method, minimize_method_hess, minimize_scg, minimize_scg_exact, Accept,
+    ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind, Error,
+    HessianOracle, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart,
+    ScgParams, Solver,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
@@ -2171,6 +2171,7 @@ mod conjugacy_abi_tests {
         assert_eq!(offset_of!(rgmin_eigen_params_t, tol), 16);
         assert_eq!(rgmin_eigen_kind_t::RGMIN_EIGEN_LANCZOS as i32, 0);
         assert_eq!(rgmin_eigen_kind_t::RGMIN_EIGEN_EIGENEXA as i32, 13);
+        assert_eq!(rgmin_eigen_kind_t::RGMIN_EIGEN_DIMER as i32, 14);
     }
 
     #[test]

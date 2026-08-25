@@ -2,8 +2,9 @@
 //!
 //! IRC kick and the `lambda_min` sign check need one extremal pair,
 //! not a full ELPA / SLATE spectrum. Dispatch is a closed
-//! [`EigensolverKind`]: Lanczos, Rayleigh-Ritz, Jacobi-Davidson, and
-//! LOBPCG run here; every other named backend fail-closes with
+//! [`EigensolverKind`]: Lanczos, Rayleigh-Ritz, Jacobi-Davidson,
+//! LOBPCG, and the Jónsson dimer with Heyden plane rotations run
+//! here; every other named backend fail-closes with
 //! [`Error::EigenUnavailable`]. Integers match `schema/eigen.capnp`.
 
 use ndarray::{Array1, ArrayView1};
@@ -49,6 +50,8 @@ pub enum EigensolverKind {
     DlaFuture = 12,
     /// EigenExa. Not linked.
     EigenExa = 13,
+    /// Jónsson dimer with Heyden plane rotations. Linked. Matrix-free.
+    Dimer = 14,
 }
 
 impl EigensolverKind {
@@ -69,6 +72,7 @@ impl EigensolverKind {
             Self::Cusolver => "cusolver",
             Self::DlaFuture => "dlaFuture",
             Self::EigenExa => "eigenExa",
+            Self::Dimer => "dimer",
         }
     }
 
@@ -76,7 +80,7 @@ impl EigensolverKind {
     pub const fn is_linked(self) -> bool {
         matches!(
             self,
-            Self::Lanczos | Self::RayleighRitz | Self::JacobiDavidson | Self::Lobpcg
+            Self::Lanczos | Self::RayleighRitz | Self::JacobiDavidson | Self::Lobpcg | Self::Dimer
         )
     }
 
@@ -90,6 +94,7 @@ impl EigensolverKind {
                 | Self::Lobpcg
                 | Self::Primme
                 | Self::Slepc
+                | Self::Dimer
         )
     }
 
@@ -110,6 +115,7 @@ impl EigensolverKind {
             11 => Some(Self::Cusolver),
             12 => Some(Self::DlaFuture),
             13 => Some(Self::EigenExa),
+            14 => Some(Self::Dimer),
             _ => None,
         }
     }
@@ -144,12 +150,20 @@ impl Default for EigenParams {
 
 impl EigenParams {
     fn krylov_dim(self, n: usize) -> usize {
-        let k = if self.krylov == 0 { 12.min(n) } else { self.krylov };
+        let k = if self.krylov == 0 {
+            12.min(n)
+        } else {
+            self.krylov
+        };
         k.clamp(1, n.max(1))
     }
 
     fn tolerance(self) -> f64 {
-        if self.tol > 0.0 { self.tol } else { 1e-8 }
+        if self.tol > 0.0 {
+            self.tol
+        } else {
+            1e-8
+        }
     }
 
     fn iterations(self, n: usize) -> usize {
@@ -221,6 +235,7 @@ pub fn lowest_mode<H: ApplyHessian + ?Sized>(
         EigensolverKind::RayleighRitz => Ok(rayleigh_ritz(h, x, seed, params)),
         EigensolverKind::JacobiDavidson => Ok(jacobi_davidson(h, x, seed, params)),
         EigensolverKind::Lobpcg => Ok(lobpcg(h, x, seed, params)),
+        EigensolverKind::Dimer => Ok(dimer(h, x, seed, params)),
         other => Err(Error::EigenUnavailable { kind: other.name() }),
     }
 }
@@ -282,6 +297,53 @@ fn lanczos<H: ApplyHessian + ?Sized>(
     LowestMode {
         vector: normalize(mode),
         value: evals[lowest],
+        actions,
+    }
+}
+
+/// Jónsson dimer with Heyden plane rotations.
+///
+/// The dimer axis is the current mode. One Hessian action gives the
+/// curvature `C = N·HN` and the rotational force `F_rot = HN − C N`.
+/// Heyden rotates `N` in the plane `{N, Θ}`, `Θ = F_rot/‖F_rot‖`, by
+/// `φ = −½ atan2(dC/dφ, 2|C|)` with `dC/dφ = 2 Θ·HN`. That is not
+/// Jacobi-Davidson and not a trial-rotation Fourier fit.
+fn dimer<H: ApplyHessian + ?Sized>(
+    h: &H,
+    x: ArrayView1<f64>,
+    seed: ArrayView1<f64>,
+    params: &EigenParams,
+) -> LowestMode {
+    let mut nvec = normalize(seed.to_owned());
+    let max_rot = if params.max_iter == 0 {
+        20
+    } else {
+        params.max_iter
+    };
+    let tol = params.tolerance();
+    let mut actions = 0;
+    let mut curvature = 0.0;
+    for _ in 0..max_rot {
+        let hn = h.apply_hessian(x, nvec.view());
+        actions += 1;
+        curvature = dot(hn.view(), nvec.view());
+        let mut frot = hn.clone();
+        axpy(-curvature, nvec.view(), &mut frot);
+        let frn = nrm2(frot.view());
+        if frn <= tol {
+            break;
+        }
+        let theta = &frot / frn;
+        let dcdphi = 2.0 * dot(hn.view(), theta.view());
+        let phi = -0.5 * dcdphi.atan2(2.0 * curvature.abs());
+        let (c, s) = (phi.cos(), phi.sin());
+        let mut next = nvec.mapv(|v| v * c);
+        axpy(s, theta.view(), &mut next);
+        nvec = normalize(next);
+    }
+    LowestMode {
+        vector: nvec,
+        value: curvature,
         actions,
     }
 }
@@ -657,7 +719,12 @@ mod tests {
     use crate::Error;
     use ndarray::array;
 
-    fn gapped_diag(n: usize) -> HvpOracle<impl Fn(ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync, impl Fn(ArrayView1<f64>, ArrayView1<f64>) -> Array1<f64> + Send + Sync> {
+    fn gapped_diag(
+        n: usize,
+    ) -> HvpOracle<
+        impl Fn(ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync,
+        impl Fn(ArrayView1<f64>, ArrayView1<f64>) -> Array1<f64> + Send + Sync,
+    > {
         HvpOracle::unbounded(
             n,
             move |x| {
@@ -724,14 +791,40 @@ mod tests {
 
     #[test]
     fn schema_ordinals_are_the_closed_enum() {
-        for raw in 0u8..=13 {
+        for raw in 0u8..=14 {
             let kind = EigensolverKind::from_ordinal(raw).expect("ordinal in range");
             assert_eq!(kind as u8, raw);
         }
-        assert!(EigensolverKind::from_ordinal(14).is_none());
+        assert!(EigensolverKind::from_ordinal(15).is_none());
         assert_eq!(EigensolverKind::Lanczos.name(), "lanczos");
+        assert_eq!(EigensolverKind::Dimer.name(), "dimer");
         assert_eq!(EigensolverKind::EigenExa.name(), "eigenExa");
         assert_eq!(DENSE_EIGEN_CUTOFF, 512);
+    }
+
+    #[test]
+    fn jonsson_heyden_dimer_recovers_the_gapped_mode() {
+        let h = gapped_diag(6);
+        let x = Array1::zeros(6);
+        let seed = array![0.2, 0.7, 0.1, 0.0, 0.0, 0.0];
+        let params = EigenParams {
+            kind: EigensolverKind::Dimer,
+            max_iter: 20,
+            tol: 1e-8,
+            ..EigenParams::default()
+        };
+        let mode = lowest_mode(&h, x.view(), seed.view(), &params).unwrap();
+        assert!(mode.value < 0.0, "dimer curvature {}", mode.value);
+        assert!(
+            mode.vector[0].abs() > 0.9,
+            "dimer mode should lie on x, got {:?}",
+            mode.vector
+        );
+        assert!(EigensolverKind::Dimer.is_linked());
+        assert_ne!(
+            EigensolverKind::Dimer as u8,
+            EigensolverKind::JacobiDavidson as u8
+        );
     }
 
     #[test]
@@ -753,6 +846,7 @@ mod tests {
             EigensolverKind::RayleighRitz,
             EigensolverKind::JacobiDavidson,
             EigensolverKind::Lobpcg,
+            EigensolverKind::Dimer,
         ] {
             let params = EigenParams {
                 kind,
@@ -762,12 +856,7 @@ mod tests {
                 nev: 1,
             };
             let mode = lowest_mode(&h, x.view(), seed.view(), &params).unwrap();
-            assert!(
-                mode.value < 0.0,
-                "{:?} curvature {}",
-                kind,
-                mode.value
-            );
+            assert!(mode.value < 0.0, "{:?} curvature {}", kind, mode.value);
             assert!(
                 mode.vector[0].abs() > 0.9,
                 "{:?} mode {:?}",

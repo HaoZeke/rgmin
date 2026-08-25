@@ -23,6 +23,8 @@ enum EigensolverKind {
   cusolver @11;
   dlaFuture @12;
   eigenExa @13;
+  # Jónsson dimer with Heyden plane rotations.
+  dimer @14;
 }
 
 struct EigenParams {
