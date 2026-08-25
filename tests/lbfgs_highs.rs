@@ -238,6 +238,36 @@ fn per_coordinate_box_is_independent() {
 }
 
 #[test]
+fn per_coord_box_is_not_uniform() {
+    let mut opt = Lbfgs::default();
+    opt.highs = Some(HighsStep {
+        trust: None,
+        lo: Some(vec![-0.05, -10.0]),
+        hi: Some(vec![0.05, 10.0]),
+        equalities: Vec::new(),
+        center_axes: None,
+    });
+    let x = Array1::from(vec![0.0, 0.0]);
+    let g = Array1::from(vec![1.0, 100.0]);
+    let d = opt.highs_step(x.view(), g.view()).unwrap();
+    assert!(
+        (x[0] + d[0]).abs() <= 0.05 + 1e-9,
+        "tight axis left the box: {}",
+        x[0] + d[0]
+    );
+    assert!(
+        (x[1] + d[1]).abs() > 0.5,
+        "wide axis was clipped as if uniform: {}",
+        x[1] + d[1]
+    );
+    assert!(
+        (x[1] + d[1]).abs() <= 10.0 + 1e-9,
+        "wide axis left its own box: {}",
+        x[1] + d[1]
+    );
+}
+
+#[test]
 fn session_set_box_holds_a_per_coordinate_wall() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
     use ndarray::{ArrayView1, array};
@@ -376,4 +406,153 @@ fn c_abi_set_box_keeps_the_trial_inside() {
     assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
     assert!(x[0] >= -0.3 - 1e-9 && x[0] <= 0.3 + 1e-9, "x0 {}", x[0]);
     assert!(x[1] >= -0.3 - 1e-9 && x[1] <= 0.3 + 1e-9, "x1 {}", x[1]);
+}
+
+#[test]
+fn null_side_is_unbounded_on_that_side() {
+    let mut opt = Lbfgs::default();
+    opt.highs = Some(HighsStep {
+        trust: None,
+        lo: Some(vec![0.0]),
+        hi: None,
+        equalities: Vec::new(),
+        center_axes: None,
+    });
+    let x = Array1::from(vec![0.5, 0.5]);
+    let g = Array1::from(vec![-10.0, -1.0]);
+    let d = opt.highs_step(x.view(), g.view()).unwrap();
+    assert!(
+        x[0] + d[0] >= -1e-12 && x[1] + d[1] >= -1e-12,
+        "lower side must hold: {:?}",
+        (x[0] + d[0], x[1] + d[1])
+    );
+    assert!(
+        d[0] > 5.0 && d[1] > 0.5,
+        "unbounded upper must not clip ascent: {d:?}"
+    );
+}
+
+#[test]
+fn session_set_box_survives_set_highs_and_clips_newton() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::{ArrayView1, array};
+    use rgmin::{Control, HessianObjective, Method, QnStep, Solver};
+
+    struct Quad;
+    impl Objective<f64> for Quad {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-1e6, -1e6], array![1e6, 1e6], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            5.0 * x[0] * x[0] + 0.5 * x[1] * x[1]
+        }
+    }
+    impl Gradient<f64> for Quad {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            array![10.0 * x[0], x[1]]
+        }
+    }
+    impl DifferentiableObjective<f64> for Quad {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+    impl HessianObjective for Quad {
+        fn hessian(&self, _x: ArrayView1<f64>) -> Array2<f64> {
+            Array2::from_shape_vec((2, 2), vec![10.0, 0.0, 0.0, 1.0]).unwrap()
+        }
+    }
+
+    let obj = Quad;
+    let mut x = array![2.0, -3.0];
+    let mut solver = Solver::new(
+        Method::lbfgs(),
+        Control {
+            maxiter: 8,
+            gtol: 1e-10,
+            istep: 1.0,
+            maxmove: None,
+        },
+        2,
+    );
+    solver.set_qn_step(QnStep::Newton);
+    assert!(solver.set_box(Some(vec![0.0, -0.4]), Some(vec![0.4, 0.0])));
+    solver.set_highs(true);
+    let first = solver.step_hess(&obj, &mut x).unwrap();
+    assert!(first.grad_norm.is_finite());
+    assert!(x[0] >= -1e-12 && x[0] <= 0.4 + 1e-9, "x0={x:?}");
+    assert!(x[1] >= -0.4 - 1e-9 && x[1] <= 1e-12, "x1={x:?}");
+}
+
+#[test]
+fn newton_qp_applies_session_equalities() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::{ArrayView1, array};
+    use rgmin::{Control, HessianObjective, Method, QnStep, Solver};
+
+    struct Quad;
+    impl Objective<f64> for Quad {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-1e6, -1e6], array![1e6, 1e6], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            5.0 * x[0] * x[0] + 0.5 * x[1] * x[1]
+        }
+    }
+    impl Gradient<f64> for Quad {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            array![10.0 * x[0], x[1]]
+        }
+    }
+    impl DifferentiableObjective<f64> for Quad {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+    impl HessianObjective for Quad {
+        fn hessian(&self, _x: ArrayView1<f64>) -> Array2<f64> {
+            Array2::from_shape_vec((2, 2), vec![10.0, 0.0, 0.0, 1.0]).unwrap()
+        }
+    }
+
+    let obj = Quad;
+    let x0 = array![1.0, -0.4];
+    let mut x = x0.clone();
+    let mut solver = Solver::new(
+        Method::lbfgs(),
+        Control {
+            maxiter: 1,
+            gtol: 1e-12,
+            istep: 1.0,
+            maxmove: None,
+        },
+        2,
+    );
+    solver.set_qn_step(QnStep::Newton);
+    solver.set_highs(true);
+    assert!(solver.add_equality(vec![(0, 1.0), (1, 1.0)], 0.0));
+    let first = solver.step_hess(&obj, &mut x).unwrap();
+    assert!(first.grad_norm.is_finite());
+    let dp0 = x[0] - x0[0];
+    let dp1 = x[1] - x0[1];
+    assert!(
+        (dp0 + dp1).abs() < 1e-8,
+        "Newton equality a·p=0 missed: p=({dp0}, {dp1})"
+    );
 }

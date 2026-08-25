@@ -277,13 +277,14 @@ pub fn highs_feasible_step(
     atom_maxmove: Option<f64>,
     trust: Option<f64>,
     center_axes: Option<(usize, usize)>,
+    equalities: &[(Vec<(usize, f64)>, f64)],
 ) -> Result<Array1<f64>> {
     let n = grad.len();
     let boxed = atom_maxmove.is_some_and(|c| c > 0.0)
         || trust.is_some_and(|c| c > 0.0)
         || box_lo.is_some()
         || box_hi.is_some();
-    if !boxed && center_axes.is_none() {
+    if !boxed && center_axes.is_none() && equalities.is_empty() {
         if let Some(h) = hess {
             return Ok(crate::newton::shifted_newton(h, grad));
         }
@@ -319,6 +320,16 @@ pub fn highs_feasible_step(
                 let row: Vec<_> = (0..n_atoms).map(|i| (cols[i * dim + h], 1.0)).collect();
                 pb.add_row(0.0..=0.0, &row);
             }
+        }
+    }
+    for (coeffs, rhs) in equalities {
+        let row: Vec<_> = coeffs
+            .iter()
+            .filter(|(i, _)| *i < n)
+            .map(|(i, a)| (cols[*i], *a))
+            .collect();
+        if !row.is_empty() {
+            pb.add_row(*rhs..=*rhs, &row);
         }
     }
 

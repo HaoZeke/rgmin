@@ -184,16 +184,22 @@ impl Solver {
     /// Euclidean cap applied on the next [`Self::step`].
     pub fn set_maxmove(&mut self, maxmove: f64) {
         self.control.maxmove = if maxmove > 0.0 { Some(maxmove) } else { None };
+        #[cfg(feature = "highs")]
+        self.apply_highs_opts();
     }
 
     /// eOn `maxAtomMotionAppliedV`. Preferred over the Euclidean cap.
     pub fn set_atom_maxmove(&mut self, maxmove: f64) {
         self.atom_maxmove = if maxmove > 0.0 { Some(maxmove) } else { None };
+        #[cfg(feature = "highs")]
+        self.apply_highs_opts();
     }
 
     /// eOn `lbfgs_project_rigid`. Isolated clusters only.
     pub fn set_project_rigid(&mut self, enabled: bool) {
         self.project_rigid = enabled;
+        #[cfg(feature = "highs")]
+        self.apply_highs_opts();
     }
 
     /// Periodic cell. Sella leaves `proj_rot` off; the quotient is \(R^{3N}/T(3)\).
@@ -589,6 +595,7 @@ impl Solver {
                 self.atom_maxmove,
                 self.highs_trust.or(self.control.maxmove),
                 center,
+                &self.equalities,
             ) {
                 let old = x.clone();
                 let gold = grad.clone();
@@ -783,7 +790,11 @@ impl Solver {
         let gold = grad.clone();
         match &mut self.inner {
             Inner::Lbfgs(solver) => {
-                if self.accept == Accept::None {
+                #[cfg(feature = "highs")]
+                let feasible = solver.highs.is_some() && self.accept == Accept::None;
+                #[cfg(not(feature = "highs"))]
+                let feasible = false;
+                if feasible {
                     let dir = solver.search_direction(x.view(), grad.view());
                     let old = x.clone();
                     let gold = grad.clone();
