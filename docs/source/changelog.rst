@@ -6,6 +6,14 @@ Changelog
 Unreleased
 ~~~~~~~~~~
 
+Centered matrices (``centeredmatrix`` /
+``RGMIN_MANIFOLD_CENTERED_MATRIX`` = 22): manopt
+``centeredmatrixfactory``. Packed row-major ``m n``. Projection
+is the centering operator (column means zero by default, or row
+means zero), retraction is ``X + U`` then center, transport is
+the identity. Not the sphere and not a 3N cluster. Tokens 7-10
+stay reserved. ``abi_minor`` 21.
+
 Positive orthant (``positive`` / ``RGMIN_MANIFOLD_POSITIVE`` = 21):
 manopt ``positivefactory``. Packed length ``n``. Projection is the
 identity, retraction is ``x ⊙ exp(v ⊘ x)``, transport is the

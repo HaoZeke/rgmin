@@ -11,7 +11,7 @@
 //! \(R^{3N}/\mathrm{SE}(3)\)) or [`ManifoldKind::MwRigid`] (Page–McIver
 //! mass-weighted Eckart, the IRC metric). Sphere / SO(3)-9 / SE(3)-12
 //! / Symmetric-n² / SPD-n² / ComplexCircle-2n / EuclideanComplex-2n
-//! / Constant-n / Positive-n / Oblique-nm are matrix-manifold embeddings, not a 3N cluster.
+//! / Constant-n / Positive-n / CenteredMatrix-mn / Oblique-nm are matrix-manifold embeddings, not a 3N cluster.
 //! [`ManifoldKind::Symmetric`] is manopt `symmetricfactory`.
 //! [`ManifoldKind::SkewSymmetric`] is manopt `skewsymmetricfactory`.
 //! [`ManifoldKind::ComplexCircle`] is manopt `complexcirclefactory`.
@@ -23,9 +23,11 @@
 //! `multinomialsymmetricfactory`.
 //! [`ManifoldKind::SphereComplex`] is manopt `spherecomplexfactory`.
 //! [`ManifoldKind::Positive`] is manopt `positivefactory`.
+//! [`ManifoldKind::CenteredMatrix`] is manopt `centeredmatrixfactory`.
 
 use ndarray::Array1;
 
+mod centered;
 mod complex_circle;
 mod constant;
 mod euclidean;
@@ -46,6 +48,10 @@ mod sphere_complex;
 mod stiefel;
 mod symmetric;
 
+pub use centered::{
+    CenteredMatrix, inner as inner_centered, is_centered, pack as pack_centered,
+    typical_dist as typical_dist_centered, unpack as unpack_centered,
+};
 pub use complex_circle::ComplexCircle;
 pub use constant::{
     Constant, inner as inner_const, is_constant, typical_dist as typical_dist_const,
@@ -179,6 +185,18 @@ pub enum ManifoldKind {
         /// Packed length. MATLAB `m*n` with default second size 1.
         n: usize,
     },
+    /// Centered `m x n` matrices, packed row-major `m n`.
+    /// manopt `centeredmatrixfactory`. Not the reserved SPD /
+    /// grassmann / hyperbolic tokens.
+    CenteredMatrix {
+        /// Rows of the matrix. MATLAB `m`.
+        m: usize,
+        /// Columns of the matrix. MATLAB `n`.
+        n: usize,
+        /// `true` = centered rows. `false` = centered columns
+        /// (manopt default).
+        rows: bool,
+    },
 }
 
 impl ManifoldKind {
@@ -242,6 +260,12 @@ impl ManifoldKind {
         Self::Positive { n }
     }
 
+    /// Centered `m x n` matrices. manopt `centeredmatrixfactory`.
+    /// `rows = false` centers columns (`X 1 = 0`).
+    pub fn centered_matrix(m: usize, n: usize, rows: bool) -> Self {
+        Self::CenteredMatrix { m, n, rows }
+    }
+
     /// C ABI / INI token.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -264,6 +288,7 @@ impl ManifoldKind {
             Self::MultinomialSymmetric { .. } => "multinomialsymmetric",
             Self::SphereComplex { .. } => "spherecomplex",
             Self::Positive { .. } => "positive",
+            Self::CenteredMatrix { .. } => "centeredmatrix",
         }
     }
 }
@@ -315,6 +340,14 @@ impl Manifold for ManifoldKind {
             }
             Self::SphereComplex { n: cn } => SphereComplex { n: *cn }.required_dim(n),
             Self::Positive { n: pn } => Positive { n: *pn }.required_dim(n),
+            Self::CenteredMatrix { m, n: cn, rows } => {
+                CenteredMatrix {
+                    m: *m,
+                    n: *cn,
+                    rows: *rows,
+                }
+                .required_dim(n)
+            }
         }
     }
 
@@ -342,6 +375,12 @@ impl Manifold for ManifoldKind {
             Self::MultinomialSymmetric { n } => MultinomialSymmetric { n: *n }.project(x, v),
             Self::SphereComplex { n } => SphereComplex { n: *n }.project(x, v),
             Self::Positive { n } => Positive { n: *n }.project(x, v),
+            Self::CenteredMatrix { m, n, rows } => CenteredMatrix {
+                m: *m,
+                n: *n,
+                rows: *rows,
+            }
+            .project(x, v),
         }
     }
 
@@ -369,6 +408,12 @@ impl Manifold for ManifoldKind {
             Self::MultinomialSymmetric { n } => MultinomialSymmetric { n: *n }.retract(x, v),
             Self::SphereComplex { n } => SphereComplex { n: *n }.retract(x, v),
             Self::Positive { n } => Positive { n: *n }.retract(x, v),
+            Self::CenteredMatrix { m, n, rows } => CenteredMatrix {
+                m: *m,
+                n: *n,
+                rows: *rows,
+            }
+            .retract(x, v),
         }
     }
 
@@ -398,6 +443,12 @@ impl Manifold for ManifoldKind {
             }
             Self::SphereComplex { n } => SphereComplex { n: *n }.transport(x_from, x_to, v),
             Self::Positive { n } => Positive { n: *n }.transport(x_from, x_to, v),
+            Self::CenteredMatrix { m, n, rows } => CenteredMatrix {
+                m: *m,
+                n: *n,
+                rows: *rows,
+            }
+            .transport(x_from, x_to, v),
         }
     }
 
@@ -427,6 +478,12 @@ impl Manifold for ManifoldKind {
             }
             Self::SphereComplex { n } => SphereComplex { n: *n }.egrad2rgrad(x, egrad),
             Self::Positive { n } => Positive { n: *n }.egrad2rgrad(x, egrad),
+            Self::CenteredMatrix { m, n, rows } => CenteredMatrix {
+                m: *m,
+                n: *n,
+                rows: *rows,
+            }
+            .egrad2rgrad(x, egrad),
         }
     }
 }

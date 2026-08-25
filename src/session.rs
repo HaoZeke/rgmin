@@ -238,6 +238,13 @@ impl Solver {
         self.set_manifold(ManifoldKind::Positive { n });
     }
 
+    /// Centered `m x n` matrices, packed row-major `m n`.
+    /// manopt `centeredmatrixfactory`. `rows = false` centers
+    /// columns (`X 1 = 0`).
+    pub fn set_centered_matrix(&mut self, m: usize, n: usize, rows: bool) {
+        self.set_manifold(ManifoldKind::CenteredMatrix { m, n, rows });
+    }
+
     /// Per-atom masses for [`ManifoldKind::MwRigid`] (Page–McIver / Eckart).
     /// Empty clears them (unit mass).
     pub fn set_masses(&mut self, masses: Array1<f64>) {

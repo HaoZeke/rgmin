@@ -185,5 +185,13 @@ Changing the manifold drops method memory (~forget~).
   is the identity. It is not the sphere, not the simplex, and
   not a 3N cluster. C token 21 (~rgmin_solver_set_positive~).
   Tokens 7-10 stay reserved.
+- ~CenteredMatrix { m, n, rows }~ is manopt
+  ~centeredmatrixfactory~: an ~m x n~ matrix packed row-major
+  (~m n~) with zero column means (~rows = nil~, default) or
+  zero row means. Projection is the centering operator.
+  Retraction is ~X + U~ then center. Transport is the identity.
+  It is not the sphere and not a 3N cluster. C token 22
+  (~rgmin_solver_set_centered_matrix~). Tokens 7-10 stay
+  reserved.
 - ~set_project_rigid~ is the same horizontal projection as
   ~RigidQuotient~ and stays available on Euclidean.

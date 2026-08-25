@@ -7,9 +7,10 @@ use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
 use ndarray::{Array1, ArrayView1, array};
 use rgmin::IrcTrust;
 use rgmin::manifold::{
-    ComplexCircle, Constant, EuclideanComplex, Manifold, Multinomial, MwRigid, Oblique, Positive,
-    SkewSymmetric, Spd, Sphere, SphereComplex, Stiefel, StiefelNp, Symmetric, is_constant,
-    is_euclidean_complex, is_positive, is_skewsymmetric, is_spd, is_sphere_complex, is_symmetric,
+    CenteredMatrix, ComplexCircle, Constant, EuclideanComplex, Manifold, Multinomial, MwRigid,
+    Oblique, Positive, SkewSymmetric, Spd, Sphere, SphereComplex, Stiefel, StiefelNp, Symmetric,
+    is_centered, is_constant, is_euclidean_complex, is_positive, is_skewsymmetric, is_spd,
+    is_sphere_complex, is_symmetric,
 };
 use rgmin::{Conjugacy, Control, DirectionalCurvature, Restart, ScgParams, minimize_scg_exact};
 
@@ -274,6 +275,25 @@ fn positive_retract_stays_on_the_set() {
     assert!(is_positive(&y), "left the positive orthant {y:?}");
     let t = m.project(&x, &v);
     assert!((&t - &v).mapv(f64::abs).sum() < 1e-15);
+    let w = m.transport(&x, &y, &v);
+    assert!((&w - &v).mapv(f64::abs).sum() < 1e-15);
+    let fro = y.iter().map(|a| a * a).sum::<f64>().sqrt();
+    assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {y:?}");
+}
+
+/// manopt centeredmatrixfactory: retraction stays column-centered
+/// and is not sphere-normalized. Transport is the identity.
+#[test]
+fn centered_retract_stays_on_the_set() {
+    let m = CenteredMatrix::new(2, 3, false);
+    let x = array![1.0, -0.5, -0.5, 2.0, 0.0, -2.0];
+    let v = array![0.3, -0.1, -0.2, 0.0, 0.4, -0.4];
+    let y = m.retract(&x, &v);
+    assert!(is_centered(&y, 2, 3, false), "left the centered set {y:?}");
+    assert!((y[0] + y[1] + y[2]).abs() < 1e-14);
+    assert!((y[3] + y[4] + y[5]).abs() < 1e-14);
+    let t = m.project(&x, &v);
+    assert!((t[0] + t[1] + t[2]).abs() < 1e-14);
     let w = m.transport(&x, &y, &v);
     assert!((&w - &v).mapv(f64::abs).sum() < 1e-15);
     let fro = y.iter().map(|a| a * a).sum::<f64>().sqrt();

@@ -771,6 +771,74 @@ fn positive_session_stays_on_the_set() {
 }
 
 #[test]
+fn centered_matrix_session_stays_on_the_set() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::manifold::is_centered;
+
+    struct WeightedLin;
+    impl Objective<f64> for WeightedLin {
+        fn dim(&self) -> usize {
+            4
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| {
+                Bounds::new(Array1::from_elem(4, -1e12), Array1::from_elem(4, 1e12), 0.0)
+            })
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            x.iter()
+                .enumerate()
+                .map(|(i, xi)| (i as f64 + 1.0) * xi)
+                .sum()
+        }
+    }
+    impl Gradient<f64> for WeightedLin {
+        fn dim(&self) -> usize {
+            4
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            Array1::from_iter((0..x.len()).map(|i| i as f64 + 1.0))
+        }
+    }
+    impl DifferentiableObjective<f64> for WeightedLin {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = WeightedLin;
+    let mut x = array![1.0, -1.0, 2.0, -2.0];
+    let mut solver = Solver::new(
+        Method::Steepest,
+        Control {
+            maxiter: 20,
+            gtol: 1e-10,
+            istep: 0.1,
+            maxmove: None,
+        },
+        4,
+    );
+    solver.set_centered_matrix(2, 2, false);
+    solver.set_accept(rgmin::Accept::None);
+    let start = x.clone();
+    let _ = solver.step(&obj, &mut x).unwrap();
+    assert!(is_centered(&x, 2, 2, false), "left the centered set {x:?}");
+    let fro = x.iter().map(|xi| xi * xi).sum::<f64>().sqrt();
+    assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {x:?}");
+    assert!(
+        (&x - &start).mapv(f64::abs).sum() > 1e-12,
+        "expected a retraction step {x:?}"
+    );
+    for _ in 0..7 {
+        let _ = solver.step(&obj, &mut x).unwrap();
+        assert!(is_centered(&x, 2, 2, false), "left the centered set {x:?}");
+    }
+}
+
+#[test]
 fn positive_rejects_a_3n_cluster() {
     let obj = Rosenbrock::<114>::new();
     let mut x = Array1::from_elem(114, 0.1);
@@ -780,6 +848,22 @@ fn positive_rejects_a_3n_cluster() {
     match err {
         rgmin::Error::ManifoldDim { kind, got } => {
             assert_eq!(kind, "positive");
+            assert_eq!(got, 114);
+        }
+        other => panic!("expected ManifoldDim, got {other:?}"),
+    }
+}
+
+#[test]
+fn centered_matrix_rejects_a_3n_cluster() {
+    let obj = Rosenbrock::<114>::new();
+    let mut x = Array1::from_elem(114, 0.1);
+    let mut solver = Solver::new(Method::Steepest, control(), 114);
+    solver.set_manifold(rgmin::ManifoldKind::centered_matrix(2, 2, false));
+    let err = solver.step(&obj, &mut x).unwrap_err();
+    match err {
+        rgmin::Error::ManifoldDim { kind, got } => {
+            assert_eq!(kind, "centeredmatrix");
             assert_eq!(got, 114);
         }
         other => panic!("expected ManifoldDim, got {other:?}"),
