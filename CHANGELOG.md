@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ManifoldKind::Constant`: manopt `constantfactory`. Singleton of
+  packed length `n`. Projection and transport are the zero
+  tangent, retraction is the fixed point. C token 17. Tokens 7-10
+  stay reserved.
 - `ManifoldKind::EuclideanComplex`: manopt
   `euclideancomplexfactory(n)`. Interleaved `(re, im)` pairs of
   length `2 n`. Projection is the identity, retraction is `x + v`,

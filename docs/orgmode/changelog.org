@@ -6,6 +6,12 @@
 
 ** Unreleased
 
+Constant singleton (~constant~ / ~RGMIN_MANIFOLD_CONSTANT~ = 17):
+manopt ~constantfactory~. Packed length ~n~. Projection and
+transport are the zero tangent, retraction is the fixed point.
+A 3N cluster is rejected. Tokens 7-10 stay reserved.
+~abi_minor~ 16.
+
 Complex Euclidean (~euclidean_complex~ /
 ~RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX~ = 16): manopt
 ~euclideancomplexfactory~. Interleaved ~(re, im)~, length ~2 n~.
