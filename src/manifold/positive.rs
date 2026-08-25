@@ -134,7 +134,7 @@ impl Manifold for Positive {
         if !self.fits(x.len()) || x.len() != v.len() {
             return v.clone();
         }
-        v.clone()
+        Vector::from_host(v.clone()).into_host()
     }
 
     fn egrad2rgrad(&self, x: &Array1<f64>, egrad: &Array1<f64>) -> Array1<f64> {
@@ -155,10 +155,17 @@ impl Manifold for Positive {
         let mut y = Vector::from_host(x.clone());
         for (yi, vi) in y.host_mut().iter_mut().zip(v.iter()) {
             let step = (*vi / *yi).exp();
-            *yi *= step;
-            if !yi.is_finite() || *yi <= 0.0 {
-                *yi = f64::MIN_POSITIVE;
-            }
+            let next = *yi * step;
+            // Underflow of a negative log-step lands at 0; keep the
+            // open-set floor. Overflow of a positive log-step is +inf
+            // and must stay large, not snap toward 0.
+            *yi = if next.is_nan() || next <= 0.0 {
+                f64::EPSILON
+            } else if next.is_infinite() {
+                f64::MAX
+            } else {
+                next
+            };
         }
         y.into_host()
     }
@@ -169,7 +176,7 @@ impl Manifold for Positive {
         _x_to: &Array1<f64>,
         v: &Array1<f64>,
     ) -> Array1<f64> {
-        v.clone()
+        Vector::from_host(v.clone()).into_host()
     }
 }
 
@@ -256,6 +263,29 @@ mod tests {
         assert!(m.required_dim(2).is_ok());
         assert!(Positive::new(1).required_dim(1).is_ok());
         assert!(Positive::new(0).required_dim(0).is_err());
+    }
+
+    #[test]
+    fn large_negative_step_stays_strictly_positive() {
+        let m = Positive { n: 1 };
+        let x = array![1.0];
+        let v = array![-800.0];
+        let y = m.retract(&x, &v);
+        assert!(is_positive(&y), "underflow left the open orthant {y:?}");
+        assert!(y[0] >= f64::EPSILON);
+        assert!(y[0] < 1.0);
+    }
+
+    #[test]
+    fn large_positive_step_stays_large() {
+        let m = Positive { n: 1 };
+        let x = array![1.0];
+        let v = array![800.0];
+        let y = m.retract(&x, &v);
+        assert!(is_positive(&y), "overflow left the open orthant {y:?}");
+        assert!(y[0] >= 1.0, "overflow snapped toward 0 {y:?}");
+        assert!(y[0].is_finite());
+        assert!((y[0] - f64::MAX).abs() < 1.0);
     }
 
     #[test]
