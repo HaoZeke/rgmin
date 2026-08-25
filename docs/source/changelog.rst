@@ -6,6 +6,12 @@ Changelog
 Unreleased
 ~~~~~~~~~~
 
+Symmetric doubly-stochastic matrices (``multinomialsymmetric`` /
+``RGMIN_MANIFOLD_MULTINOMIAL_SYM`` = 19): manopt
+``multinomialsymmetricfactory``. Packed row-major ``n^2``,
+``n >= 2``. Fisher projection, Sinkhorn retraction, transport at
+arrival. A 3N cluster is rejected. Tokens 7-10 stay reserved.
+
 Doubly-stochastic matrices (``multinomialdoublystochastic`` /
 ``RGMIN_MANIFOLD_MULTINOMIAL_DS`` = 18): manopt
 ``multinomialdoublystochasticfactory``. Packed row-major ``n^2``,

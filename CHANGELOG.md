@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ManifoldKind::MultinomialSymmetric`: manopt
+  `multinomialsymmetricfactory`. Packed row-major `n^2`,
+  `n >= 2`, symmetric. Fisher-orthogonal projection solves
+  `(I + X) alpha = V 1`, retraction is `X ⊙ exp(V ⊘ X)` then
+  Sinkhorn then symmetrize, transport is projection at arrival.
+  C token 19. Tokens 7-10 stay reserved.
 - `ManifoldKind::MultinomialDoublyStochastic`: manopt
   `multinomialdoublystochasticfactory`. Packed row-major `n^2`,
   `n >= 2`. Fisher-orthogonal projection solves the
