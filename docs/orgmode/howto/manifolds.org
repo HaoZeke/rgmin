@@ -39,6 +39,7 @@ vector: ~project~, ~retract~, ~transport~. Citations:
 | ~Symmetric~ | row-major ~n x n~, length ~n^2~ | ~X + U~ then ~multisym~ |
 | ~SkewSymmetric~ | row-major ~n x n~, length ~n^2~, ~n >= 2~ | ~X + U~ then ~multiskew~ |
 | ~EuclideanComplex { n }~ | interleaved ~(re, im)~, length ~2 n~ | ~x + v~ |
+| ~Constant { n }~ | singleton, length ~n~ | ~x~ (ignore ~v~) |
 
 An isolated molecule or cluster lives on ~RigidQuotient~
 (~R^{3N}/SE(3)~): Sella Cartesian ~fix_translation~ plus
@@ -91,6 +92,8 @@ rgmin_solver_set_oblique(s, 3, 2);
 rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_MULTINOMIAL);
 rgmin_solver_set_complex_circle(s, 4);
 rgmin_solver_set_euclidean_complex(s, 3);
+rgmin_solver_set_constant(s, 3);
+rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_CONSTANT);
 rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SYMMETRIC);
 rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SKEWSYMMETRIC);
 rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX);
@@ -142,5 +145,10 @@ Changing the manifold drops method memory (~forget~).
   It is not the sphere, not ~(S^1)^n~, and not a 3N cluster.
   C token 16 (~rgmin_solver_set_euclidean_complex~). Tokens 7-10
   stay reserved.
+- ~Constant { n }~ is manopt ~constantfactory~: the singleton
+  ~{A}~ of packed length ~n~. Projection and transport are the
+  zero vector. Retraction stays at the point. It is not the
+  sphere, not Euclidean, and not a 3N cluster packing. C token 17
+  (~rgmin_solver_set_constant~). Tokens 7-10 stay reserved.
 - ~set_project_rigid~ is the same horizontal projection as
   ~RigidQuotient~ and stays available on Euclidean.
