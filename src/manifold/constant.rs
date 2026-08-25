@@ -13,7 +13,7 @@
 
 use ndarray::{Array1, ArrayView1};
 
-use crate::vecops::{self, Vector};
+use crate::vecops::Vector;
 
 use super::Manifold;
 
@@ -125,7 +125,7 @@ mod tests {
         assert_eq!(y.len(), 3);
         assert!(is_constant(&y), "left the singleton {y:?}");
         assert!((&y - &x).mapv(f64::abs).sum() < 1e-15);
-        let fro = vecops::nrm2(y.view());
+        let fro = crate::vecops::nrm2(y.view());
         assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {y:?}");
     }
 
@@ -137,7 +137,7 @@ mod tests {
         let t = m.project(&x, &v);
         assert_eq!(t.len(), 3);
         assert!(t.iter().all(|a| *a == 0.0));
-        assert!(vecops::nrm2(t.view()) == 0.0);
+        assert!(crate::vecops::nrm2(t.view()) == 0.0);
     }
 
     #[test]
