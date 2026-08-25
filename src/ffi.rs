@@ -63,7 +63,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 15;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 16;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -1403,6 +1403,10 @@ pub enum rgmin_manifold_t {
     /// Complex Euclidean C^n. Packed interleaved, length 2n.
     /// Token defaults to n = 1; use rgmin_solver_set_euclidean_complex.
     RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX = 16,
+    /// Singleton of packed length n. manopt constantfactory.
+    /// Token defaults to n = 1; use rgmin_solver_set_constant.
+    /// Tokens 7-10 stay reserved.
+    RGMIN_MANIFOLD_CONSTANT = 17,
 }
 
 #[unsafe(no_mangle)]
@@ -1426,6 +1430,7 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
         rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC => ManifoldKind::Symmetric,
         rgmin_manifold_t::RGMIN_MANIFOLD_SKEWSYMMETRIC => ManifoldKind::SkewSymmetric,
         rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX => ManifoldKind::EuclideanComplex { n: 1 },
+        rgmin_manifold_t::RGMIN_MANIFOLD_CONSTANT => ManifoldKind::Constant { n: 1 },
         rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN => ManifoldKind::Euclidean,
     };
     unsafe { (*solver).solver.set_manifold(kind) };
@@ -1478,6 +1483,15 @@ pub unsafe extern "C" fn rgmin_solver_set_euclidean_complex(
         return;
     }
     unsafe { (*solver).solver.set_euclidean_complex(n) };
+}
+
+/// Singleton of packed length `n`. manopt `constantfactory`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_constant(solver: *mut rgmin_solver_t, n: usize) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_constant(n) };
 }
 
 /// Per-atom masses for `RGMIN_MANIFOLD_MW_RIGID`. `n_atoms == 0` or a
