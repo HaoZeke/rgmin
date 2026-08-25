@@ -858,10 +858,10 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
     use rgmin::ffi::{
         rgmin_manifold_t, rgmin_qn_step_t, rgmin_solver_forget, rgmin_solver_set_atom_maxmove,
         rgmin_solver_set_cautious, rgmin_solver_set_constant, rgmin_solver_set_euclidean_complex,
-        rgmin_solver_set_multinomial_ds,
         rgmin_solver_set_extra_updates, rgmin_solver_set_manifold, rgmin_solver_set_masses,
-        rgmin_solver_set_maxmove, rgmin_solver_set_oblique, rgmin_solver_set_periodic,
-        rgmin_solver_set_project_rigid, rgmin_solver_set_qn_step, rgmin_solver_set_stiefel,
+        rgmin_solver_set_maxmove, rgmin_solver_set_multinomial_ds, rgmin_solver_set_oblique,
+        rgmin_solver_set_periodic, rgmin_solver_set_project_rigid, rgmin_solver_set_qn_step,
+        rgmin_solver_set_stiefel,
     };
     let ctrl = rgmin_control_t {
         maxiter: 20,
@@ -1195,6 +1195,64 @@ fn c_abi_multinomial_ds_stays_on_the_set() {
     );
     let fro = x.iter().map(|a| a * a).sum::<f64>().sqrt();
     assert!((fro - 1.0).abs() > 1e-8, "must not be the sphere {x:?}");
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL_DS as i32, 18);
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MW_RIGID as i32, 6);
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_OBLIQUE as i32, 11);
+    unsafe { rgmin_solver_free(session) };
+}
+
+/// Token 19 / set_multinomial_sym stays on the symmetric Birkhoff
+/// polytope. Retraction is Sinkhorn, not sphere-normalization.
+/// Tokens 7-10 unused.
+#[test]
+fn c_abi_multinomial_sym_stays_on_the_set() {
+    use rgmin::ffi::{rgmin_manifold_t, rgmin_solver_set_multinomial_sym};
+    let ctrl = rgmin_control_t {
+        maxiter: 20,
+        gtol: 1e-8,
+        istep: 0.1,
+        memory: 0,
+        maxmove: 0.0,
+    };
+    let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_STEEPEST, &ctrl, 4) };
+    assert!(!session.is_null());
+    unsafe { rgmin_solver_set_multinomial_sym(session, 2) };
+    let mut x = [0.5_f64, 0.5, 0.5, 0.5];
+    let mut out = rgmin_report_t {
+        value: 0.0,
+        steps: 0,
+        grad_norm: 0.0,
+    };
+    let xt = unsafe { rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), 4) };
+    let st = unsafe {
+        rgmin_solver_step(
+            session,
+            Some(ds_linear_eval),
+            Some(ds_linear_grad),
+            std::ptr::null_mut(),
+            xt,
+            &mut out,
+        )
+    };
+    unsafe { rgmin_tensor_free(xt) };
+    assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+    assert!(x.iter().all(|&xi| xi > 0.0), "left the interior {x:?}");
+    let r0 = x[0] + x[1];
+    let r1 = x[2] + x[3];
+    let c0 = x[0] + x[2];
+    let c1 = x[1] + x[3];
+    assert!((r0 - 1.0).abs() < 1e-10, "row0 {r0}");
+    assert!((r1 - 1.0).abs() < 1e-10, "row1 {r1}");
+    assert!((c0 - 1.0).abs() < 1e-10, "col0 {c0}");
+    assert!((c1 - 1.0).abs() < 1e-10, "col1 {c1}");
+    assert!((x[1] - x[2]).abs() < 1e-12, "not symmetric {x:?}");
+    assert!(
+        (x[0] - 0.5).abs() > 1e-8,
+        "expected a retraction step {x:?}"
+    );
+    let fro = x.iter().map(|a| a * a).sum::<f64>().sqrt();
+    assert!((fro - 1.0).abs() > 1e-8, "must not be the sphere {x:?}");
+    assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL_SYM as i32, 19);
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL_DS as i32, 18);
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MW_RIGID as i32, 6);
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_OBLIQUE as i32, 11);

@@ -220,6 +220,9 @@ public:
     void set_multinomial_ds(std::size_t n) {
         rgmin_solver_set_multinomial_ds(ptr_, n);
     }
+    void set_multinomial_sym(std::size_t n) {
+        rgmin_solver_set_multinomial_sym(ptr_, n);
+    }
 
     Report step(rgmin_eval_fn eval, rgmin_grad_fn grad, void* user,
                 DLManagedTensorVersioned* x) {
