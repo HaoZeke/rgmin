@@ -48,6 +48,7 @@ struct Control {
     double gtol = 1e-8;
     double istep = 0.1;
     std::size_t memory = 10;
+    double maxmove = 0.0;
 };
 
 struct Report {
@@ -74,7 +75,7 @@ struct OptimizeControl {
         : max_iterations{miter_val}, gtol{tol_val}, tol{tol_val}, verbose{verb_val} {}
 
     Control to_control() const {
-        return Control{max_iterations, gtol, istep, memory};
+        return Control{max_iterations, gtol, istep, memory, maxmove};
     }
 };
 
@@ -97,7 +98,8 @@ struct OptimizeResult {
 inline Report minimize_fn(rgmin_eval_fn eval, rgmin_grad_fn grad, void* user,
                           DLManagedTensorVersioned* x, Control const& ctrl,
                           Method method) {
-    rgmin_control_t c{ctrl.maxiter, ctrl.gtol, ctrl.istep, ctrl.memory};
+    rgmin_control_t c{ctrl.maxiter, ctrl.gtol, ctrl.istep, ctrl.memory,
+                      ctrl.maxmove};
     rgmin_report_t out{};
     rgmin_status_t st =
         rgmin_minimize(eval, grad, user, x, &c, static_cast<rgmin_method_t>(method), &out);
@@ -111,7 +113,8 @@ inline Report minimize_fn(rgmin_eval_fn eval, rgmin_grad_fn grad, void* user,
 inline Report minimize_hess_fn(rgmin_eval_fn eval, rgmin_grad_fn grad, rgmin_hess_fn hess,
                                void* user, DLManagedTensorVersioned* x,
                                Control const& ctrl, Method method) {
-    rgmin_control_t c{ctrl.maxiter, ctrl.gtol, ctrl.istep, ctrl.memory};
+    rgmin_control_t c{ctrl.maxiter, ctrl.gtol, ctrl.istep, ctrl.memory,
+                      ctrl.maxmove};
     rgmin_report_t out{};
     rgmin_status_t st = rgmin_minimize_hess(
         eval, grad, hess, user, x, &c, static_cast<rgmin_method_t>(method), &out);
@@ -126,7 +129,8 @@ inline Report minimize_eindir(const eindir_objective_t* objective,
                               const eindir_abi_stamp_t* stamp,
                               DLManagedTensorVersioned* x, Control const& ctrl,
                               Method method) {
-    rgmin_control_t c{ctrl.maxiter, ctrl.gtol, ctrl.istep, ctrl.memory};
+    rgmin_control_t c{ctrl.maxiter, ctrl.gtol, ctrl.istep, ctrl.memory,
+                      ctrl.maxmove};
     rgmin_report_t out{};
     rgmin_status_t st = rgmin_minimize_eindir(
         objective, stamp, x, &c, static_cast<rgmin_method_t>(method), &out);
@@ -170,7 +174,8 @@ class Solver {
 
 public:
     Solver(Method method, Control const& ctrl, std::size_t dim) {
-        rgmin_control_t c{ctrl.maxiter, ctrl.gtol, ctrl.istep, ctrl.memory};
+        rgmin_control_t c{ctrl.maxiter, ctrl.gtol, ctrl.istep, ctrl.memory,
+                          ctrl.maxmove};
         ptr_ = rgmin_solver_create(static_cast<rgmin_method_t>(method), &c, dim);
         if (ptr_ == nullptr) {
             char const* msg = rgmin_last_error();

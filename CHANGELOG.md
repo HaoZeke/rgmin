@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `rgmin_solver_push_pair` and `rgmin_solver_search_direction` for a
+  one-oracle-per-outer L-BFGS waist. `abi_minor` 23.
+
 ### Changed
 
 - The crate is `rgmin`, at `OmniPotentRPC/rgmin`; it was

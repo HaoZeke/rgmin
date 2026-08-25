@@ -7,7 +7,7 @@ int main(void) {
     if (xts_abi_compatible(&stamp) == 0) {
         return 1;
     }
-    if (stamp.abi_minor < 22) {
+    if (stamp.abi_minor < 23) {
         return 2;
     }
     xts_control_t ctrl = {
