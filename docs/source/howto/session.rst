@@ -76,6 +76,12 @@ Setters
     +-----------------------+---------------------------------------------------------+
     | ``set_highs``         | Feasible-set QP; returns 1 without ``--features highs`` |
     +-----------------------+---------------------------------------------------------+
+    | ``set_box``           | Per-coordinate box on ``x + p``; NULL side unbounded    |
+    +-----------------------+---------------------------------------------------------+
+    | ``set_trust``         | L_inf HiGHS trust radius; non-positive clears           |
+    +-----------------------+---------------------------------------------------------+
+    | ``add_equality``      | Sparse ``a · p = rhs`` on the HiGHS set                 |
+    +-----------------------+---------------------------------------------------------+
     | ``set_manifold``      | Embedded geometry; ``rigid_quotient`` for 3N clusters   |
     +-----------------------+---------------------------------------------------------+
     | ``set_masses``        | Per-atom masses for ``mw_rigid`` (Page–McIver)          |

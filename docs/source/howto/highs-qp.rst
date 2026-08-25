@@ -17,9 +17,13 @@ centering is a mean subtract. Arbitrary equalities still go to HiGHS.
 
 When a host Hessian is present (``rgmin_solver_step_hess``) and
 ``rgmin_solver_set_highs`` is on, HiGHS solves the convex Newton QP
-``min 1/2 p^T P p + g^T p`` with per-coordinate boxes from atom
-maxmove. That is the path eOn / rgpot / any eindir objective share.
-Without the ``highs`` cargo feature the setter returns 1.
+``min 1/2 p^T P p + g^T p`` with per-coordinate boxes from
+``rgmin_solver_set_box`` (a NULL side is unbounded) and, if no box
+was set, from atom maxmove. ``rgmin_solver_set_trust`` sets the
+L\ :sub:`inf`\ radius on the step; ``rgmin_solver_add_equality``
+appends ``a · p = rhs``. That is the path eOn / rgpot / any eindir
+objective share. Without the ``highs`` cargo feature every setter
+returns 1.
 
 Enable the feature (HiGHS is compiled by ``highs-sys``; do that on the
 remote builder):
@@ -35,8 +39,8 @@ remote builder):
     let mut opt = Lbfgs::default();
     opt.highs = Some(HighsStep {
         trust: Some(0.5),
-        lo: Some(-1.0),
-        hi: Some(1.0),
+        lo: Some(vec![-1.0]),
+        hi: Some(vec![1.0]),
         equalities: Vec::new(),
         center_axes: None,
     });

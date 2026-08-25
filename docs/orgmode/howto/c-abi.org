@@ -32,6 +32,12 @@ potential call). Split ~eval~ / ~grad~ callbacks remain. ~accept~
 is ~none~ (take the clipped step), ~energy~, or ~nonmonotone~.
 Callbacks are arguments of each step, not stored on the handle.
 
+A HiGHS feasible set is ~rgmin_solver_set_highs~ plus
+~rgmin_solver_set_box~ (NULL side unbounded), optional
+~rgmin_solver_set_trust~, and ~rgmin_solver_add_equality~. Each
+returns 0, or 1 when the build has no ~highs~ feature. Stamp
+1.22.4.
+
 ** One-shot
 
 #+begin_src c

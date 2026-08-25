@@ -783,31 +783,41 @@ impl Solver {
         let gold = grad.clone();
         match &mut self.inner {
             Inner::Lbfgs(solver) => {
-                let dir = solver.direction(grad.view());
-                let old = x.clone();
-                let gold = grad.clone();
-                let (npos, nval, ngrad, moved) = accept_step(
-                    obj,
-                    x,
-                    value,
-                    &gold,
-                    &dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
-                );
-                if !moved && self.accept == Accept::None {
-                    return Err(Error::Oracle {
-                        what: "non-finite value or gradient",
-                    });
-                }
-                *x = npos;
-                value = nval;
-                grad = ngrad;
-                if moved {
+                if self.accept == Accept::None {
+                    let dir = solver.search_direction(x.view(), grad.view());
+                    let old = x.clone();
+                    let gold = grad.clone();
+                    let (npos, nval, ngrad, moved) = accept_step(
+                        obj,
+                        x,
+                        value,
+                        &gold,
+                        &dir,
+                        &self.control,
+                        self.accept,
+                        &mut self.e_hist,
+                        self.atom_maxmove,
+                        self.manifold,
+                    );
+                    if !moved {
+                        return Err(Error::Oracle {
+                            what: "non-finite value or gradient",
+                        });
+                    }
+                    *x = npos;
+                    value = nval;
+                    grad = ngrad;
                     solver.push(&*x - &old, &grad - &gold);
+                } else {
+                    solver.step_objective(
+                        obj,
+                        x,
+                        &mut value,
+                        &mut grad,
+                        &mut self.istep,
+                        self.linesearch,
+                        &self.control,
+                    );
                 }
             }
             Inner::Steepest => {

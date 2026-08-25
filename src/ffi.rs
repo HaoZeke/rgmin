@@ -63,7 +63,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 21;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 22;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -233,6 +233,7 @@ pub enum rgmin_eigen_kind_t {
     RGMIN_EIGEN_CUSOLVER = 11,
     RGMIN_EIGEN_DLA_FUTURE = 12,
     RGMIN_EIGEN_EIGENEXA = 13,
+    RGMIN_EIGEN_DIMER = 14,
 }
 
 /// Typed lowest-mode parameters. No string fields. Null at the C
@@ -1374,6 +1375,137 @@ pub unsafe extern "C" fn rgmin_solver_set_highs(solver: *mut rgmin_solver_t, ena
     {
         let _ = enabled;
         set_last_error("rgmin_solver_set_highs: build has no highs feature");
+        1
+    }
+}
+
+/// Per-coordinate box on `x + p`. A NULL side is unbounded.
+/// `n` is the length of each non-NULL side and must match the session
+/// dimension. Returns 0, or 1 if this build has no `highs` feature.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_box(
+    solver: *mut rgmin_solver_t,
+    lower: *const f64,
+    upper: *const f64,
+    n: usize,
+) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_box: null solver");
+        return 1;
+    }
+    #[cfg(feature = "highs")]
+    {
+        let dim = unsafe { (*solver).solver.dim() };
+        if (!lower.is_null() || !upper.is_null()) && n != dim {
+            set_last_error("rgmin_solver_set_box: n does not match session dim");
+            return 1;
+        }
+        let lo = if lower.is_null() {
+            None
+        } else {
+            let mut dest = vec![0.0; n];
+            dest.copy_from_slice(unsafe { slice::from_raw_parts(lower, n) });
+            Some(dest)
+        };
+        let hi = if upper.is_null() {
+            None
+        } else {
+            let mut dest = vec![0.0; n];
+            dest.copy_from_slice(unsafe { slice::from_raw_parts(upper, n) });
+            Some(dest)
+        };
+        let _ = unsafe { (*solver).solver.set_box(lo, hi) };
+        0
+    }
+    #[cfg(not(feature = "highs"))]
+    {
+        let _ = (lower, upper, n);
+        set_last_error("rgmin_solver_set_box: build has no highs feature");
+        1
+    }
+}
+
+/// L_inf trust radius on the HiGHS step. Non-positive clears it.
+/// Returns 0, or 1 if this build has no `highs` feature.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_trust(solver: *mut rgmin_solver_t, radius: f64) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_trust: null solver");
+        return 1;
+    }
+    #[cfg(feature = "highs")]
+    {
+        let _ = unsafe { (*solver).solver.set_trust(radius) };
+        0
+    }
+    #[cfg(not(feature = "highs"))]
+    {
+        let _ = radius;
+        set_last_error("rgmin_solver_set_trust: build has no highs feature");
+        1
+    }
+}
+
+/// Append one sparse equality `a · p = rhs`. `idx` / `coef` have length `nnz`.
+/// Returns 0, or 1 if this build has no `highs` feature.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_add_equality(
+    solver: *mut rgmin_solver_t,
+    idx: *const usize,
+    coef: *const f64,
+    nnz: usize,
+    rhs: f64,
+) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_add_equality: null solver");
+        return 1;
+    }
+    #[cfg(feature = "highs")]
+    {
+        if nnz == 0 {
+            return 0;
+        }
+        if idx.is_null() || coef.is_null() {
+            set_last_error("rgmin_solver_add_equality: null idx or coef");
+            return 1;
+        }
+        let dim = unsafe { (*solver).solver.dim() };
+        let i_src = unsafe { slice::from_raw_parts(idx, nnz) };
+        let a_src = unsafe { slice::from_raw_parts(coef, nnz) };
+        let mut dest = Vec::with_capacity(nnz);
+        for k in 0..nnz {
+            if i_src[k] >= dim {
+                set_last_error("rgmin_solver_add_equality: index out of range");
+                return 1;
+            }
+            dest.push((i_src[k], a_src[k]));
+        }
+        let _ = unsafe { (*solver).solver.add_equality(dest, rhs) };
+        0
+    }
+    #[cfg(not(feature = "highs"))]
+    {
+        let _ = (idx, coef, nnz, rhs);
+        set_last_error("rgmin_solver_add_equality: build has no highs feature");
+        1
+    }
+}
+
+/// Drop every stored HiGHS equality. Returns 0, or 1 without `highs`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_clear_equalities(solver: *mut rgmin_solver_t) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_clear_equalities: null solver");
+        return 1;
+    }
+    #[cfg(feature = "highs")]
+    {
+        let _ = unsafe { (*solver).solver.clear_equalities() };
+        0
+    }
+    #[cfg(not(feature = "highs"))]
+    {
+        set_last_error("rgmin_solver_clear_equalities: build has no highs feature");
         1
     }
 }

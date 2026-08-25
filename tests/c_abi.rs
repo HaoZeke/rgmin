@@ -797,7 +797,7 @@ fn lowest_eigenpair_elpa_is_unavailable() {
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 21);
+    assert_eq!(stamp.abi_minor, 22);
     assert_eq!(stamp.layout_revision, 4);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
 }
@@ -856,14 +856,15 @@ fn c_abi_respects_maxmove_when_initial_step_is_larger() {
 #[test]
 fn c_abi_every_setter_survives_live_and_null_sessions() {
     use rgmin::ffi::{
-        rgmin_manifold_t, rgmin_qn_step_t, rgmin_solver_forget, rgmin_solver_set_atom_maxmove,
-        rgmin_solver_set_cautious, rgmin_solver_set_centered_matrix, rgmin_solver_set_constant,
-        rgmin_solver_set_euclidean_complex, rgmin_solver_set_extra_updates,
-        rgmin_solver_set_manifold, rgmin_solver_set_masses, rgmin_solver_set_maxmove,
-        rgmin_solver_set_multinomial_ds, rgmin_solver_set_multinomial_sym,
-        rgmin_solver_set_oblique, rgmin_solver_set_periodic, rgmin_solver_set_positive,
-        rgmin_solver_set_project_rigid, rgmin_solver_set_qn_step, rgmin_solver_set_sphere_complex,
-        rgmin_solver_set_stiefel,
+        rgmin_manifold_t, rgmin_qn_step_t, rgmin_solver_add_equality,
+        rgmin_solver_clear_equalities, rgmin_solver_forget, rgmin_solver_set_atom_maxmove,
+        rgmin_solver_set_box, rgmin_solver_set_cautious, rgmin_solver_set_centered_matrix,
+        rgmin_solver_set_constant, rgmin_solver_set_euclidean_complex,
+        rgmin_solver_set_extra_updates, rgmin_solver_set_highs, rgmin_solver_set_manifold,
+        rgmin_solver_set_masses, rgmin_solver_set_maxmove, rgmin_solver_set_multinomial_ds,
+        rgmin_solver_set_multinomial_sym, rgmin_solver_set_oblique, rgmin_solver_set_periodic,
+        rgmin_solver_set_positive, rgmin_solver_set_project_rigid, rgmin_solver_set_qn_step,
+        rgmin_solver_set_sphere_complex, rgmin_solver_set_stiefel, rgmin_solver_set_trust,
     };
     let ctrl = rgmin_control_t {
         maxiter: 20,
@@ -907,6 +908,16 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_stiefel(session, 4, 2);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN);
+        let lo = [-1.0_f64, -2.0];
+        let hi = [1.0_f64, 2.0];
+        let idx = [0usize, 1];
+        let coef = [1.0_f64, -1.0];
+        let _ = rgmin_solver_set_highs(session, 1);
+        let _ = rgmin_solver_set_box(session, lo.as_ptr(), hi.as_ptr(), 2);
+        let _ = rgmin_solver_set_box(session, std::ptr::null(), hi.as_ptr(), 2);
+        let _ = rgmin_solver_set_trust(session, 0.25);
+        let _ = rgmin_solver_add_equality(session, idx.as_ptr(), coef.as_ptr(), 2, 0.0);
+        let _ = rgmin_solver_clear_equalities(session);
         rgmin_solver_forget(session);
     }
     // The configured session still relaxes: setters must leave a
@@ -962,6 +973,15 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_oblique(null, 3, 2);
         rgmin_solver_set_stiefel(null, 4, 2);
         rgmin_solver_set_masses(null, masses.as_ptr(), masses.len());
+        let lo = [-1.0_f64, -2.0];
+        let hi = [1.0_f64, 2.0];
+        let idx = [0usize, 1];
+        let coef = [1.0_f64, -1.0];
+        let _ = rgmin_solver_set_highs(null, 1);
+        let _ = rgmin_solver_set_box(null, lo.as_ptr(), hi.as_ptr(), 2);
+        let _ = rgmin_solver_set_trust(null, 0.25);
+        let _ = rgmin_solver_add_equality(null, idx.as_ptr(), coef.as_ptr(), 2, 0.0);
+        let _ = rgmin_solver_clear_equalities(null);
         rgmin_solver_forget(null);
     }
 }
@@ -1513,4 +1533,61 @@ fn c_abi_centered_matrix_stays_on_the_set() {
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_MW_RIGID as i32, 6);
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_OBLIQUE as i32, 11);
     unsafe { rgmin_solver_free(session) };
+}
+
+/// HiGHS box / trust / equality setters share the set_highs status
+/// convention: 0 with the feature, 1 without, 1 on a null solver.
+#[test]
+fn c_abi_set_box_status_matches_highs_feature() {
+    use rgmin::ffi::{
+        rgmin_solver_add_equality, rgmin_solver_clear_equalities, rgmin_solver_set_box,
+        rgmin_solver_set_highs, rgmin_solver_set_trust,
+    };
+    let ctrl = rgmin_control_t {
+        maxiter: 4,
+        gtol: 1e-8,
+        istep: 0.1,
+        memory: 4,
+        maxmove: 0.0,
+    };
+    let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_LBFGS, &ctrl, 2) };
+    assert!(!session.is_null());
+    let lo = [-1.0_f64, -2.0];
+    let hi = [1.0_f64, 2.0];
+    let idx = [0usize, 1];
+    let coef = [1.0_f64, -1.0];
+    let st_highs = unsafe { rgmin_solver_set_highs(session, 1) };
+    let st_box = unsafe { rgmin_solver_set_box(session, lo.as_ptr(), hi.as_ptr(), 2) };
+    let st_null_side = unsafe { rgmin_solver_set_box(session, std::ptr::null(), hi.as_ptr(), 2) };
+    let st_clear = unsafe { rgmin_solver_set_box(session, std::ptr::null(), std::ptr::null(), 0) };
+    let st_bad_n = unsafe { rgmin_solver_set_box(session, lo.as_ptr(), hi.as_ptr(), 3) };
+    let st_trust = unsafe { rgmin_solver_set_trust(session, 0.25) };
+    let st_eq = unsafe { rgmin_solver_add_equality(session, idx.as_ptr(), coef.as_ptr(), 2, 0.0) };
+    let st_eq_clear = unsafe { rgmin_solver_clear_equalities(session) };
+    unsafe { rgmin_solver_free(session) };
+    let null = std::ptr::null_mut();
+    let st_null = unsafe { rgmin_solver_set_box(null, lo.as_ptr(), hi.as_ptr(), 2) };
+    assert_eq!(st_null, 1);
+    #[cfg(feature = "highs")]
+    {
+        assert_eq!(st_highs, 0);
+        assert_eq!(st_box, 0);
+        assert_eq!(st_null_side, 0);
+        assert_eq!(st_clear, 0);
+        assert_eq!(st_bad_n, 1);
+        assert_eq!(st_trust, 0);
+        assert_eq!(st_eq, 0);
+        assert_eq!(st_eq_clear, 0);
+    }
+    #[cfg(not(feature = "highs"))]
+    {
+        assert_eq!(st_highs, 1);
+        assert_eq!(st_box, 1);
+        assert_eq!(st_null_side, 1);
+        assert_eq!(st_clear, 1);
+        assert_eq!(st_bad_n, 1);
+        assert_eq!(st_trust, 1);
+        assert_eq!(st_eq, 1);
+        assert_eq!(st_eq_clear, 1);
+    }
 }
