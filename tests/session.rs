@@ -1,7 +1,7 @@
 //! Persistent Session: one step is one outer iteration.
 
 use eindir_core::objectives::Rosenbrock;
-use ndarray::{Array1, array};
+use ndarray::{array, Array1};
 use rgmin::{Control, Method, Solver};
 
 fn control() -> Control {
@@ -116,7 +116,7 @@ fn first_order_accept_none_moves_a_nonconservative_force() {
         }
     }
 
-    for method in [Method::Steepest, Method::Bfgs] {
+    for method in [Method::Steepest, Method::Bfgs, Method::lbfgs()] {
         let obj = ConstantForce;
         let mut x = array![0.0, 0.0];
         let mut ctrl = control();

@@ -4,22 +4,22 @@ use std::collections::VecDeque;
 
 use eindir_core::{DifferentiableObjective, Objective};
 use ndarray::{Array1, Array2};
-use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::SeedableRng;
 
-use crate::accept::{Accept, accept_step};
+use crate::accept::{accept_step, Accept};
 use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::Control;
 use crate::error::{Error, Result};
-use crate::fire::{FireState, fire_after_v1, fire_displacement};
+use crate::fire::{fire_after_v1, fire_displacement, FireState};
 use crate::lbfgs::{GradNorm, Lbfgs};
 use crate::linesearch::LineSearch;
 use crate::manifold::{Manifold, ManifoldKind};
 use crate::method::Method;
-use crate::newton::{HessianObjective, NewtonKind, rfo_direction, shifted_newton};
+use crate::newton::{rfo_direction, shifted_newton, HessianObjective, NewtonKind};
 use crate::nlcg::{Conjugacy, ConjugacyContext, Restart};
-use crate::pso::{Particle, RNG_SEED, random_velocity, update_swarm};
+use crate::pso::{random_velocity, update_swarm, Particle, RNG_SEED};
 use crate::qn::{bfgs_inverse_update, solve_dense, sr1_inverse_update, sr2_hessian_update};
 use crate::qn_step::QnStep;
 use crate::report::Report;
@@ -790,45 +790,35 @@ impl Solver {
         let gold = grad.clone();
         match &mut self.inner {
             Inner::Lbfgs(solver) => {
-                #[cfg(feature = "highs")]
-                let feasible = solver.highs.is_some() && self.accept == Accept::None;
-                #[cfg(not(feature = "highs"))]
-                let feasible = false;
-                if feasible {
-                    let dir = solver.search_direction(x.view(), grad.view());
-                    let old = x.clone();
-                    let gold = grad.clone();
-                    let (npos, nval, ngrad, moved) = accept_step(
-                        obj,
-                        x,
-                        value,
-                        &gold,
-                        &dir,
-                        &self.control,
-                        self.accept,
-                        &mut self.e_hist,
-                        self.atom_maxmove,
-                        self.manifold,
-                    );
-                    if !moved {
+                // Two-loop direction, then the session Accept. take_step
+                // inside step_objective always refuses nval >= value, so
+                // a non-conservative band force (NEB) never moves.
+                let dir = solver.search_direction(x.view(), grad.view());
+                let old = x.clone();
+                let gold = grad.clone();
+                let (npos, nval, ngrad, moved) = accept_step(
+                    obj,
+                    x,
+                    value,
+                    &gold,
+                    &dir,
+                    &self.control,
+                    self.accept,
+                    &mut self.e_hist,
+                    self.atom_maxmove,
+                    self.manifold,
+                );
+                if !moved {
+                    if self.accept == Accept::None {
                         return Err(Error::Oracle {
                             what: "non-finite value or gradient",
                         });
                     }
+                } else {
                     *x = npos;
                     value = nval;
                     grad = ngrad;
                     solver.push(&*x - &old, &grad - &gold);
-                } else {
-                    solver.step_objective(
-                        obj,
-                        x,
-                        &mut value,
-                        &mut grad,
-                        &mut self.istep,
-                        self.linesearch,
-                        &self.control,
-                    );
                 }
             }
             Inner::Steepest => {
