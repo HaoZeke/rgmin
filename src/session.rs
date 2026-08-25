@@ -48,6 +48,14 @@ pub struct Solver {
     masses: Option<Array1<f64>>,
     #[cfg(feature = "highs")]
     highs: bool,
+    #[cfg(feature = "highs")]
+    box_lo: Option<Vec<f64>>,
+    #[cfg(feature = "highs")]
+    box_hi: Option<Vec<f64>>,
+    #[cfg(feature = "highs")]
+    highs_trust: Option<f64>,
+    #[cfg(feature = "highs")]
+    equalities: Vec<(Vec<(usize, f64)>, f64)>,
     last_pos: Option<Array1<f64>>,
     last_value: f64,
     last_grad: Array1<f64>,
@@ -131,6 +139,14 @@ impl Solver {
             masses: None,
             #[cfg(feature = "highs")]
             highs: false,
+            #[cfg(feature = "highs")]
+            box_lo: None,
+            #[cfg(feature = "highs")]
+            box_hi: None,
+            #[cfg(feature = "highs")]
+            highs_trust: None,
+            #[cfg(feature = "highs")]
+            equalities: Vec::new(),
             last_pos: None,
             last_value: 0.0,
             last_grad: Array1::zeros(dim),
@@ -158,6 +174,11 @@ impl Solver {
     /// Current line-search policy.
     pub fn linesearch(&self) -> LineSearch {
         self.linesearch
+    }
+
+    /// Packed length of `x` this session was created with.
+    pub fn dim(&self) -> usize {
+        self.dim
     }
 
     /// Euclidean cap applied on the next [`Self::step`].
@@ -277,23 +298,96 @@ impl Solver {
         #[cfg(feature = "highs")]
         {
             self.highs = enabled;
+            self.apply_highs_opts();
+        }
+    }
+
+    /// Per-coordinate box on `x + p`. `None` on a side is unbounded.
+    /// Returns `true` when this build has `highs`.
+    pub fn set_box(&mut self, lo: Option<Vec<f64>>, hi: Option<Vec<f64>>) -> bool {
+        #[cfg(not(feature = "highs"))]
+        {
+            let _ = (lo, hi);
+            false
+        }
+        #[cfg(feature = "highs")]
+        {
+            self.box_lo = lo;
+            self.box_hi = hi;
+            self.apply_highs_opts();
+            true
+        }
+    }
+
+    /// L_inf trust radius on the HiGHS step. Non-positive clears it.
+    /// Returns `true` when this build has `highs`.
+    pub fn set_trust(&mut self, radius: f64) -> bool {
+        #[cfg(not(feature = "highs"))]
+        {
+            let _ = radius;
+            false
+        }
+        #[cfg(feature = "highs")]
+        {
+            self.highs_trust = if radius > 0.0 { Some(radius) } else { None };
+            self.apply_highs_opts();
+            true
+        }
+    }
+
+    /// Append one linear equality `a · p = rhs`. Returns `true` with `highs`.
+    pub fn add_equality(&mut self, coeffs: Vec<(usize, f64)>, rhs: f64) -> bool {
+        #[cfg(not(feature = "highs"))]
+        {
+            let _ = (coeffs, rhs);
+            false
+        }
+        #[cfg(feature = "highs")]
+        {
+            self.equalities.push((coeffs, rhs));
+            self.apply_highs_opts();
+            true
+        }
+    }
+
+    /// Drop every stored HiGHS equality. Returns `true` with `highs`.
+    pub fn clear_equalities(&mut self) -> bool {
+        #[cfg(not(feature = "highs"))]
+        {
+            false
+        }
+        #[cfg(feature = "highs")]
+        {
+            self.equalities.clear();
+            self.apply_highs_opts();
+            true
+        }
+    }
+
+    #[cfg(feature = "highs")]
+    fn apply_highs_opts(&mut self) {
+        if !self.highs {
             if let Inner::Lbfgs(solver) = &mut self.inner {
-                solver.highs = if enabled {
-                    Some(crate::HighsStep {
-                        trust: self.atom_maxmove.or(self.control.maxmove),
-                        lo: None,
-                        hi: None,
-                        equalities: Vec::new(),
-                        center_axes: if self.project_rigid && self.dim % 3 == 0 {
-                            Some((self.dim / 3, 3))
-                        } else {
-                            None
-                        },
-                    })
-                } else {
-                    None
-                };
+                solver.highs = None;
             }
+            return;
+        }
+        let step = crate::HighsStep {
+            trust: self
+                .highs_trust
+                .or(self.atom_maxmove)
+                .or(self.control.maxmove),
+            lo: self.box_lo.clone(),
+            hi: self.box_hi.clone(),
+            equalities: self.equalities.clone(),
+            center_axes: if self.project_rigid && self.dim % 3 == 0 {
+                Some((self.dim / 3, 3))
+            } else {
+                None
+            },
+        };
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.highs = Some(step);
         }
     }
 
@@ -489,8 +583,11 @@ impl Solver {
                 None,
                 Some(&hess),
                 &grad,
+                x.view(),
+                self.box_lo.as_deref(),
+                self.box_hi.as_deref(),
                 self.atom_maxmove,
-                self.control.maxmove,
+                self.highs_trust.or(self.control.maxmove),
                 center,
             ) {
                 let old = x.clone();
@@ -686,41 +783,31 @@ impl Solver {
         let gold = grad.clone();
         match &mut self.inner {
             Inner::Lbfgs(solver) => {
-                if self.accept == Accept::None {
-                    let dir = solver.direction(grad.view());
-                    let old = x.clone();
-                    let gold = grad.clone();
-                    let (npos, nval, ngrad, moved) = accept_step(
-                        obj,
-                        x,
-                        value,
-                        &gold,
-                        &dir,
-                        &self.control,
-                        self.accept,
-                        &mut self.e_hist,
-                        self.atom_maxmove,
-                        self.manifold,
-                    );
-                    if !moved {
-                        return Err(Error::Oracle {
-                            what: "non-finite value or gradient",
-                        });
-                    }
-                    *x = npos;
-                    value = nval;
-                    grad = ngrad;
+                let dir = solver.direction(grad.view());
+                let old = x.clone();
+                let gold = grad.clone();
+                let (npos, nval, ngrad, moved) = accept_step(
+                    obj,
+                    x,
+                    value,
+                    &gold,
+                    &dir,
+                    &self.control,
+                    self.accept,
+                    &mut self.e_hist,
+                    self.atom_maxmove,
+                    self.manifold,
+                );
+                if !moved && self.accept == Accept::None {
+                    return Err(Error::Oracle {
+                        what: "non-finite value or gradient",
+                    });
+                }
+                *x = npos;
+                value = nval;
+                grad = ngrad;
+                if moved {
                     solver.push(&*x - &old, &grad - &gold);
-                } else {
-                    solver.step_objective(
-                        obj,
-                        x,
-                        &mut value,
-                        &mut grad,
-                        &mut self.istep,
-                        self.linesearch,
-                        &self.control,
-                    );
                 }
             }
             Inner::Steepest => {
