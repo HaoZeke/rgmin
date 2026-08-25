@@ -137,7 +137,10 @@ inline Report minimize_eindir(const eindir_objective_t* objective,
     return Report{out.value, out.steps, out.grad_norm};
 }
 
-inline OptimizeResult minimize(rgmin_eval_fn eval, rgmin_grad_fn grad, void* user,
+/// One-shot solve. Named for the header rather than `minimize`, which
+/// the compat namespace below already takes: a namespace and a function
+/// cannot share a name in one scope.
+inline OptimizeResult optimize(rgmin_eval_fn eval, rgmin_grad_fn grad, void* user,
                                DLManagedTensorVersioned* x,
                                OptimizeControl const& ctrl, Method method) {
     return OptimizeResult::from_report(

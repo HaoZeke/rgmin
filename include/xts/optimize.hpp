@@ -21,7 +21,7 @@ using rgmin::OptimizeResult;
 using rgmin::minimize_fn;
 using rgmin::minimize_hess_fn;
 using rgmin::minimize_eindir;
-using rgmin::minimize;
+using rgmin::optimize;
 using rgmin::borrow_cpu_f64;
 using rgmin::Solver;
 
