@@ -8,8 +8,8 @@ use ndarray::{Array1, ArrayView1, array};
 use rgmin::IrcTrust;
 use rgmin::manifold::{
     ComplexCircle, Constant, EuclideanComplex, Manifold, Multinomial, MwRigid, Oblique,
-    SkewSymmetric, Spd, Sphere, Stiefel, StiefelNp, Symmetric, is_constant, is_euclidean_complex,
-    is_skewsymmetric, is_spd, is_symmetric,
+    SkewSymmetric, Spd, Sphere, SphereComplex, Stiefel, StiefelNp, Symmetric, is_constant,
+    is_euclidean_complex, is_skewsymmetric, is_spd, is_sphere_complex, is_symmetric,
 };
 use rgmin::{Conjugacy, Control, DirectionalCurvature, Restart, ScgParams, minimize_scg_exact};
 
@@ -224,6 +224,28 @@ fn euclidean_complex_retract_stays_on_the_set() {
     assert!((w[1] + 0.1).abs() < 1e-15);
     let fro = y.iter().map(|a| a * a).sum::<f64>().sqrt();
     assert!((fro - 1.0).abs() > 0.5, "must not be the sphere {y:?}");
+}
+
+/// manopt spherecomplexfactory: interleaved C^n of unit Frobenius
+/// norm. Projection is Hermitian-tangent. Not the real sphere token
+/// and not (S^1)^n.
+#[test]
+fn sphere_complex_retract_stays_on_the_set() {
+    let m = SphereComplex::new(2);
+    let x = array![1.0, 0.0, 0.0, 0.0];
+    let v = array![0.0, 0.2, 0.3, -0.1];
+    let y = m.retract(&x, &v);
+    assert!(is_sphere_complex(&y), "left the complex sphere {y:?}");
+    let t = m.project(&x, &v);
+    let ip: f64 = x.iter().zip(t.iter()).map(|(a, b)| a * b).sum();
+    assert!(ip.abs() < 1e-14, "Re(x^* t) = {ip}");
+    let w = m.transport(&x, &y, &v);
+    let ip2: f64 = y.iter().zip(w.iter()).map(|(a, b)| a * b).sum();
+    assert!(ip2.abs() < 1e-14, "Re(y^* w) = {ip2}");
+    assert_ne!(
+        rgmin::ManifoldKind::SphereComplex { n: 2 },
+        rgmin::ManifoldKind::Sphere
+    );
 }
 
 /// manopt constantfactory: retraction is the fixed point, projection

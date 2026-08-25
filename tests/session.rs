@@ -1,7 +1,7 @@
 //! Persistent Session: one step is one outer iteration.
 
 use eindir_core::objectives::Rosenbrock;
-use ndarray::{Array1, array};
+use ndarray::{array, Array1};
 use rgmin::{Control, Method, Solver};
 
 fn control() -> Control {
@@ -836,8 +836,8 @@ fn complex_circle_rejects_a_3n_cluster() {
 fn symmetric_session_stays_on_the_set() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
     use ndarray::ArrayView1;
-    use rgmin::ManifoldKind;
     use rgmin::manifold::is_symmetric;
+    use rgmin::ManifoldKind;
 
     struct FrobeniusI;
     impl Objective<f64> for FrobeniusI {
@@ -912,8 +912,8 @@ fn symmetric_rejects_a_3n_cluster() {
 fn skewsymmetric_session_stays_on_the_set() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
     use ndarray::ArrayView1;
-    use rgmin::ManifoldKind;
     use rgmin::manifold::is_skewsymmetric;
+    use rgmin::ManifoldKind;
 
     // Frobenius distance to J = [[0, 1], [-1, 0]]. Identity is not on the set.
     struct FrobeniusJ;
@@ -975,8 +975,8 @@ fn skewsymmetric_session_stays_on_the_set() {
 fn euclidean_complex_session_stays_on_the_set() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
     use ndarray::ArrayView1;
-    use rgmin::ManifoldKind;
     use rgmin::manifold::is_euclidean_complex;
+    use rgmin::ManifoldKind;
 
     struct CplxBowl;
     impl Objective<f64> for CplxBowl {
@@ -1055,11 +1055,93 @@ fn euclidean_complex_rejects_a_3n_cluster() {
 }
 
 #[test]
+fn sphere_complex_session_stays_on_the_set() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::manifold::is_sphere_complex;
+
+    struct CplxLin;
+    impl Objective<f64> for CplxLin {
+        fn dim(&self) -> usize {
+            4
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| {
+                Bounds::new(Array1::from_elem(4, -4.0), Array1::from_elem(4, 4.0), 0.0)
+            })
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            x[2]
+        }
+    }
+    impl Gradient<f64> for CplxLin {
+        fn dim(&self) -> usize {
+            4
+        }
+        fn grad(&self, _x: ArrayView1<f64>) -> Array1<f64> {
+            array![0.0, 0.0, 1.0, 0.0]
+        }
+    }
+    impl DifferentiableObjective<f64> for CplxLin {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = CplxLin;
+    let mut x = array![1.0, 0.0, 0.0, 0.0];
+    let mut solver = Solver::new(
+        Method::Steepest,
+        Control {
+            maxiter: 20,
+            gtol: 1e-8,
+            istep: 0.1,
+            maxmove: None,
+        },
+        4,
+    );
+    solver.set_sphere_complex(2);
+    solver.set_accept(rgmin::Accept::None);
+    let _ = solver.step(&obj, &mut x).unwrap();
+    assert!(is_sphere_complex(&x), "left the complex sphere {x:?}");
+    assert_eq!(x.len(), 4);
+    let n0 = (x[0] * x[0] + x[1] * x[1]).sqrt();
+    let n1 = (x[2] * x[2] + x[3] * x[3]).sqrt();
+    assert!(
+        (n0 - 1.0).abs() > 1e-8 || (n1 - 1.0).abs() > 1e-8,
+        "must not force each pair onto S^1 {x:?}"
+    );
+    for _ in 0..19 {
+        let _ = solver.step(&obj, &mut x).unwrap();
+        assert!(is_sphere_complex(&x), "left the complex sphere {x:?}");
+        assert_eq!(x.len(), 4);
+    }
+}
+
+#[test]
+fn sphere_complex_rejects_a_3n_cluster() {
+    let obj = Rosenbrock::<114>::new();
+    let mut x = Array1::from_elem(114, 0.1);
+    let mut solver = Solver::new(Method::Steepest, control(), 114);
+    solver.set_manifold(rgmin::ManifoldKind::sphere_complex(2));
+    let err = solver.step(&obj, &mut x).unwrap_err();
+    match err {
+        rgmin::Error::ManifoldDim { kind, got } => {
+            assert_eq!(kind, "spherecomplex");
+            assert_eq!(got, 114);
+        }
+        other => panic!("expected ManifoldDim, got {other:?}"),
+    }
+}
+
+#[test]
 fn constant_session_stays_on_the_set() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
     use ndarray::ArrayView1;
-    use rgmin::ManifoldKind;
     use rgmin::manifold::is_constant;
+    use rgmin::ManifoldKind;
 
     struct Bowl;
     impl Objective<f64> for Bowl {

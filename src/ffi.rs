@@ -19,10 +19,10 @@ use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
 use ndarray::{Array1, Array2, ArrayView1};
 
 use crate::{
-    Accept, ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind,
-    Error, HessianOracle, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart,
-    ScgParams, Solver, lowest_mode, minimize_method, minimize_method_hess, minimize_scg,
-    minimize_scg_exact,
+    lowest_mode, minimize_method, minimize_method_hess, minimize_scg, minimize_scg_exact, Accept,
+    ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind, Error,
+    HessianOracle, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart,
+    ScgParams, Solver,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
@@ -63,7 +63,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 17;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 18;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -1415,7 +1415,8 @@ pub enum rgmin_manifold_t {
     RGMIN_MANIFOLD_MULTINOMIAL_DS = 18,
     /// Symmetric doubly-stochastic n-by-n. Token defaults to n = 2.
     RGMIN_MANIFOLD_MULTINOMIAL_SYM = 19,
-    /// Complex unit sphere C^n, packed 2n. Token defaults to n = 1.
+    /// Complex unit sphere C^n, packed 2n. Token defaults to n = 1;
+    /// use rgmin_solver_set_sphere_complex. Reserved 7-10 unused.
     RGMIN_MANIFOLD_SPHERE_COMPLEX = 20,
 }
 
@@ -1510,6 +1511,16 @@ pub unsafe extern "C" fn rgmin_solver_set_multinomial_ds(solver: *mut rgmin_solv
         return;
     }
     unsafe { (*solver).solver.set_multinomial_ds(n) };
+}
+
+/// Complex unit sphere \(\mathbb{C}^n\). Packed interleaved, length `2 n`.
+/// manopt `spherecomplexfactory`. Token 20 defaults to n = 1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_sphere_complex(solver: *mut rgmin_solver_t, n: usize) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_sphere_complex(n) };
 }
 
 /// Per-atom masses for `RGMIN_MANIFOLD_MW_RIGID`. `n_atoms == 0` or a

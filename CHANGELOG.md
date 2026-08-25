@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ManifoldKind::SphereComplex`: manopt `spherecomplexfactory`.
+  Interleaved `(re, im)` pairs of length `2 n`. Projection is
+  `v - Re(x^* v) x`, retraction is `(x+v)/||x+v||`, transport is
+  projection at arrival. C token 20. Tokens 7-10 stay reserved.
+  `abi_minor` 18.
 - `ManifoldKind::MultinomialDoublyStochastic`: manopt
   `multinomialdoublystochasticfactory`. Packed row-major `n^2`,
   `n >= 2`. Fisher-orthogonal projection solves the
