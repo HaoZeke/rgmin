@@ -66,8 +66,8 @@ pub use multinomial_sym::{
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
 pub use positive::{
-    Positive, inner as inner_pos, is_positive, pack as pack_pos, typical_dist as typical_dist_pos,
-    unpack as unpack_pos,
+    Positive, inner as inner_pos, is_positive, pack as pack_pos, pack_vec as pack_pos_vec,
+    typical_dist as typical_dist_pos, unpack as unpack_pos, unpack_vec as unpack_pos_vec,
 };
 pub use rigid_quotient::RigidQuotient;
 pub use se3::Se3;
