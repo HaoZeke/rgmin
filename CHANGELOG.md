@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- ELPA / PDSYEVR window is range I: `il = 1`, `iu = nev`. A
+  `nev = 1` kick gathers `Z` as `n x 1`, not `n x n`. Full
+  `heev` only when `nev == n`.
 - Closed ELPA stage tokens: kind `Elpa` is 1-stage (`solver = 1`),
   kind `Elpa2` is 2-stage (`solver = 2`). `ElpaParams.nblk` is a
   `u32` (0 selects 16). No `elpa_set` strings on the public ABI,

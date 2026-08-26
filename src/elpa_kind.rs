@@ -77,6 +77,36 @@ pub fn elpa_config(kind: EigensolverKind, elpa: &ElpaParams) -> Option<(i32, u32
     Some((stage.elpa_solver(), elpa.nblk_or_default()))
 }
 
+/// Partial-spectrum window for ELPA `elpa_eigenvectors` / PDSYEVR range I.
+///
+/// `il` is 1. `iu` is `nev`, not `n`, unless the caller asked for
+/// the full spectrum (`nev == n`). The gathered `Z` is `n x iu`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ElpaSpectrum {
+    /// 1-based first index. Always 1.
+    pub il: u32,
+    /// 1-based last index. Equals `nev` (clamped to `n`).
+    pub iu: u32,
+    /// Columns of `Z`. Equals `iu`, never `n` on a partial request.
+    pub z_cols: u32,
+    /// True only when `nev == n`.
+    pub full: bool,
+}
+
+/// Window for a dense ELPA / ScaLAPACK call. `nev == 0` selects 1.
+pub fn elpa_spectrum(n: usize, nev: usize) -> crate::error::Result<ElpaSpectrum> {
+    if n == 0 {
+        return Err(crate::error::Error::Dim { got: 0, dim: 0 });
+    }
+    let k = if nev == 0 { 1 } else { nev.min(n) };
+    Ok(ElpaSpectrum {
+        il: 1,
+        iu: k as u32,
+        z_cols: k as u32,
+        full: k == n,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,6 +133,22 @@ mod tests {
         assert!(EigensolverKind::from_ordinal(15).is_none());
         assert!(!EigensolverKind::Elpa.is_linked());
         assert!(!EigensolverKind::Elpa2.is_linked());
+    }
+
+    #[test]
+    fn elpa_spectrum_nev_one_is_not_heev_all() {
+        let w = elpa_spectrum(512, 1).expect("n>0");
+        assert_eq!(w.il, 1);
+        assert_eq!(w.iu, 1);
+        assert_eq!(w.z_cols, 1);
+        assert!(!w.full);
+        let all = elpa_spectrum(512, 512).expect("n>0");
+        assert_eq!(all.iu, 512);
+        assert_eq!(all.z_cols, 512);
+        assert!(all.full);
+        let def = elpa_spectrum(512, 0).expect("n>0");
+        assert_eq!(def.iu, 1);
+        assert!(!def.full);
     }
 
     #[test]

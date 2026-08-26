@@ -106,7 +106,7 @@ pub use lowest_mode::{
 pub use slepc_kind::{SlepcParams, SlepcPmat, SlepcStKind};
 pub use eigenexa_kind::{EigenExaAlgo, EigenExaParams};
 pub use dlaf_kind::DlaFutureParams;
-pub use elpa_kind::{elpa_config, ElpaParams, ElpaStage};
+pub use elpa_kind::{elpa_config, elpa_spectrum, ElpaParams, ElpaSpectrum, ElpaStage};
 pub use hvp::{
     FdHvp, HessianVector, HvpOracle, IdentityPrecond, NystromPrecond, Preconditioner,
     minimize_newton_cg, steihaug_cg, steihaug_pcg,
