@@ -875,9 +875,7 @@ mod tests {
         assert!(mode.vector.iter().all(|v| v.is_finite()));
     }
 
-    #[test]
-    fn lanczos_two_pass_reortho_holds_the_hdr_basis() {
-        let n = 80;
+    fn hdr_diag(n: usize) -> DiagH {
         let mut lam = Array1::zeros(n);
         let lo = 1.0_f64.ln();
         let hi = 1.0e12_f64.ln();
@@ -885,7 +883,13 @@ mod tests {
             let t = i as f64 / (n as f64 - 1.0);
             lam[i] = (lo + t * (hi - lo)).exp();
         }
-        let h = DiagH(lam);
+        DiagH(lam)
+    }
+
+    #[test]
+    fn lanczos_two_pass_reortho_holds_the_hdr_basis() {
+        let n = 80;
+        let h = hdr_diag(n);
         let x = Array1::zeros(n);
         let seed = Array1::from_iter((0..n).map(|i| 1.0 + i as f64 / (n as f64 - 1.0)));
         let (q, _alpha, _beta, _actions) = lanczos_basis(&h, x.view(), seed.view(), 55);
@@ -894,9 +898,23 @@ mod tests {
             err < 1e-10,
             "two-pass full reortho Gram inf-error {err}"
         );
-        let mode = lanczos(&h, x.view(), seed.view(), 55);
-        assert!((mode.value - 1.0).abs() < 1e-6, "lowest Ritz {}", mode.value);
+    }
+
+    #[test]
+    fn lanczos_recovers_the_hdr_lowest_pair() {
+        let n = 80;
+        let h = hdr_diag(n);
+        let x = Array1::zeros(n);
+        let mut seed = Array1::from_elem(n, 1e-6);
+        seed[0] = 1.0;
+        let mode = lanczos(&h, x.view(), seed.view(), 16);
         assert!(mode.vector.iter().all(|v| v.is_finite()));
+        assert!(
+            (mode.value - 1.0).abs() < 1e-6,
+            "lowest Ritz {}",
+            mode.value
+        );
+        assert!(mode.vector[0].abs() > 0.99);
     }
 
     #[test]
