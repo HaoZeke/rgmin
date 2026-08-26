@@ -5,16 +5,18 @@ Set SELLA_ROOT to a zadorlab/sella checkout (the directory that contains
 the `sella/` package). Optional MANOPT_ROOT is a NicolasBoumal/manopt
 tree; when MATLAB/Octave can see it, factory numbers come from that
 source. Otherwise the remint writes the published manopt formulas
-(spherefactory proj/retr, positivefactory exp, symmetricfactory
-multisym) used by dest comments.
+(sphere / positive / symmetric / complexcircle / multinomial /
+centeredmatrix / sympositivedefinite proj, retr, transp) used by
+dest comments.
 
 stdin is unused. stdout is one JSON object:
 
   source: {sella_root, sella_file, manopt, manopt_files?}
   cases:  [{name, kind, s}, ...]
 
-kind is rfo / qn / qn_irc / prfo / ts_bfgs / ras / sphere_proj /
-sphere_retr / positive_retr / symmetric_proj.
+kind is rfo / qn / qn_irc / prfo / ts_bfgs / ras plus factory
+proj / retr / transp for Sphere, Symmetric, Positive,
+ComplexCircle, Multinomial, CenteredMatrix, and SPD.
 """
 from __future__ import annotations
 
@@ -33,6 +35,10 @@ _MANOPT_FACTORY_RELS = (
     "manopt/manifolds/sphere/spherefactory.m",
     "manopt/manifolds/positive/positivefactory.m",
     "manopt/manifolds/euclidean/symmetricfactory.m",
+    "manopt/manifolds/complexcircle/complexcirclefactory.m",
+    "manopt/manifolds/multinomial/multinomialfactory.m",
+    "manopt/manifolds/euclidean/centeredmatrixfactory.m",
+    "manopt/manifolds/symfixedrank/sympositivedefinitefactory.m",
 )
 
 
@@ -284,7 +290,7 @@ def _manopt_clone_root(root: Path) -> Path:
 
 
 def _locate_manopt_factories(root: Path) -> list[Path]:
-    """Open sphere / positive / symmetric factory files under MANOPT_ROOT."""
+    """Open the seven dest factory files under MANOPT_ROOT."""
     clone = _manopt_clone_root(root)
     found: list[Path] = []
     for rel in _MANOPT_FACTORY_RELS:
@@ -315,61 +321,198 @@ def _rel_manopt_file(root: Path, path: Path) -> str:
     return path.name
 
 
+def _floats(a) -> list[float]:
+    return [float(v) for v in np.asarray(a, dtype=float).ravel(order="C")]
+
+
+def _factory_case(name: str, kind: str, x, v, s, **extra) -> dict:
+    out = {
+        "name": name,
+        "kind": kind,
+        "x": _floats(x),
+        "v": _floats(v),
+        "s": _floats(s),
+    }
+    out.update(extra)
+    return out
+
+
+def _cplx_from_interleaved(reim) -> np.ndarray:
+    a = np.asarray(reim, dtype=float).ravel()
+    return a[0::2] + 1j * a[1::2]
+
+
+def _cplx_to_interleaved(z) -> np.ndarray:
+    z = np.asarray(z, dtype=complex).ravel()
+    out = np.empty(2 * z.size, dtype=float)
+    out[0::2] = z.real
+    out[1::2] = z.imag
+    return out
+
+
+def _multisym(a: np.ndarray) -> np.ndarray:
+    return 0.5 * (a + a.T)
+
+
+def _center_cols(a: np.ndarray) -> np.ndarray:
+    return a - a.mean(axis=1, keepdims=True)
+
+
 def _published_factory_cases() -> list[dict]:
     """Published manopt factory algebra dest claims to port.
 
-    These are the MATLAB formulas from spherefactory / positivefactory /
-    symmetricfactory, not dest numbers.
+    These are the MATLAB formulas from spherefactory, positivefactory,
+    symmetricfactory, complexcirclefactory, multinomialfactory,
+    centeredmatrixfactory, and sympositivedefinitefactory, not dest
+    numbers. Each named dest kind has proj, retr, and transp.
     """
     cases: list[dict] = []
+
+    # spherefactory: proj d - x*(x'*d), retr (x+d)/norm, transp proj at arrival.
     x = np.array([0.0, 1.0, 0.0])
     v = np.array([0.2, 0.3, -0.1])
     proj = v - x * np.dot(x, v)
     retr = (x + proj) / np.linalg.norm(x + proj)
+    transp = proj - retr * np.dot(retr, proj)
+    cases.append(_factory_case("sphere_proj_north", "sphere_proj", x, v, proj))
+    cases.append(_factory_case("sphere_retr_north", "sphere_retr", x, proj, retr))
     cases.append(
-        {
-            "name": "sphere_proj_north",
-            "kind": "sphere_proj",
-            "x": x.tolist(),
-            "v": v.tolist(),
-            "s": [float(a) for a in proj],
-        }
-    )
-    cases.append(
-        {
-            "name": "sphere_retr_north",
-            "kind": "sphere_retr",
-            "x": x.tolist(),
-            "v": proj.tolist(),
-            "s": [float(a) for a in retr],
-        }
+        _factory_case(
+            "sphere_transp_north",
+            "sphere_transp",
+            x,
+            proj,
+            transp,
+            x_to=_floats(retr),
+        )
     )
 
+    # positivefactory: proj identity, retr X.*exp(eta./X), transp identity.
     xp = np.array([1.5, 0.5, 2.0])
     vp = np.array([0.1, -0.2, 0.0])
     y = xp * np.exp(vp / xp)
+    cases.append(_factory_case("positive_proj_id", "positive_proj", xp, vp, vp))
+    cases.append(_factory_case("positive_retr_exp", "positive_retr", xp, vp, y))
     cases.append(
-        {
-            "name": "positive_retr_exp",
-            "kind": "positive_retr",
-            "x": xp.tolist(),
-            "v": vp.tolist(),
-            "s": [float(a) for a in y],
-        }
+        _factory_case(
+            "positive_transp_id",
+            "positive_transp",
+            xp,
+            vp,
+            vp,
+            x_to=_floats(y),
+        )
     )
 
-    xs = np.array([1.0, 0.0, 0.0, -1.0])
-    vs = np.array([0.0, 0.2, -0.1, 0.0])
-    a = vs.reshape(2, 2)
-    sym = 0.5 * (a + a.T)
+    # symmetricfactory: proj multisym, retr X+U, transp identity.
+    xs = np.array([[1.0, 0.0], [0.0, -1.0]])
+    vs = np.array([[0.0, 0.2], [-0.1, 0.0]])
+    sym = _multisym(vs)
+    eta_s = np.array([[0.0, 0.05], [0.05, 0.0]])
+    retr_s = xs + eta_s
+    cases.append(_factory_case("symmetric_multisym", "symmetric_proj", xs, vs, sym))
+    cases.append(_factory_case("symmetric_retr_add", "symmetric_retr", xs, eta_s, retr_s))
     cases.append(
-        {
-            "name": "symmetric_multisym",
-            "kind": "symmetric_proj",
-            "x": xs.tolist(),
-            "v": vs.tolist(),
-            "s": [float(a) for a in sym.ravel()],
-        }
+        _factory_case(
+            "symmetric_transp_id",
+            "symmetric_transp",
+            xs,
+            eta_s,
+            eta_s,
+            x_to=_floats(retr_s),
+        )
+    )
+
+    # complexcirclefactory: dest interleaved (re, im).
+    # proj u - real(conj(u).*z).*z; retr sign(z+v); transp proj at arrival.
+    zc = np.array([1.0 + 0.0j, 0.0 + 1.0j])
+    uc = np.array([0.5 + 0.25j, -0.1 + 0.8j])
+    xc = _cplx_to_interleaved(zc)
+    vc = _cplx_to_interleaved(uc)
+    pc = uc - np.real(np.conjugate(uc) * zc) * zc
+    rc = (zc + pc) / np.abs(zc + pc)
+    tc = pc - np.real(np.conjugate(pc) * rc) * rc
+    cases.append(_factory_case("complexcircle_proj_pair", "complexcircle_proj", xc, vc, _cplx_to_interleaved(pc)))
+    cases.append(
+        _factory_case(
+            "complexcircle_retr_sign",
+            "complexcircle_retr",
+            xc,
+            _cplx_to_interleaved(pc),
+            _cplx_to_interleaved(rc),
+        )
+    )
+    cases.append(
+        _factory_case(
+            "complexcircle_transp_arrive",
+            "complexcircle_transp",
+            xc,
+            _cplx_to_interleaved(pc),
+            _cplx_to_interleaved(tc),
+            x_to=_floats(_cplx_to_interleaved(rc)),
+        )
+    )
+
+    # multinomialfactory m=1: proj eta-(sum eta)*x; retr X.*exp(eta./X) then
+    # renormalize; transp proj at arrival.
+    xm = np.array([0.2, 0.3, 0.5])
+    vm = np.array([1.0, 2.0, 3.0])
+    pm = vm - vm.sum() * xm
+    eta_m = np.array([0.1, -0.05, -0.05])
+    ym = xm * np.exp(eta_m / xm)
+    ym = ym / ym.sum()
+    ym = np.maximum(ym, np.finfo(float).eps)
+    tm = eta_m - eta_m.sum() * ym
+    cases.append(_factory_case("multinomial_proj_fisher", "multinomial_proj", xm, vm, pm))
+    cases.append(_factory_case("multinomial_retr_exp", "multinomial_retr", xm, eta_m, ym))
+    cases.append(
+        _factory_case(
+            "multinomial_transp_arrive",
+            "multinomial_transp",
+            xm,
+            eta_m,
+            tm,
+            x_to=_floats(ym),
+        )
+    )
+
+    # centeredmatrixfactory default cols: proj center, retr X+U, transp identity.
+    xcm = np.array([[1.0, -1.0], [0.0, 0.0]])
+    vcm = np.array([[1.0, 3.0], [2.0, 4.0]])
+    pcm = _center_cols(vcm)
+    eta_c = _center_cols(np.array([[0.2, -0.2], [-0.1, 0.1]]))
+    ycm = xcm + eta_c
+    cases.append(_factory_case("centered_proj_cols", "centered_proj", xcm, vcm, pcm))
+    cases.append(_factory_case("centered_retr_add", "centered_retr", xcm, eta_c, ycm))
+    cases.append(
+        _factory_case(
+            "centered_transp_id",
+            "centered_transp",
+            xcm,
+            eta_c,
+            eta_c,
+            x_to=_floats(ycm),
+        )
+    )
+
+    # sympositivedefinitefactory: proj symm, retr symm(X+U+0.5 U X^{-1} U),
+    # default transp identity.
+    xspd = np.eye(2)
+    vspd = np.array([[0.3, 1.0], [-0.4, 0.5]])
+    pspd = _multisym(vspd)
+    eta_p = np.array([[0.0, 0.2], [0.2, 0.0]])
+    yspd = _multisym(xspd + eta_p + 0.5 * eta_p @ np.linalg.solve(xspd, eta_p))
+    cases.append(_factory_case("spd_proj_symm", "spd_proj", xspd, vspd, pspd))
+    cases.append(_factory_case("spd_retr_second", "spd_retr", xspd, eta_p, yspd))
+    cases.append(
+        _factory_case(
+            "spd_transp_id",
+            "spd_transp",
+            xspd,
+            eta_p,
+            eta_p,
+            x_to=_floats(yspd),
+        )
     )
     return cases
 
@@ -397,7 +540,7 @@ def _matlab_or_octave() -> tuple[str, list[str]] | None:
 
 
 def _run_manopt_engine(root: Path, argv: list[str]) -> list[dict] | None:
-    """Call factory proj/retr from a manopt tree via MATLAB/Octave."""
+    """Call factory proj/retr/transp from a manopt tree via MATLAB/Octave."""
     clone = _manopt_clone_root(root)
     tmp = Path(tempfile.mkdtemp(prefix="rgmin-manopt-gold-"))
     out = tmp / "manopt_gold.txt"
@@ -408,24 +551,74 @@ addpath(genpath('{root_lit}'));
 if exist('importmanopt', 'file') == 2
     importmanopt;
 end
+fid = fopen('{out_lit}', 'w');
 Ms = spherefactory(3);
 xs = [0; 1; 0];
 vs = [0.2; 0.3; -0.1];
-proj = Ms.proj(xs, vs);
-retr = Ms.retr(xs, proj);
+ps = Ms.proj(xs, vs);
+rs = Ms.retr(xs, ps);
+ts = Ms.transp(xs, rs, ps);
+fprintf(fid, '%.17g %.17g %.17g\\n', ps(1), ps(2), ps(3));
+fprintf(fid, '%.17g %.17g %.17g\\n', rs(1), rs(2), rs(3));
+fprintf(fid, '%.17g %.17g %.17g\\n', ts(1), ts(2), ts(3));
 Mp = positivefactory(3);
 xp = [1.5; 0.5; 2.0];
 vp = [0.1; -0.2; 0.0];
+pp = Mp.proj(xp, vp);
 yp = Mp.retr(xp, vp);
+tp = Mp.transp(xp, yp, vp);
+fprintf(fid, '%.17g %.17g %.17g\\n', pp(1), pp(2), pp(3));
+fprintf(fid, '%.17g %.17g %.17g\\n', yp(1), yp(2), yp(3));
+fprintf(fid, '%.17g %.17g %.17g\\n', tp(1), tp(2), tp(3));
 Msym = symmetricfactory(2);
 xsym = [1, 0; 0, -1];
 vsym = [0, 0.2; -0.1, 0];
-sym = Msym.proj(xsym, vsym);
-fid = fopen('{out_lit}', 'w');
-fprintf(fid, '%.17g %.17g %.17g\\n', proj(1), proj(2), proj(3));
-fprintf(fid, '%.17g %.17g %.17g\\n', retr(1), retr(2), retr(3));
-fprintf(fid, '%.17g %.17g %.17g\\n', yp(1), yp(2), yp(3));
-fprintf(fid, '%.17g %.17g %.17g %.17g\\n', sym(1,1), sym(1,2), sym(2,1), sym(2,2));
+psym = Msym.proj(xsym, vsym);
+etas = [0, 0.05; 0.05, 0];
+rsym = Msym.retr(xsym, etas);
+tsym = Msym.transp(xsym, rsym, etas);
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', psym(1,1), psym(1,2), psym(2,1), psym(2,2));
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', rsym(1,1), rsym(1,2), rsym(2,1), rsym(2,2));
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', tsym(1,1), tsym(1,2), tsym(2,1), tsym(2,2));
+Mc = complexcirclefactory(2);
+zc = [1; 1i];
+uc = [0.5+0.25i; -0.1+0.8i];
+pc = Mc.proj(zc, uc);
+rc = Mc.retr(zc, pc);
+tc = Mc.transp(zc, rc, pc);
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', real(pc(1)), imag(pc(1)), real(pc(2)), imag(pc(2)));
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', real(rc(1)), imag(rc(1)), real(rc(2)), imag(rc(2)));
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', real(tc(1)), imag(tc(1)), real(tc(2)), imag(tc(2)));
+Mm = multinomialfactory(3);
+xm = [0.2; 0.3; 0.5];
+vm = [1; 2; 3];
+pm = Mm.proj(xm, vm);
+etam = [0.1; -0.05; -0.05];
+rm = Mm.retr(xm, etam);
+tm = Mm.transp(xm, rm, etam);
+fprintf(fid, '%.17g %.17g %.17g\\n', pm(1), pm(2), pm(3));
+fprintf(fid, '%.17g %.17g %.17g\\n', rm(1), rm(2), rm(3));
+fprintf(fid, '%.17g %.17g %.17g\\n', tm(1), tm(2), tm(3));
+Mcm = centeredmatrixfactory(2, 2);
+xcm = [1, -1; 0, 0];
+vcm = [1, 3; 2, 4];
+pcm = Mcm.proj(xcm, vcm);
+etac = Mcm.proj(xcm, [0.2, -0.2; -0.1, 0.1]);
+rcm = Mcm.retr(xcm, etac);
+tcm = Mcm.transp(xcm, rcm, etac);
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', pcm(1,1), pcm(1,2), pcm(2,1), pcm(2,2));
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', rcm(1,1), rcm(1,2), rcm(2,1), rcm(2,2));
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', tcm(1,1), tcm(1,2), tcm(2,1), tcm(2,2));
+Mspd = sympositivedefinitefactory(2);
+xspd = eye(2);
+vspd = [0.3, 1; -0.4, 0.5];
+pspd = Mspd.proj(xspd, vspd);
+etap = [0, 0.2; 0.2, 0];
+rspd = Mspd.retr(xspd, etap);
+tspd = Mspd.transp(xspd, rspd, etap);
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', pspd(1,1), pspd(1,2), pspd(2,1), pspd(2,2));
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', rspd(1,1), rspd(1,2), rspd(2,1), rspd(2,2));
+fprintf(fid, '%.17g %.17g %.17g %.17g\\n', tspd(1,1), tspd(1,2), tspd(2,1), tspd(2,2));
 fclose(fid);
 """
     try:
@@ -441,48 +634,53 @@ fclose(fid);
     if proc.returncode != 0 or not out.is_file():
         return None
     lines = out.read_text().strip().splitlines()
-    if len(lines) != 4:
+    if len(lines) != 21:
         return None
     try:
-        proj = [float(v) for v in lines[0].split()]
-        retr = [float(v) for v in lines[1].split()]
-        yp = [float(v) for v in lines[2].split()]
-        sym = [float(v) for v in lines[3].split()]
+        nums = [[float(v) for v in line.split()] for line in lines]
     except ValueError:
         return None
-    if len(proj) != 3 or len(retr) != 3 or len(yp) != 3 or len(sym) != 4:
+    want = [3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 3, 3, 3, 4, 4, 4, 4, 4, 4]
+    if [len(row) for row in nums] != want:
         return None
-    x = [0.0, 1.0, 0.0]
-    v = [0.2, 0.3, -0.1]
+    published = {c["name"]: c for c in _published_factory_cases()}
+
+    def _fill(name: str, s: list[float], v: list[float] | None = None) -> dict:
+        case = dict(published[name])
+        case["s"] = s
+        if v is not None:
+            case["v"] = v
+        return case
+
+    ps, rs, ts = nums[0], nums[1], nums[2]
+    pp, yp, tp = nums[3], nums[4], nums[5]
+    psym, rsym, tsym = nums[6], nums[7], nums[8]
+    pc, rc, tc = nums[9], nums[10], nums[11]
+    pm, rm, tm = nums[12], nums[13], nums[14]
+    pcm, rcm, tcm = nums[15], nums[16], nums[17]
+    pspd, rspd, tspd = nums[18], nums[19], nums[20]
     return [
-        {
-            "name": "sphere_proj_north",
-            "kind": "sphere_proj",
-            "x": x,
-            "v": v,
-            "s": proj,
-        },
-        {
-            "name": "sphere_retr_north",
-            "kind": "sphere_retr",
-            "x": x,
-            "v": proj,
-            "s": retr,
-        },
-        {
-            "name": "positive_retr_exp",
-            "kind": "positive_retr",
-            "x": [1.5, 0.5, 2.0],
-            "v": [0.1, -0.2, 0.0],
-            "s": yp,
-        },
-        {
-            "name": "symmetric_multisym",
-            "kind": "symmetric_proj",
-            "x": [1.0, 0.0, 0.0, -1.0],
-            "v": [0.0, 0.2, -0.1, 0.0],
-            "s": [sym[0], sym[1], sym[2], sym[3]],
-        },
+        _fill("sphere_proj_north", ps),
+        _fill("sphere_retr_north", rs, ps),
+        _fill("sphere_transp_north", ts, ps),
+        _fill("positive_proj_id", pp),
+        _fill("positive_retr_exp", yp),
+        _fill("positive_transp_id", tp),
+        _fill("symmetric_multisym", psym),
+        _fill("symmetric_retr_add", rsym),
+        _fill("symmetric_transp_id", tsym),
+        _fill("complexcircle_proj_pair", pc),
+        _fill("complexcircle_retr_sign", rc, pc),
+        _fill("complexcircle_transp_arrive", tc, pc),
+        _fill("multinomial_proj_fisher", pm),
+        _fill("multinomial_retr_exp", rm),
+        _fill("multinomial_transp_arrive", tm),
+        _fill("centered_proj_cols", pcm),
+        _fill("centered_retr_add", rcm),
+        _fill("centered_transp_id", tcm),
+        _fill("spd_proj_symm", pspd),
+        _fill("spd_retr_second", rspd),
+        _fill("spd_transp_id", tspd),
     ]
 
 
