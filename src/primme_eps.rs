@@ -2,8 +2,6 @@
 
 use ndarray::Array1;
 #[cfg(rgmin_has_primme)]
-use ndarray::ArrayView1;
-#[cfg(rgmin_has_primme)]
 use std::cell::Cell;
 #[cfg(rgmin_has_primme)]
 use std::ffi::c_void;
@@ -11,9 +9,6 @@ use std::ffi::c_void;
 use std::os::raw::c_int;
 
 use crate::error::{Error, Result};
-use crate::lowest_mode::ApplyPreconditioner;
-#[cfg(rgmin_has_primme)]
-use crate::lowest_mode::PreconditionerKind;
 #[cfg(rgmin_has_primme)]
 use crate::vecops::nrm2;
 
@@ -40,20 +35,19 @@ unsafe extern "C" {
 #[cfg(rgmin_has_primme)]
 struct ApplyCtx<'a> {
     apply: &'a dyn Fn(&[f64]) -> Array1<f64>,
-    t: Option<&'a dyn ApplyPreconditioner>,
-    x: ArrayView1<'a, f64>,
+    precond: Option<&'a dyn Fn(&[f64]) -> Array1<f64>>,
     n: usize,
     actions: Cell<usize>,
 }
 
 #[cfg(rgmin_has_primme)]
 unsafe extern "C" fn apply_cb(user: *mut c_void, n: i64, v: *const f64, hv: *mut f64) -> c_int {
-    call_ctx(user, n, v, hv, false)
+    unsafe { call_ctx(user, n, v, hv, false) }
 }
 
 #[cfg(rgmin_has_primme)]
 unsafe extern "C" fn precond_cb(user: *mut c_void, n: i64, v: *const f64, hv: *mut f64) -> c_int {
-    call_ctx(user, n, v, hv, true)
+    unsafe { call_ctx(user, n, v, hv, true) }
 }
 
 #[cfg(rgmin_has_primme)]
@@ -74,8 +68,8 @@ unsafe fn call_ctx(
     }
     let vv = unsafe { std::slice::from_raw_parts(v, n) };
     let out = if precond {
-        match ctx.t {
-            Some(t) => t.apply_preconditioner(ctx.x, ArrayView1::from(vv)),
+        match ctx.precond {
+            Some(f) => f(vv),
             None => return 1,
         }
     } else {
@@ -92,60 +86,55 @@ unsafe fn call_ctx(
 }
 
 /// PRIMME on a frozen Hessian action. Unlinked builds stay unavailable.
-pub(crate) fn solve<F, P>(
+pub(crate) fn solve<F>(
     seed: &[f64],
-    x: ndarray::ArrayView1<f64>,
     nev: usize,
     maxit: usize,
     tol: f64,
     apply: F,
-    t: &P,
+    precond: Option<&dyn Fn(&[f64]) -> Array1<f64>>,
 ) -> Result<(Array1<f64>, f64, usize)>
 where
     F: Fn(&[f64]) -> Array1<f64>,
-    P: ApplyPreconditioner + ?Sized,
 {
     #[cfg(not(rgmin_has_primme))]
     {
-        let _ = (seed, x, nev, maxit, tol, apply, t);
+        let _ = (seed, nev, maxit, tol, apply, precond);
         Err(Error::EigenUnavailable { kind: "primme" })
     }
     #[cfg(rgmin_has_primme)]
     {
-        linked_solve(seed, x, nev, maxit, tol, apply, t)
+        linked_solve(seed, nev, maxit, tol, apply, precond)
     }
 }
 
 #[cfg(rgmin_has_primme)]
-fn linked_solve<F, P>(
+fn linked_solve<F>(
     seed: &[f64],
-    x: ndarray::ArrayView1<f64>,
     nev: usize,
     maxit: usize,
     tol: f64,
     apply: F,
-    t: &P,
+    precond: Option<&dyn Fn(&[f64]) -> Array1<f64>>,
 ) -> Result<(Array1<f64>, f64, usize)>
 where
     F: Fn(&[f64]) -> Array1<f64>,
-    P: ApplyPreconditioner + ?Sized,
 {
     let n = seed.len();
     if n == 0 {
         return Err(Error::Dim { got: 0, dim: 0 });
     }
-    let use_t = t.kind() != PreconditionerKind::None;
+    let use_t = precond.is_some();
     let ctx = ApplyCtx {
         apply: &apply,
-        t: if use_t { Some(t) } else { None },
-        x,
+        precond,
         n,
         actions: Cell::new(0),
     };
     let mut out = Array1::<f64>::zeros(n);
     let mut value = 0.0_f64;
     let mut actions: i64 = 0;
-    let precond_ptr = if use_t { Some(precond_cb) } else { None };
+    let precond_ptr: Option<HessApply> = if use_t { Some(precond_cb) } else { None };
     let rc = unsafe {
         rgmin_primme_lowest(
             n as i64,

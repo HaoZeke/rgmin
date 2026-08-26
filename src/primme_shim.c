@@ -130,7 +130,7 @@ int rgmin_primme_lowest(int64_t n, const double *seed, int64_t nev,
   if (err == 0) {
     return 0;
   }
-  if (err == PRIMME_MAIN_ITER_FAILURE || err == PRIMME_MAX_ITERATIONS_REACHED) {
+  if (err == PRIMME_MAIN_ITER_FAILURE) {
     return 2;
   }
   return 3;

@@ -422,15 +422,27 @@ where
     {
         let n = seed.len();
         let seed_owned = seed.to_owned();
-        let (vector, value, actions) = crate::primme_eps::solve(
-            seed_owned.as_slice().unwrap(),
-            x,
-            params.nev.max(1),
-            params.iterations(n),
-            params.tolerance(),
-            |v| h.apply_hessian(x, ArrayView1::from(v)),
-            t,
-        )?;
+        let apply = |v: &[f64]| h.apply_hessian(x, ArrayView1::from(v));
+        let (vector, value, actions) = if t.kind() != PreconditionerKind::None {
+            let pre = |v: &[f64]| t.apply_preconditioner(x, ArrayView1::from(v));
+            crate::primme_eps::solve(
+                seed_owned.as_slice().unwrap(),
+                params.nev.max(1),
+                params.iterations(n),
+                params.tolerance(),
+                apply,
+                Some(&pre),
+            )?
+        } else {
+            crate::primme_eps::solve(
+                seed_owned.as_slice().unwrap(),
+                params.nev.max(1),
+                params.iterations(n),
+                params.tolerance(),
+                apply,
+                None,
+            )?
+        };
         Ok(LowestMode {
             vector,
             value,
@@ -1609,6 +1621,8 @@ mod tests {
         assert!(!shim.contains("primme_set_member"));
         assert!(!shim.contains("primme_get_member"));
         assert!(!shim.contains("primme_set_method"));
+        assert!(shim.contains("PRIMME_MAIN_ITER_FAILURE"));
+        assert!(!shim.contains("PRIMME_MAX_ITERATIONS_REACHED"));
     }
 
     #[cfg(rgmin_has_primme)]
@@ -1644,5 +1658,42 @@ mod tests {
         assert!(mode.value < 0.0, "PRIMME curvature {}", mode.value);
         assert!(mode.vector[0].abs() > 0.9, "PRIMME mode {:?}", mode.vector);
         assert!(EigensolverKind::Primme.is_linked());
+    }
+
+    #[cfg(rgmin_has_primme)]
+    #[test]
+    fn primme_diagonal_t_recovers_the_gapped_mode() {
+        let n = 32;
+        let h = gapped_diag(n);
+        let x = Array1::zeros(n);
+        let mut seed = Array1::zeros(n);
+        seed[0] = 0.3;
+        seed[3] = 0.7;
+        seed[11] = 0.2;
+        let diag = Array1::from_iter((0..n).map(|i| if i == 0 { -8.0 } else { 4.0 }));
+        let t = DiagonalJacobi::from_diag(diag.view());
+        let mode = lowest_mode_primme(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Primme,
+                krylov: 8,
+                max_iter: 64,
+                tol: 1e-6,
+                nev: 1,
+            },
+            &t,
+        );
+        let mode = match mode {
+            Ok(m) => m,
+            Err(Error::EigenUnavailable { kind }) => {
+                assert_eq!(kind, "primme");
+                return;
+            }
+            Err(other) => panic!("expected pair or unavailable, got {other}"),
+        };
+        assert!(mode.value < 0.0, "PRIMME+T curvature {}", mode.value);
+        assert!(mode.vector[0].abs() > 0.9, "PRIMME+T mode {:?}", mode.vector);
     }
 }
