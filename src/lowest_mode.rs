@@ -817,6 +817,42 @@ mod tests {
         assert_eq!(DENSE_EIGEN_CUTOFF, 512);
     }
 
+    struct DiagH(Array1<f64>);
+    impl ApplyHessian for DiagH {
+        fn apply_hessian(&self, _x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
+            Array1::from_iter(self.0.iter().zip(v.iter()).map(|(l, vi)| l * vi))
+        }
+    }
+
+    #[test]
+    fn dimer_linear_diag_six_is_a_handful_of_actions() {
+        let mut lam = Array1::from_elem(6, 0.5);
+        lam[0] = -2.5;
+        lam[1] = 0.4;
+        let h = DiagH(lam);
+        let x = Array1::zeros(6);
+        let seed = array![0.3, 0.37, 0.44, 0.51, 0.58, 0.65];
+        let mode = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Dimer,
+                max_iter: 20,
+                tol: 1e-8,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap();
+        assert!((mode.value + 2.5).abs() < 1e-10, "C {}", mode.value);
+        assert!(mode.vector[0].abs() > 0.999);
+        assert!(
+            mode.actions <= 12,
+            "Jacobi planes on a 6-D diag should be cheap, got {}",
+            mode.actions
+        );
+    }
+
     #[test]
     fn dimer_in_plane_rr_finishes_in_two_actions_on_a_2d_well() {
         let h = gapped_diag(2);
