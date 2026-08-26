@@ -1072,21 +1072,21 @@ mod tests {
     #[test]
     fn lobpcg_diagonal_uses_fewer_actions_than_none() {
         let n = 32;
-        let mut lam = Array1::from_elem(n, 50.0);
-        lam[0] = -1.0;
+        let lam = Array1::from_iter((0..n).map(|i| ((i + 1) as f64).powi(2)));
         let h = DiagH(lam.clone());
         let x = Array1::zeros(n);
         let seed = Array1::ones(n);
         let params = EigenParams {
             kind: EigensolverKind::Lobpcg,
-            max_iter: 40,
+            max_iter: 80,
             tol: 1e-8,
             ..EigenParams::default()
         };
         let none = lowest_mode(&h, x.view(), seed.view(), &params).unwrap();
         let t = DiagonalJacobi::from_diag(lam.view());
         let diag = lowest_mode_precond(&h, x.view(), seed.view(), &params, &t).unwrap();
-        assert!(none.value < 0.0 && diag.value < 0.0);
+        assert!((none.value - 1.0).abs() < 1e-4, "None Ritz {}", none.value);
+        assert!((diag.value - 1.0).abs() < 1e-4, "Diagonal Ritz {}", diag.value);
         assert!(none.vector[0].abs() > 0.9 && diag.vector[0].abs() > 0.9);
         assert!(
             diag.actions < none.actions,
