@@ -246,6 +246,40 @@ fn lanczos<H: ApplyHessian + ?Sized>(
     seed: ArrayView1<f64>,
     krylov: usize,
 ) -> LowestMode {
+    let (q, alpha, beta, actions) = lanczos_basis(h, x, seed, krylov);
+    let k = alpha.len();
+    let n = seed.len();
+    let mut t = vec![vec![0.0; k]; k];
+    for i in 0..k {
+        t[i][i] = alpha[i];
+        if i + 1 < k && i < beta.len() {
+            t[i][i + 1] = beta[i];
+            t[i + 1][i] = beta[i];
+        }
+    }
+    let (evals, evecs) = jacobi_eigen(&mut t);
+    let lowest = argmin(&evals);
+    let mut mode = Array1::zeros(n);
+    for (i, qi) in q.iter().enumerate().take(k) {
+        axpy(evecs[i][lowest], qi.view(), &mut mode);
+    }
+    LowestMode {
+        vector: normalize(mode),
+        value: evals[lowest],
+        actions,
+    }
+}
+
+/// Hermitian-symmetric Lanczos on a real Hessian. Two-pass full
+/// reorthogonalization against the built Q (SLEPc `EPS_ORTH_FULL`).
+/// A vanishing residual stops the expansion; the pair is the Ritz
+/// pair of the reduced tridiagonal, not a NaN column.
+fn lanczos_basis<H: ApplyHessian + ?Sized>(
+    h: &H,
+    x: ArrayView1<f64>,
+    seed: ArrayView1<f64>,
+    krylov: usize,
+) -> (Vec<Array1<f64>>, Vec<f64>, Vec<f64>, usize) {
     let n = seed.len();
     let m = krylov.min(n).max(1);
     let mut q: Vec<Array1<f64>> = Vec::with_capacity(m);
@@ -267,38 +301,37 @@ fn lanczos<H: ApplyHessian + ?Sized>(
         if j > 0 {
             axpy(-beta[j - 1], q[j - 1].view(), &mut w);
         }
-        for qi in q.iter() {
-            let overlap = dot(w.view(), qi.view());
-            axpy(-overlap, qi.view(), &mut w);
-        }
+        reorthogonalize(&mut w, &q);
         let b = nrm2(w.view());
-        if b <= 1e-12 {
+        if !b.is_finite() || b <= 1e-14 * (1.0 + a.abs()) {
             break;
         }
         beta.push(b);
         q.push(w / b);
     }
+    (q, alpha, beta, actions)
+}
 
-    let k = alpha.len();
-    let mut t = vec![vec![0.0; k]; k];
-    for i in 0..k {
-        t[i][i] = alpha[i];
-        if i + 1 < k && i < beta.len() {
-            t[i][i + 1] = beta[i];
-            t[i + 1][i] = beta[i];
+fn reorthogonalize(w: &mut Array1<f64>, q: &[Array1<f64>]) {
+    for _ in 0..2 {
+        for qi in q {
+            let overlap = dot(w.view(), qi.view());
+            axpy(-overlap, qi.view(), w);
         }
     }
-    let (evals, evecs) = jacobi_eigen(&mut t);
-    let lowest = argmin(&evals);
-    let mut mode = Array1::zeros(n);
-    for (i, qi) in q.iter().enumerate().take(k) {
-        axpy(evecs[i][lowest], qi.view(), &mut mode);
+}
+
+fn gram_inf_error(q: &[Array1<f64>]) -> f64 {
+    let k = q.len();
+    let mut worst = 0.0;
+    for i in 0..k {
+        for j in i..k {
+            let g = dot(q[i].view(), q[j].view());
+            let t = if i == j { 1.0 } else { 0.0 };
+            worst = worst.max((g - t).abs());
+        }
     }
-    LowestMode {
-        vector: normalize(mode),
-        value: evals[lowest],
-        actions,
-    }
+    worst
 }
 
 /// Jónsson dimer with Heyden plane rotations.
@@ -822,6 +855,48 @@ mod tests {
         fn apply_hessian(&self, _x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
             Array1::from_iter(self.0.iter().zip(v.iter()).map(|(l, vi)| l * vi))
         }
+    }
+
+    #[test]
+    fn lanczos_identity_stops_on_breakdown_without_nan() {
+        let h = DiagH(Array1::ones(4));
+        let x = Array1::zeros(4);
+        let seed = array![1.0, 0.0, 0.0, 0.0];
+        let (q, alpha, beta, actions) = lanczos_basis(&h, x.view(), seed.view(), 4);
+        assert_eq!(q.len(), 1);
+        assert_eq!(alpha.len(), 1);
+        assert!(beta.is_empty());
+        assert!((alpha[0] - 1.0).abs() < 1e-14);
+        assert!(q[0].iter().all(|v| v.is_finite()));
+        assert_eq!(actions, 1);
+        let mode = lanczos(&h, x.view(), seed.view(), 4);
+        assert!(mode.value.is_finite());
+        assert!((mode.value - 1.0).abs() < 1e-12);
+        assert!(mode.vector.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn lanczos_two_pass_reortho_holds_the_hdr_basis() {
+        let n = 80;
+        let mut lam = Array1::zeros(n);
+        let lo = 1.0_f64.ln();
+        let hi = 1.0e12_f64.ln();
+        for i in 0..n {
+            let t = i as f64 / (n as f64 - 1.0);
+            lam[i] = (lo + t * (hi - lo)).exp();
+        }
+        let h = DiagH(lam);
+        let x = Array1::zeros(n);
+        let seed = Array1::from_iter((0..n).map(|i| 1.0 + i as f64 / (n as f64 - 1.0)));
+        let (q, _alpha, _beta, _actions) = lanczos_basis(&h, x.view(), seed.view(), 55);
+        let err = gram_inf_error(&q);
+        assert!(
+            err < 1e-10,
+            "two-pass full reortho Gram inf-error {err}"
+        );
+        let mode = lanczos(&h, x.view(), seed.view(), 55);
+        assert!((mode.value - 1.0).abs() < 1e-6, "lowest Ritz {}", mode.value);
+        assert!(mode.vector.iter().all(|v| v.is_finite()));
     }
 
     #[test]
