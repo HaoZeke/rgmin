@@ -29,18 +29,10 @@ from pathlib import Path
 import numpy as np
 
 # NicolasBoumal/manopt factory sources dest comments cite.
-_MANOPT_FACTORY_NAMES = (
-    "spherefactory.m",
-    "positivefactory.m",
-    "symmetricfactory.m",
-)
-_MANOPT_FACTORY_HINTS = (
-    Path("manopt/manifolds/sphere/spherefactory.m"),
-    Path("manopt/manifolds/positive/positivefactory.m"),
-    Path("manopt/manifolds/euclidean/symmetricfactory.m"),
-    Path("manifolds/sphere/spherefactory.m"),
-    Path("manifolds/positive/positivefactory.m"),
-    Path("manifolds/euclidean/symmetricfactory.m"),
+_MANOPT_FACTORY_RELS = (
+    "manopt/manifolds/sphere/spherefactory.m",
+    "manopt/manifolds/positive/positivefactory.m",
+    "manopt/manifolds/euclidean/symmetricfactory.m",
 )
 
 
@@ -282,33 +274,45 @@ def _manopt_root() -> Path | None:
     return Path(raw).expanduser().resolve()
 
 
+def _manopt_clone_root(root: Path) -> Path:
+    """Accept the NicolasBoumal/manopt clone or its inner manopt/ directory."""
+    if (root / "manopt" / "manifolds" / "sphere" / "spherefactory.m").is_file():
+        return root
+    if (root / "manifolds" / "sphere" / "spherefactory.m").is_file():
+        return root.parent if root.name == "manopt" else root
+    raise SystemExit(f"MANOPT_ROOT={root} is not a NicolasBoumal/manopt tree")
+
+
 def _locate_manopt_factories(root: Path) -> list[Path]:
-    """Resolve sphere / positive / symmetric factory files under MANOPT_ROOT."""
-    found: dict[str, Path] = {}
-    for hint in _MANOPT_FACTORY_HINTS:
-        path = root / hint
-        if path.is_file():
-            found[path.name] = path
-    if len(found) < len(_MANOPT_FACTORY_NAMES):
-        for name in _MANOPT_FACTORY_NAMES:
-            if name in found:
-                continue
-            hits = sorted(root.rglob(name))
+    """Open sphere / positive / symmetric factory files under MANOPT_ROOT."""
+    clone = _manopt_clone_root(root)
+    found: list[Path] = []
+    for rel in _MANOPT_FACTORY_RELS:
+        path = clone / rel
+        if not path.is_file() and rel.startswith("manopt/"):
+            path = clone / rel[len("manopt/") :]
+        if not path.is_file():
+            hits = sorted(root.rglob(Path(rel).name))
             if hits:
-                found[name] = hits[0]
-    missing = [name for name in _MANOPT_FACTORY_NAMES if name not in found]
-    if missing:
-        raise SystemExit(
-            f"MANOPT_ROOT={root} missing factory files: {', '.join(missing)}"
-        )
-    return [found[name] for name in _MANOPT_FACTORY_NAMES]
+                path = hits[0]
+        if not path.is_file():
+            raise SystemExit(f"MANOPT_ROOT={root} missing {Path(rel).name}")
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "function M =" not in text:
+            raise SystemExit(f"{path} is not a manopt factory")
+        found.append(path)
+    return found
 
 
 def _rel_manopt_file(root: Path, path: Path) -> str:
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return path.name
+    clone = _manopt_clone_root(root)
+    resolved = path.resolve()
+    for base in (clone, root, clone / "manopt"):
+        try:
+            return resolved.relative_to(base.resolve()).as_posix()
+        except ValueError:
+            continue
+    return path.name
 
 
 def _published_factory_cases() -> list[dict]:
@@ -370,6 +374,18 @@ def _published_factory_cases() -> list[dict]:
     return cases
 
 
+def _manopt_tree_runnable(root: Path) -> bool:
+    """True when the tree has importmanopt or tools needed to call factories."""
+    clone = _manopt_clone_root(root)
+    markers = (
+        clone / "importmanopt.m",
+        clone / "manopt" / "importmanopt.m",
+        clone / "manopt" / "tools" / "multisym.m",
+        clone / "tools" / "multisym.m",
+    )
+    return any(path.is_file() for path in markers)
+
+
 def _matlab_or_octave() -> tuple[str, list[str]] | None:
     octave = shutil.which("octave-cli") or shutil.which("octave")
     if octave:
@@ -382,13 +398,13 @@ def _matlab_or_octave() -> tuple[str, list[str]] | None:
 
 def _run_manopt_engine(root: Path, argv: list[str]) -> list[dict] | None:
     """Call factory proj/retr from a manopt tree via MATLAB/Octave."""
+    clone = _manopt_clone_root(root)
     tmp = Path(tempfile.mkdtemp(prefix="rgmin-manopt-gold-"))
     out = tmp / "manopt_gold.txt"
-    script_path = tmp / "mint_manopt.m"
-    root_lit = str(root).replace("'", "''")
+    root_lit = str(clone).replace("'", "''")
     out_lit = str(out).replace("'", "''")
-    script_path.write_text(
-        f"""addpath(genpath('{root_lit}'));
+    script = f"""
+addpath(genpath('{root_lit}'));
 if exist('importmanopt', 'file') == 2
     importmanopt;
 end
@@ -412,11 +428,9 @@ fprintf(fid, '%.17g %.17g %.17g\\n', yp(1), yp(2), yp(3));
 fprintf(fid, '%.17g %.17g %.17g %.17g\\n', sym(1,1), sym(1,2), sym(2,1), sym(2,2));
 fclose(fid);
 """
-    )
-    run_lit = str(script_path).replace("'", "''")
     try:
         proc = subprocess.run(
-            argv + [f"run('{run_lit}')"],
+            argv + [script],
             check=False,
             capture_output=True,
             text=True,
@@ -478,6 +492,7 @@ def mint_manopt_formulas() -> tuple[dict, list[dict]]:
     When MANOPT_ROOT points at a NicolasBoumal/manopt tree, the remint
     records the factory files it used. MATLAB/Octave, if present, runs
     those factories; otherwise the published Python formulas fill in.
+    dest tests load only the frozen JSON and do not require this tree.
     """
     root = _manopt_root()
     if root is None:
@@ -490,8 +505,7 @@ def mint_manopt_formulas() -> tuple[dict, list[dict]]:
         "manopt_files": rels,
         "manopt_exists": all(path.is_file() for path in factories),
     }
-    engine = _matlab_or_octave()
-    cases = None
+    engine = _matlab_or_octave() if _manopt_tree_runnable(root) else None
     if engine is not None:
         name, argv = engine
         cases = _run_manopt_engine(root, argv)
