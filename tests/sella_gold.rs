@@ -1,7 +1,8 @@
 //! Golden-master dest stepper and factory numbers against port sources.
 //!
 //! `tests/sella_manopt_gold.json` is minted from zadorlab/sella
-//! `optimize/stepper.py` plus `hessian_update.py`, and from manopt
+//! `optimize/stepper.py`, `optimize/restricted_step.py`, and
+//! `hessian_update.py`, and from manopt
 //! factory formulas dest comments cite. Remint:
 //! `SELLA_ROOT=/path/to/sella MANOPT_ROOT=/path/to/manopt python3 tests/sella_manopt_gold.py`.
 //! When MANOPT_ROOT is set, remint records the factory files it used
@@ -180,6 +181,18 @@ fn gold_json_was_minted_from_sella_stepper() {
     assert!(
         GOLD.contains("sella/optimize/stepper.py"),
         "gold source must name zadorlab/sella stepper.py"
+    );
+    assert!(
+        GOLD.contains("sella/optimize/restricted_step.py"),
+        "gold source must name zadorlab/sella restricted_step.py"
+    );
+    assert!(
+        GOLD.contains("sella/hessian_update.py"),
+        "gold source must name zadorlab/sella hessian_update.py"
+    );
+    assert!(
+        REMINT.contains("restricted_step.py") && REMINT.contains("RestrictedAtomicStep"),
+        "remint must import RestrictedAtomicStep from restricted_step.py"
     );
     assert!(GOLD.contains("\"kind\": \"rfo\""));
     assert!(GOLD.contains("\"kind\": \"qn\""));

@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Frozen golden-master fixtures for dest Sella steppers (RFO, QN,
   QN-IRC, P-RFO, TS-BFGS, RAS clip) minted from zadorlab/sella
-  `optimize/stepper.py` and `hessian_update.py`, plus manopt
+  `optimize/stepper.py`, `optimize/restricted_step.py`, and
+  `hessian_update.py`, plus manopt
   sphere / positive / symmetric factory formulas
   (`tests/sella_manopt_gold.json`). Remint reads `MANOPT_ROOT` and
   records the factory files it used; dest tests load only the
