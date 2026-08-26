@@ -5,11 +5,15 @@
 //! factory formulas dest comments cite. Remint:
 //! `SELLA_ROOT=/path/to/sella MANOPT_ROOT=/path/to/manopt python3 tests/sella_manopt_gold.py`.
 //! When MANOPT_ROOT is set, remint records the factory files it used
-//! (`spherefactory.m`, `positivefactory.m`, `symmetricfactory.m`).
+//! (`spherefactory.m`, `positivefactory.m`, `symmetricfactory.m`,
+//! `complexcirclefactory.m`, `multinomialfactory.m`,
+//! `centeredmatrixfactory.m`, `sympositivedefinitefactory.m`).
 //! dest tests load the frozen JSON; they do not import Sella or manopt.
 
 use ndarray::{Array1, Array2, array};
-use rgmin::manifold::{Manifold, Positive, Sphere, Symmetric};
+use rgmin::manifold::{
+    CenteredMatrix, ComplexCircle, Manifold, Multinomial, Positive, Spd, Sphere, Symmetric,
+};
 use rgmin::{qn_get_s, qn_irc_get_s, ras_clip, rfo_get_s, ts_bfgs_update};
 
 const GOLD: &str = include_str!("sella_manopt_gold.json");
@@ -192,14 +196,36 @@ fn remint_reads_manopt_root_dest_loads_frozen_json() {
     assert!(
         REMINT.contains("spherefactory.m")
             && REMINT.contains("positivefactory.m")
-            && REMINT.contains("symmetricfactory.m"),
+            && REMINT.contains("symmetricfactory.m")
+            && REMINT.contains("complexcirclefactory.m")
+            && REMINT.contains("multinomialfactory.m")
+            && REMINT.contains("centeredmatrixfactory.m")
+            && REMINT.contains("sympositivedefinitefactory.m"),
         "remint must record manopt factory files"
     );
     assert!(
         GOLD.contains("\"kind\": \"sphere_proj\"")
+            && GOLD.contains("\"kind\": \"sphere_retr\"")
+            && GOLD.contains("\"kind\": \"sphere_transp\"")
+            && GOLD.contains("\"kind\": \"positive_proj\"")
             && GOLD.contains("\"kind\": \"positive_retr\"")
-            && GOLD.contains("\"kind\": \"symmetric_proj\""),
-        "dest tests load frozen JSON factory cases"
+            && GOLD.contains("\"kind\": \"positive_transp\"")
+            && GOLD.contains("\"kind\": \"symmetric_proj\"")
+            && GOLD.contains("\"kind\": \"symmetric_retr\"")
+            && GOLD.contains("\"kind\": \"symmetric_transp\"")
+            && GOLD.contains("\"kind\": \"complexcircle_proj\"")
+            && GOLD.contains("\"kind\": \"complexcircle_retr\"")
+            && GOLD.contains("\"kind\": \"complexcircle_transp\"")
+            && GOLD.contains("\"kind\": \"multinomial_proj\"")
+            && GOLD.contains("\"kind\": \"multinomial_retr\"")
+            && GOLD.contains("\"kind\": \"multinomial_transp\"")
+            && GOLD.contains("\"kind\": \"centered_proj\"")
+            && GOLD.contains("\"kind\": \"centered_retr\"")
+            && GOLD.contains("\"kind\": \"centered_transp\"")
+            && GOLD.contains("\"kind\": \"spd_proj\"")
+            && GOLD.contains("\"kind\": \"spd_retr\"")
+            && GOLD.contains("\"kind\": \"spd_transp\""),
+        "dest tests load frozen JSON factory proj/retr/transp for all seven kinds"
     );
 }
 
@@ -285,32 +311,94 @@ fn dest_ras_clip_matches_sella_max_atom() {
     assert_close(&dest, &json_nums(blob, "s"), name);
 }
 
+fn factory_xv(name: &str) -> (Array1<f64>, Array1<f64>, Vec<f64>) {
+    let blob = case_slice(name);
+    (
+        vecn(&json_nums(blob, "x")),
+        vecn(&json_nums(blob, "v")),
+        json_nums(blob, "s"),
+    )
+}
+
+fn factory_xyv(name: &str) -> (Array1<f64>, Array1<f64>, Array1<f64>, Vec<f64>) {
+    let blob = case_slice(name);
+    (
+        vecn(&json_nums(blob, "x")),
+        vecn(&json_nums(blob, "y")),
+        vecn(&json_nums(blob, "v")),
+        json_nums(blob, "s"),
+    )
+}
+
 #[test]
 fn dest_sphere_matches_manopt_spherefactory() {
-    let proj = case_slice("sphere_proj_north");
-    let x = vecn(&json_nums(proj, "x"));
-    let v = vecn(&json_nums(proj, "v"));
-    assert_close(&Sphere.project(&x, &v), &json_nums(proj, "s"), "sphere_proj");
-    let retr = case_slice("sphere_retr_north");
-    let xr = vecn(&json_nums(retr, "x"));
-    let vr = vecn(&json_nums(retr, "v"));
-    assert_close(&Sphere.retract(&xr, &vr), &json_nums(retr, "s"), "sphere_retr");
+    let (x, v, gold) = factory_xv("sphere_proj_north");
+    assert_close(&Sphere.project(&x, &v), &gold, "sphere_proj");
+    let (xr, vr, goldr) = factory_xv("sphere_retr_north");
+    assert_close(&Sphere.retract(&xr, &vr), &goldr, "sphere_retr");
+    let (xt, yt, vt, goldt) = factory_xyv("sphere_transp_north");
+    assert_close(&Sphere.transport(&xt, &yt, &vt), &goldt, "sphere_transp");
 }
 
 #[test]
 fn dest_positive_matches_manopt_positivefactory() {
-    let blob = case_slice("positive_retr_exp");
-    let x = vecn(&json_nums(blob, "x"));
-    let v = vecn(&json_nums(blob, "v"));
-    let dest = Positive::new(3).retract(&x, &v);
-    assert_close(&dest, &json_nums(blob, "s"), "positive_retr");
+    let m = Positive::new(3);
+    let (x, v, gold) = factory_xv("positive_proj_id");
+    assert_close(&m.project(&x, &v), &gold, "positive_proj");
+    let (xr, vr, goldr) = factory_xv("positive_retr_exp");
+    assert_close(&m.retract(&xr, &vr), &goldr, "positive_retr");
+    let (xt, yt, vt, goldt) = factory_xyv("positive_transp_id");
+    assert_close(&m.transport(&xt, &yt, &vt), &goldt, "positive_transp");
 }
 
 #[test]
 fn dest_symmetric_matches_manopt_symmetricfactory() {
-    let blob = case_slice("symmetric_multisym");
-    let x = vecn(&json_nums(blob, "x"));
-    let v = vecn(&json_nums(blob, "v"));
-    let dest = Symmetric.project(&x, &v);
-    assert_close(&dest, &json_nums(blob, "s"), "symmetric_proj");
+    let (x, v, gold) = factory_xv("symmetric_multisym");
+    assert_close(&Symmetric.project(&x, &v), &gold, "symmetric_proj");
+    let (xr, vr, goldr) = factory_xv("symmetric_retr_plus");
+    assert_close(&Symmetric.retract(&xr, &vr), &goldr, "symmetric_retr");
+    let (xt, yt, vt, goldt) = factory_xyv("symmetric_transp_id");
+    assert_close(&Symmetric.transport(&xt, &yt, &vt), &goldt, "symmetric_transp");
+}
+
+#[test]
+fn dest_complexcircle_matches_manopt_complexcirclefactory() {
+    let m = ComplexCircle::new(2);
+    let (x, v, gold) = factory_xv("complexcircle_proj_pairs");
+    assert_close(&m.project(&x, &v), &gold, "complexcircle_proj");
+    let (xr, vr, goldr) = factory_xv("complexcircle_retr_sign");
+    assert_close(&m.retract(&xr, &vr), &goldr, "complexcircle_retr");
+    let (xt, yt, vt, goldt) = factory_xyv("complexcircle_transp_arrive");
+    assert_close(&m.transport(&xt, &yt, &vt), &goldt, "complexcircle_transp");
+}
+
+#[test]
+fn dest_multinomial_matches_manopt_multinomialfactory() {
+    let (x, v, gold) = factory_xv("multinomial_proj_fisher");
+    assert_close(&Multinomial.project(&x, &v), &gold, "multinomial_proj");
+    let (xr, vr, goldr) = factory_xv("multinomial_retr_exp");
+    assert_close(&Multinomial.retract(&xr, &vr), &goldr, "multinomial_retr");
+    let (xt, yt, vt, goldt) = factory_xyv("multinomial_transp_arrive");
+    assert_close(&Multinomial.transport(&xt, &yt, &vt), &goldt, "multinomial_transp");
+}
+
+#[test]
+fn dest_centered_matches_manopt_centeredmatrixfactory() {
+    let m = CenteredMatrix::new(2, 3, false);
+    let (x, v, gold) = factory_xv("centered_proj_cols");
+    assert_close(&m.project(&x, &v), &gold, "centered_proj");
+    let (xr, vr, goldr) = factory_xv("centered_retr_plus");
+    assert_close(&m.retract(&xr, &vr), &goldr, "centered_retr");
+    let (xt, yt, vt, goldt) = factory_xyv("centered_transp_id");
+    assert_close(&m.transport(&xt, &yt, &vt), &goldt, "centered_transp");
+}
+
+#[test]
+fn dest_spd_matches_manopt_sympositivedefinitefactory() {
+    let (x, v, gold) = factory_xv("spd_proj_symm");
+    assert_close(&Spd.project(&x, &v), &gold, "spd_proj");
+    let (xr, vr, goldr) = factory_xv("spd_retr_second");
+    assert_close(&Spd.retract(&xr, &vr), &goldr, "spd_retr");
+    let (xt, yt, vt, goldt) = factory_xyv("spd_transp_id");
+    assert_close(&Spd.transport(&xt, &yt, &vt), &goldt, "spd_transp");
 }
