@@ -605,33 +605,34 @@ fn c_abi_set_highs_solver_is_closed() {
     assert!(!session.is_null());
     assert_eq!(unsafe { rgmin_solver_set_highs(session, 1) }, 0);
     assert_eq!(
-        unsafe { rgmin_solver_set_highs_solver(session, rgmin_highs_solver_t::RGMIN_HIGHS_IPM) },
+        unsafe {
+            rgmin_solver_set_highs_solver(session, rgmin_highs_solver_t::RGMIN_HIGHS_IPM as i32)
+        },
         0
     );
     assert_eq!(
-        unsafe { rgmin_solver_set_highs_solver(session, rgmin_highs_solver_t::RGMIN_HIGHS_IPX) },
+        unsafe {
+            rgmin_solver_set_highs_solver(session, rgmin_highs_solver_t::RGMIN_HIGHS_IPX as i32)
+        },
         0
     );
     assert_eq!(
         unsafe {
             rgmin_solver_set_highs_crossover(
                 session,
-                rgmin_highs_crossover_t::RGMIN_HIGHS_CROSSOVER_OFF,
+                rgmin_highs_crossover_t::RGMIN_HIGHS_CROSSOVER_OFF as i32,
             )
         },
         0
     );
-    let unknown = unsafe { std::mem::transmute::<i32, rgmin_highs_solver_t>(99) };
-    assert_eq!(unsafe { rgmin_solver_set_highs_solver(session, unknown) }, 1);
-    let unknown_x = unsafe { std::mem::transmute::<i32, rgmin_highs_crossover_t>(9) };
-    assert_eq!(
-        unsafe { rgmin_solver_set_highs_crossover(session, unknown_x) },
-        1
-    );
+    assert_eq!(unsafe { rgmin_solver_set_highs_solver(session, 99) }, 1);
+    assert_eq!(unsafe { rgmin_solver_set_highs_crossover(session, 9) }, 1);
     unsafe { rgmin_solver_free(session) };
     let null = std::ptr::null_mut();
     assert_eq!(
-        unsafe { rgmin_solver_set_highs_solver(null, rgmin_highs_solver_t::RGMIN_HIGHS_IPM) },
+        unsafe {
+            rgmin_solver_set_highs_solver(null, rgmin_highs_solver_t::RGMIN_HIGHS_IPM as i32)
+        },
         1
     );
 }

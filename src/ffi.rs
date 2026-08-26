@@ -1537,13 +1537,13 @@ pub unsafe extern "C" fn rgmin_solver_clear_equalities(solver: *mut rgmin_solver
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_highs_solver(
     solver: *mut rgmin_solver_t,
-    kind: rgmin_highs_solver_t,
+    kind: i32,
 ) -> i32 {
     if solver.is_null() {
         set_last_error("rgmin_solver_set_highs_solver: null solver");
         return 1;
     }
-    let Some(tok) = crate::HighsSolverKind::from_ordinal(kind as i32) else {
+    let Some(tok) = crate::HighsSolverKind::from_ordinal(kind) else {
         set_last_error("rgmin_solver_set_highs_solver: unknown token");
         return 1;
     };
@@ -1564,13 +1564,13 @@ pub unsafe extern "C" fn rgmin_solver_set_highs_solver(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_highs_crossover(
     solver: *mut rgmin_solver_t,
-    kind: rgmin_highs_crossover_t,
+    kind: i32,
 ) -> i32 {
     if solver.is_null() {
         set_last_error("rgmin_solver_set_highs_crossover: null solver");
         return 1;
     }
-    let Some(tok) = crate::HighsCrossover::from_ordinal(kind as i32) else {
+    let Some(tok) = crate::HighsCrossover::from_ordinal(kind) else {
         set_last_error("rgmin_solver_set_highs_crossover: unknown token");
         return 1;
     };
