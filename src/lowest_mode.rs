@@ -314,6 +314,10 @@ fn dimer<H: ApplyHessian + ?Sized>(
     seed: ArrayView1<f64>,
     params: &EigenParams,
 ) -> LowestMode {
+    // Jónsson dimer in the (n, F') plane. One Rayleigh-Ritz angle in
+    // that plane needs H n and H θ (two actions). The first-order
+    // |C| step (one action, 20 outer) never trips the residual
+    // break and is slower than the in-tree Fourier one-step.
     let mut nvec = normalize(seed.to_owned());
     let max_rot = if params.max_iter == 0 {
         20
@@ -334,12 +338,23 @@ fn dimer<H: ApplyHessian + ?Sized>(
             break;
         }
         let theta = &frot / frn;
-        let dcdphi = 2.0 * dot(hn.view(), theta.view());
-        let phi = -0.5 * dcdphi.atan2(2.0 * curvature.abs());
-        let (c, s) = (phi.cos(), phi.sin());
-        let mut next = nvec.mapv(|v| v * c);
-        axpy(s, theta.view(), &mut next);
+        let ht = h.apply_hessian(x, theta.view());
+        actions += 1;
+        let b = dot(nvec.view(), ht.view());
+        let c_th = dot(theta.view(), ht.view());
+        let phi = 0.5 * (2.0 * b).atan2(curvature - c_th);
+        let (co, si) = (phi.cos(), phi.sin());
+        let c1 = co * co * curvature + 2.0 * co * si * b + si * si * c_th;
+        let c2 = si * si * curvature - 2.0 * co * si * b + co * co * c_th;
+        let (cuse, suse, cval) = if c1 <= c2 {
+            (co, si, c1)
+        } else {
+            (-si, co, c2)
+        };
+        let mut next = nvec.mapv(|v| v * cuse);
+        axpy(suse, theta.view(), &mut next);
         nvec = normalize(next);
+        curvature = cval;
     }
     LowestMode {
         vector: nvec,
@@ -803,6 +818,32 @@ mod tests {
     }
 
     #[test]
+    fn dimer_in_plane_rr_finishes_in_two_actions_on_a_2d_well() {
+        let h = gapped_diag(2);
+        let x = Array1::zeros(2);
+        let seed = array![0.2, 0.7];
+        let mode = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Dimer,
+                max_iter: 20,
+                tol: 1e-8,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap();
+        assert!(mode.value < 0.0, "C {}", mode.value);
+        assert!(mode.vector[0].abs() > 0.999);
+        assert!(
+            mode.actions <= 4,
+            "one plane, two Hessian actions, got {}",
+            mode.actions
+        );
+    }
+
+    #[test]
     fn jonsson_heyden_dimer_recovers_the_gapped_mode() {
         let h = gapped_diag(6);
         let x = Array1::zeros(6);
@@ -819,6 +860,11 @@ mod tests {
             mode.vector[0].abs() > 0.9,
             "dimer mode should lie on x, got {:?}",
             mode.vector
+        );
+        assert!(
+            mode.actions <= 4,
+            "in-plane RR should finish in two actions per plane, got {}",
+            mode.actions
         );
         assert!(EigensolverKind::Dimer.is_linked());
         assert_ne!(
