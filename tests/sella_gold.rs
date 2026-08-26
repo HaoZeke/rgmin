@@ -1,16 +1,19 @@
 //! Golden-master dest stepper and factory numbers against port sources.
 //!
 //! `tests/sella_manopt_gold.json` is minted from zadorlab/sella
-//! `optimize/stepper.py` plus `hessian_update.py`, and from the
-//! published manopt factory formulas dest comments cite. Remint:
-//! `SELLA_ROOT=/path/to/sella python3 tests/sella_manopt_gold.py`.
-//! dest tests load the frozen JSON; they do not import Sella.
+//! `optimize/stepper.py` plus `hessian_update.py`, and from manopt
+//! factory formulas dest comments cite. Remint:
+//! `SELLA_ROOT=/path/to/sella MANOPT_ROOT=/path/to/manopt python3 tests/sella_manopt_gold.py`.
+//! When MANOPT_ROOT is set, remint records the factory files it used
+//! (`spherefactory.m`, `positivefactory.m`, `symmetricfactory.m`).
+//! dest tests load the frozen JSON; they do not import Sella or manopt.
 
 use ndarray::{Array1, Array2, array};
 use rgmin::manifold::{Manifold, Positive, Sphere, Symmetric};
 use rgmin::{qn_get_s, qn_irc_get_s, ras_clip, rfo_get_s, ts_bfgs_update};
 
 const GOLD: &str = include_str!("sella_manopt_gold.json");
+const REMINT: &str = include_str!("sella_manopt_gold.py");
 const TOL: f64 = 1e-10;
 
 fn case_slice(name: &str) -> &'static str {
@@ -178,6 +181,26 @@ fn gold_json_was_minted_from_sella_stepper() {
     assert!(GOLD.contains("\"kind\": \"qn\""));
     assert!(GOLD.contains("\"kind\": \"prfo\""));
     assert!(GOLD.contains("\"kind\": \"ts_bfgs\""));
+}
+
+#[test]
+fn remint_reads_manopt_root_dest_loads_frozen_json() {
+    assert!(
+        REMINT.contains("os.environ.get(\"MANOPT_ROOT\""),
+        "remint must read MANOPT_ROOT"
+    );
+    assert!(
+        REMINT.contains("spherefactory.m")
+            && REMINT.contains("positivefactory.m")
+            && REMINT.contains("symmetricfactory.m"),
+        "remint must record manopt factory files"
+    );
+    assert!(
+        GOLD.contains("\"kind\": \"sphere_proj\"")
+            && GOLD.contains("\"kind\": \"positive_retr\"")
+            && GOLD.contains("\"kind\": \"symmetric_proj\""),
+        "dest tests load frozen JSON factory cases"
+    );
 }
 
 #[test]
