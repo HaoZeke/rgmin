@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Frozen golden-master fixtures for dest Sella steppers (RFO, QN,
+  QN-IRC, P-RFO, TS-BFGS, RAS clip) minted from zadorlab/sella
+  `optimize/stepper.py` and `hessian_update.py`, plus manopt
+  sphere / positive / symmetric factory formulas
+  (`tests/sella_manopt_gold.json`).
 - HiGHS user callback (`rgmin_solver_set_highs_callback`) for
   logging and IPM interrupt. Constrained dest QPs are checked
   against SciPy `trust-constr` (and `linprog` `highs-ipm` on LPs).
