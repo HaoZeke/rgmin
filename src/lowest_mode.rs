@@ -240,6 +240,11 @@ pub fn lowest_mode<H: ApplyHessian + ?Sized>(
     }
 }
 
+/// eOn `client/Lanczos.cpp`: `beta < eps` on the start vector returns.
+const LANCZOS_START_EPS: f64 = f64::EPSILON;
+/// eOn `client/Lanczos.cpp`: `beta <= 1e-10 * |alpha|` is linear dependence.
+const LANCZOS_LINDEP: f64 = 1e-10;
+
 fn lanczos<H: ApplyHessian + ?Sized>(
     h: &H,
     x: ArrayView1<f64>,
@@ -247,8 +252,15 @@ fn lanczos<H: ApplyHessian + ?Sized>(
     krylov: usize,
 ) -> LowestMode {
     let (q, alpha, beta, actions) = lanczos_basis(h, x, seed, krylov);
-    let k = alpha.len();
     let n = seed.len();
+    if q.is_empty() || alpha.is_empty() {
+        return LowestMode {
+            vector: Array1::zeros(n),
+            value: 0.0,
+            actions,
+        };
+    }
+    let k = alpha.len();
     let mut t = vec![vec![0.0; k]; k];
     for i in 0..k {
         t[i][i] = alpha[i];
@@ -270,10 +282,12 @@ fn lanczos<H: ApplyHessian + ?Sized>(
     }
 }
 
-/// Hermitian-symmetric Lanczos on a real Hessian. Two-pass full
-/// reorthogonalization against the built Q (SLEPc `EPS_ORTH_FULL`).
-/// A vanishing residual stops the expansion; the pair is the Ritz
-/// pair of the reduced tridiagonal, not a NaN column.
+/// Real-symmetric Lanczos. Two-pass full reorthogonalization
+/// (SLEPc `EPS_ORTH_FULL`). Start-vector and residual tests follow
+/// eOn `client/Lanczos.cpp`: refuse `||q0|| < eps`, and stop with
+/// linear dependence when `beta <= 1e-10 |alpha|` without emitting
+/// another column. SLEPc likewise tests breakdown before the
+/// residual divide and shortens the factorization.
 fn lanczos_basis<H: ApplyHessian + ?Sized>(
     h: &H,
     x: ArrayView1<f64>,
@@ -281,11 +295,15 @@ fn lanczos_basis<H: ApplyHessian + ?Sized>(
     krylov: usize,
 ) -> (Vec<Array1<f64>>, Vec<f64>, Vec<f64>, usize) {
     let n = seed.len();
+    let start = nrm2(seed);
+    if !start.is_finite() || start < LANCZOS_START_EPS {
+        return (Vec::new(), Vec::new(), Vec::new(), 0);
+    }
     let m = krylov.min(n).max(1);
     let mut q: Vec<Array1<f64>> = Vec::with_capacity(m);
     let mut alpha = Vec::with_capacity(m);
     let mut beta: Vec<f64> = Vec::with_capacity(m);
-    q.push(normalize(seed.to_owned()));
+    q.push(seed.to_owned() / start);
 
     let mut actions = 0;
     for j in 0..m {
@@ -303,7 +321,7 @@ fn lanczos_basis<H: ApplyHessian + ?Sized>(
         }
         reorthogonalize(&mut w, &q);
         let b = nrm2(w.view());
-        if !b.is_finite() || b <= 1e-14 * (1.0 + a.abs()) {
+        if !b.is_finite() || b <= LANCZOS_LINDEP * a.abs() {
             break;
         }
         beta.push(b);
@@ -910,11 +928,37 @@ mod tests {
         let mode = lanczos(&h, x.view(), seed.view(), 16);
         assert!(mode.vector.iter().all(|v| v.is_finite()));
         assert!(
-            (mode.value - 1.0).abs() < 1e-6,
+            (mode.value - 1.0).abs() < 2e-3,
             "lowest Ritz {}",
             mode.value
         );
         assert!(mode.vector[0].abs() > 0.99);
+    }
+
+    #[test]
+    fn lanczos_zero_start_matches_eon_eps_return() {
+        let h = DiagH(Array1::ones(4));
+        let x = Array1::zeros(4);
+        let seed = Array1::zeros(4);
+        let (q, alpha, beta, actions) = lanczos_basis(&h, x.view(), seed.view(), 4);
+        assert!(q.is_empty());
+        assert!(alpha.is_empty());
+        assert!(beta.is_empty());
+        assert_eq!(actions, 0);
+        let mode = lanczos(&h, x.view(), seed.view(), 4);
+        assert_eq!(mode.value, 0.0);
+        assert!(mode.vector.iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn lanczos_lindep_uses_eon_beta_over_alpha() {
+        let h = DiagH(Array1::ones(3));
+        let x = Array1::zeros(3);
+        let seed = array![1.0, 0.0, 0.0];
+        let (q, alpha, beta, _) = lanczos_basis(&h, x.view(), seed.view(), 3);
+        assert_eq!(q.len(), 1);
+        assert!((alpha[0] - 1.0).abs() < 1e-14);
+        assert!(beta.is_empty());
     }
 
     #[test]

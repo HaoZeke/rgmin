@@ -10,9 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Lanczos two-pass full reorthogonalization of the built Q
-  (SLEPc `EPS_ORTH_FULL`). A vanishing residual stops the
-  Krylov expansion; the pair is the reduced tridiagonal Ritz
-  pair, not a NaN column.
+  (SLEPc `EPS_ORTH_FULL`). Start-vector `||q0|| < eps` returns
+  without a column (eOn). Residual `beta <= 1e-10 |alpha|` is
+  linear dependence and does not emit another column (eOn /
+  SLEPc breakdown-before-divide).
 - L-BFGS `replace_newest` keeps the stored pair when the
   replacement fails the curvature test. Empty-memory
   `Accept::None` scales the first two-loop step by `istep`.
