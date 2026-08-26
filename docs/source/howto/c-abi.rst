@@ -76,8 +76,8 @@ C++
 
     #include <xts/optimize.hpp>
 
-    xts::optimize::Control ctrl;
-    auto report = xts::optimize::minimize(eval, grad, user, x, ctrl,
+    xts::optimize::OptimizeControl ctrl;
+    auto report = xts::optimize::optimize(eval, grad, user, x, ctrl,
                                           xts::optimize::Method::Lbfgs);
 
 xtensor callers include ``xts/xtensor.hpp``, which adapts ``xt::xarray`` to
