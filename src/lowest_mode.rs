@@ -228,7 +228,7 @@ pub trait ApplyPreconditioner {
 
 impl ApplyPreconditioner for crate::hvp::IdentityPrecond {
     fn apply_preconditioner(&self, _x: ArrayView1<f64>, r: ArrayView1<f64>) -> Array1<f64> {
-        self.solve(r)
+        r.to_owned()
     }
     fn kind(&self) -> PreconditionerKind {
         PreconditionerKind::None
