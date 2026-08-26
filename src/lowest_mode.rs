@@ -140,6 +140,10 @@ pub struct EigenParams {
     pub max_iter: usize,
     /// Residual tolerance. Non-positive selects `1e-8`.
     pub tol: f64,
+    /// ChASE filter degree. 0 selects 20 with per-vector optimization.
+    pub degree: usize,
+    /// ChASE search-space extra (`nex`). 0 selects `max(8, ceil(0.2 * nev))`.
+    pub extra: usize,
 }
 
 impl Default for EigenParams {
@@ -150,6 +154,8 @@ impl Default for EigenParams {
             krylov: 0,
             max_iter: 0,
             tol: 0.0,
+            degree: 0,
+            extra: 0,
         }
     }
 }
@@ -175,6 +181,34 @@ impl EigenParams {
     fn iterations(self, n: usize) -> usize {
         if self.max_iter == 0 {
             n.max(8)
+        } else {
+            self.max_iter
+        }
+    }
+
+    /// ChASE initial degree. 0 selects 20.
+    pub fn chase_degree(self) -> usize {
+        if self.degree == 0 {
+            20
+        } else {
+            self.degree
+        }
+    }
+
+    /// ChASE `nex`. 0 selects `max(8, ceil(0.2 * nev))`, never 0.2 at `nev = 1`.
+    pub fn chase_extra(self) -> usize {
+        if self.extra == 0 {
+            let frac = (0.2 * self.nev.max(1) as f64).ceil() as usize;
+            frac.max(8)
+        } else {
+            self.extra
+        }
+    }
+
+    /// ChASE outer iterations. 0 selects 25, not `n`.
+    pub fn chase_iterations(self) -> usize {
+        if self.max_iter == 0 {
+            25
         } else {
             self.max_iter
         }
@@ -1245,6 +1279,42 @@ mod tests {
         assert_eq!(DENSE_EIGEN_CUTOFF, 512);
     }
 
+    #[test]
+    fn chase_degree_and_extra_zero_select_library_defaults() {
+        let kick = EigenParams {
+            kind: EigensolverKind::Chase,
+            nev: 1,
+            ..EigenParams::default()
+        };
+        assert_eq!(kick.chase_degree(), 20);
+        assert_eq!(kick.chase_extra(), 8);
+        assert_eq!(kick.chase_iterations(), 25);
+        assert_ne!(kick.chase_extra(), kick.krylov_dim(32));
+        let wide = EigenParams {
+            kind: EigensolverKind::Chase,
+            nev: 100,
+            ..EigenParams::default()
+        };
+        assert_eq!(wide.chase_extra(), 20);
+        let set = EigenParams {
+            kind: EigensolverKind::Chase,
+            nev: 1,
+            degree: 12,
+            extra: 4,
+            max_iter: 7,
+            ..EigenParams::default()
+        };
+        assert_eq!(set.chase_degree(), 12);
+        assert_eq!(set.chase_extra(), 4);
+        assert_eq!(set.chase_iterations(), 7);
+        let schema = include_str!("../schema/eigen.capnp");
+        assert!(schema.contains("degree @5"));
+        assert!(schema.contains("extra @6"));
+        assert!(!schema.contains("chase_set"));
+        assert!(!EigensolverKind::Chase.is_linked());
+        assert!(!EigensolverKind::Chase.is_matrix_free());
+    }
+
     struct DiagH(Array1<f64>);
     impl ApplyHessian for DiagH {
         fn apply_hessian(&self, _x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
@@ -1541,6 +1611,7 @@ mod tests {
                 max_iter: 16,
                 tol: 1e-6,
                 nev: 1,
+                ..EigenParams::default()
             };
             let mode = lowest_mode(&h, x.view(), seed.view(), &params).unwrap();
             assert!(mode.value < 0.0, "{:?} curvature {}", kind, mode.value);

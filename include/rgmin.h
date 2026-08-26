@@ -433,6 +433,8 @@ typedef struct rgmin_eigen_params_t {
     uint32_t krylov;
     uint32_t max_iter;
     double tol;
+    uint32_t degree;
+    uint32_t extra;
 } rgmin_eigen_params_t;
 
 typedef struct rgmin_lowest_mode_t {

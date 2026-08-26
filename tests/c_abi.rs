@@ -733,6 +733,8 @@ fn lowest_eigenpair_lanczos_recovers_gapped_mode() {
         krylov: 6,
         max_iter: 0,
         tol: 0.0,
+        degree: 0,
+        extra: 0,
     };
     let mut out = rgmin_lowest_mode_t {
         value: 0.0,
@@ -774,6 +776,8 @@ fn lowest_eigenpair_elpa_is_unavailable() {
         krylov: 0,
         max_iter: 0,
         tol: 0.0,
+        degree: 0,
+        extra: 0,
     };
     let mut out = rgmin_lowest_mode_t {
         value: 0.0,
@@ -815,6 +819,8 @@ fn lowest_eigenpair_slepc_unbuilt_is_unavailable() {
         krylov: 0,
         max_iter: 0,
         tol: 0.0,
+        degree: 0,
+        extra: 0,
     };
     let mut out = rgmin_lowest_mode_t {
         value: 0.0,

@@ -37,4 +37,8 @@ struct EigenParams {
   maxIter @3 :UInt32 = 0;
   # Residual tolerance. 0 selects 1e-8.
   tol @4 :Float64 = 0;
+  # ChASE filter degree. 0 selects 20 with per-vector optimization.
+  degree @5 :UInt32 = 0;
+  # ChASE search-space extra (nex). 0 selects max(8, ceil(0.2 * nev)).
+  extra @6 :UInt32 = 0;
 }

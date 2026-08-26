@@ -280,6 +280,10 @@ pub struct rgmin_eigen_params_t {
     pub max_iter: u32,
     /// Residual tolerance. Non-positive selects `1e-8`.
     pub tol: f64,
+    /// ChASE filter degree. 0 selects 20 with per-vector optimization.
+    pub degree: u32,
+    /// ChASE search-space extra. 0 selects `max(8, ceil(0.2 * nev))`.
+    pub extra: u32,
 }
 
 /// Result of [`rgmin_lowest_eigenpair`]. The vector is written to
@@ -446,6 +450,8 @@ fn eigen_params_from_c(raw: *const rgmin_eigen_params_t) -> Result<EigenParams, 
         krylov: p.krylov as usize,
         max_iter: p.max_iter as usize,
         tol: p.tol,
+        degree: p.degree as usize,
+        extra: p.extra as usize,
     })
 }
 
@@ -2328,14 +2334,16 @@ mod conjugacy_abi_tests {
     }
 
     #[test]
-    fn eigen_params_layout_is_i32_then_three_u32_then_f64() {
+    fn eigen_params_layout_is_32_bytes() {
         assert_eq!(size_of::<rgmin_eigen_kind_t>(), 4);
-        assert_eq!(size_of::<rgmin_eigen_params_t>(), 24);
+        assert_eq!(size_of::<rgmin_eigen_params_t>(), 32);
         assert_eq!(offset_of!(rgmin_eigen_params_t, kind), 0);
         assert_eq!(offset_of!(rgmin_eigen_params_t, nev), 4);
         assert_eq!(offset_of!(rgmin_eigen_params_t, krylov), 8);
         assert_eq!(offset_of!(rgmin_eigen_params_t, max_iter), 12);
         assert_eq!(offset_of!(rgmin_eigen_params_t, tol), 16);
+        assert_eq!(offset_of!(rgmin_eigen_params_t, degree), 24);
+        assert_eq!(offset_of!(rgmin_eigen_params_t, extra), 28);
         assert_eq!(rgmin_eigen_kind_t::RGMIN_EIGEN_LANCZOS as i32, 0);
         assert_eq!(rgmin_eigen_kind_t::RGMIN_EIGEN_EIGENEXA as i32, 13);
         assert_eq!(rgmin_eigen_kind_t::RGMIN_EIGEN_DIMER as i32, 14);

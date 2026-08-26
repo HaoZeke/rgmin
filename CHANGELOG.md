@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `EigenParams.degree` / `extra` (schema `@5` / `@6`, C layout
+  32 bytes). ChASE zeros map to degree 20 and
+  `extra = max(8, ceil(0.2 * nev))`. `max_iter == 0` is 25 on
+  the Chase arm, not `n`. No `chase_set` strings.
 - ELPA / PDSYEVR window is range I: `il = 1`, `iu = nev`. A
   `nev = 1` kick gathers `Z` as `n x 1`, not `n x n`. Full
   `heev` only when `nev == n`.
