@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- L-BFGS `replace_newest` keeps the stored pair when the
+  replacement fails the curvature test. Empty-memory
+  `Accept::None` scales the first two-loop step by `istep`.
 - Frozen golden-master fixtures for dest Sella steppers (RFO, QN,
   QN-IRC, P-RFO, TS-BFGS, RAS clip) minted from zadorlab/sella
   `optimize/stepper.py`, `optimize/restricted_step.py`, and

@@ -595,6 +595,9 @@ fn c_abi_solver_step_keeps_lbfgs_history() {
     };
     let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_LBFGS, &ctrl, 2) };
     assert!(!session.is_null());
+    // Rosenbrock minimize. Default Accept::None is the NEB one-oracle
+    // clip; dest session.rs sets Energy for the same 80-step check.
+    unsafe { rgmin_solver_set_accept(session, rgmin_accept_t::RGMIN_ACCEPT_ENERGY) };
     let mut out = rgmin_report_t {
         value: 0.0,
         steps: 0,
@@ -623,6 +626,7 @@ fn c_abi_solver_step_keeps_lbfgs_history() {
 
     for _ in 0..80 {
         let one = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_LBFGS, &ctrl, 2) };
+        unsafe { rgmin_solver_set_accept(one, rgmin_accept_t::RGMIN_ACCEPT_ENERGY) };
         let xt = unsafe { rgmin_tensor_borrow_cpu_f64(cold.as_mut_ptr(), 2) };
         let st = unsafe {
             rgmin_solver_step(

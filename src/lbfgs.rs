@@ -204,13 +204,17 @@ impl Lbfgs {
     }
 
     /// Drop the newest pair, then push. Used after a manifold retract.
+    /// A rejected replacement leaves the stored newest pair in place.
     pub(crate) fn replace_newest(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) {
+        if !self.pair_admissible(&s, &y, gnorm) {
+            return;
+        }
         let _ = self.memory.pop();
         self.push_pair(s, y, gnorm);
     }
 
-    pub(crate) fn push_pair(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) {
-        let sy = s.dot(&y);
+    fn pair_admissible(&self, s: &Array1<f64>, y: &Array1<f64>, gnorm: Option<f64>) -> bool {
+        let sy = s.dot(y);
         let sn = s.iter().map(|v| v * v).sum::<f64>().sqrt();
         let yn = y.iter().map(|v| v * v).sum::<f64>().sqrt();
         let ss = sn * sn;
@@ -218,15 +222,18 @@ impl Lbfgs {
             if let Some(g) = gnorm {
                 let thresh = self.cautious_eps * ss * g.max(1.0e-30).powf(self.cautious_alpha);
                 if sy < thresh {
-                    return;
+                    return false;
                 }
             }
         }
-        // Relative curvature: a tiny accepted trust step makes the
-        // compact Hessian indefinite and HiGHS's QP solver does not return.
-        if !sy.is_finite() || sy <= 1e-8 * sn * yn {
+        sy.is_finite() && sy > 1e-8 * sn * yn
+    }
+
+    pub(crate) fn push_pair(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) {
+        if !self.pair_admissible(&s, &y, gnorm) {
             return;
         }
+        let sy = s.dot(&y);
         self.memory.push(Pair {
             s,
             y,
@@ -637,5 +644,22 @@ impl Lbfgs {
             self.push(&*pos - &old, &*grad - &gold);
         }
         *istep = next_istep(lsstep, control);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::array;
+
+    #[test]
+    fn replace_newest_keeps_pair_when_replacement_has_no_curvature() {
+        let mut solver = Lbfgs::with_capacity(4);
+        solver.push(array![1.0, 0.0], array![1.0, 0.0]);
+        assert_eq!(solver.len(), 1);
+        solver.replace_newest(array![1.0, 0.0], array![-1.0, 0.0], None);
+        assert_eq!(solver.len(), 1);
+        let d = solver.direction(array![1.0, 0.0].view());
+        assert!(d[0] < 0.0, "kept pair must still invert: {d:?}");
     }
 }

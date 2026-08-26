@@ -913,7 +913,10 @@ impl Solver {
                 // step_objective (nval < value) never moves.
                 // Accept::Energy: Wolfe line search in step_objective.
                 if self.accept == Accept::None {
-                    let dir = solver.search_direction(x.view(), grad.view());
+                    let mut dir = solver.search_direction(x.view(), grad.view());
+                    if solver.is_empty() {
+                        dir.mapv_inplace(|v| v * self.istep);
+                    }
                     let old = x.clone();
                     let gold = grad.clone();
                     let (npos, nval, ngrad, moved) = accept_step(
