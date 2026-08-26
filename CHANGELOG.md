@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Closed ELPA stage tokens: kind `Elpa` is 1-stage (`solver = 1`),
+  kind `Elpa2` is 2-stage (`solver = 2`). `ElpaParams.nblk` is a
+  `u32` (0 selects 16). No `elpa_set` strings on the public ABI,
+  no `ELPA_DEFAULT_*` env, no `Elpa2Cuda` / `Elpa2Hip` kinds.
 - Assembled-H entry `lowest_mode_dense` is the only path that
   would call ELPA / ELPA2 / SLATE. `lowest_mode` on `ApplyHessian`
   stays `Error::EigenUnavailable` for those kinds and does not

@@ -57,6 +57,8 @@ pub mod slepc_kind;
 pub mod eigenexa_kind;
 /// Closed DLA-Future partial-spectrum window.
 pub mod dlaf_kind;
+/// Closed ELPA stage and `nblk`. Compile without a linked ELPA.
+pub mod elpa_kind;
 /// Feature-gated SLEPc EPS (MatShell + typed EPSSet/STSet).
 #[cfg(feature = "slepc")]
 mod slepc_eps;
@@ -104,6 +106,7 @@ pub use lowest_mode::{
 pub use slepc_kind::{SlepcParams, SlepcPmat, SlepcStKind};
 pub use eigenexa_kind::{EigenExaAlgo, EigenExaParams};
 pub use dlaf_kind::DlaFutureParams;
+pub use elpa_kind::{elpa_config, ElpaParams, ElpaStage};
 pub use hvp::{
     FdHvp, HessianVector, HvpOracle, IdentityPrecond, NystromPrecond, Preconditioner,
     minimize_newton_cg, steihaug_cg, steihaug_pcg,
