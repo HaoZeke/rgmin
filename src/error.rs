@@ -61,6 +61,12 @@ pub enum Error {
         /// What the typed EPS/ST call failed to produce.
         what: &'static str,
     },
+    /// Linked PRIMME `dprimme` rejected the typed configuration or the pair.
+    #[error("PRIMME: {what}")]
+    Primme {
+        /// What the typed `primme_params` / `dprimme` call failed to produce.
+        what: &'static str,
+    },
 }
 
 /// Result alias for this crate.

@@ -44,7 +44,9 @@ pub enum rgmin_status_t {
 fn status_from_error(e: &Error) -> rgmin_status_t {
     set_last_error(&e.to_string());
     match e {
-        Error::Oracle { .. } | Error::Slepc { .. } => rgmin_status_t::RGMIN_INTERNAL_ERROR,
+        Error::Oracle { .. } | Error::Slepc { .. } | Error::Primme { .. } => {
+            rgmin_status_t::RGMIN_INTERNAL_ERROR
+        }
         Error::EigenUnavailable { .. } => rgmin_status_t::RGMIN_UNAVAILABLE,
         _ => rgmin_status_t::RGMIN_INVALID_PARAMETER,
     }

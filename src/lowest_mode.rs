@@ -4,7 +4,8 @@
 //! not a full ELPA / SLATE spectrum. Dispatch is a closed
 //! [`EigensolverKind`]: Lanczos, Rayleigh-Ritz, Jacobi-Davidson,
 //! LOBPCG, and the Jónsson dimer with Heyden plane rotations run
-//! here; SLEPc EPS runs when the `slepc` feature links PETSc/SLEPc;
+//! here; PRIMME `dprimme` runs when the `primme` feature links
+//! libprimme; SLEPc EPS runs when the `slepc` feature links PETSc/SLEPc;
 //! every other named backend fail-closes with
 //! [`Error::EigenUnavailable`]. Integers match `schema/eigen.capnp`.
 
@@ -32,7 +33,7 @@ pub enum EigensolverKind {
     JacobiDavidson = 2,
     /// LOBPCG, nev = 1 (Knyazev 2001).
     Lobpcg = 3,
-    /// PRIMME. Not linked.
+    /// PRIMME `dprimme`. Linked with the `primme` feature when libprimme is present.
     Primme = 4,
     /// SLEPc EPS. Linked with the `slepc` feature when PETSc/SLEPc are present.
     Slepc = 5,
@@ -83,7 +84,8 @@ impl EigensolverKind {
         matches!(
             self,
             Self::Lanczos | Self::RayleighRitz | Self::JacobiDavidson | Self::Lobpcg | Self::Dimer
-        ) || (cfg!(rgmin_has_slepc) && matches!(self, Self::Slepc))
+        ) || (cfg!(rgmin_has_primme) && matches!(self, Self::Primme))
+            || (cfg!(rgmin_has_slepc) && matches!(self, Self::Slepc))
     }
 
     /// Works from Hessian actions, no assembled matrix.
@@ -217,8 +219,9 @@ impl PreconditionerKind {
     }
 }
 
-/// `T r` at the current point. LOBPCG and Jacobi-Davidson apply this
-/// to the residual. Lanczos, dimer, and Rayleigh-Ritz ignore it.
+/// `T r` at the current point. LOBPCG, Jacobi-Davidson, and PRIMME
+/// apply this to the residual. Lanczos, dimer, and Rayleigh-Ritz
+/// ignore it.
 pub trait ApplyPreconditioner {
     /// Left preconditioner `T r`.
     fn apply_preconditioner(&self, x: ArrayView1<f64>, r: ArrayView1<f64>) -> Array1<f64>;
@@ -396,7 +399,54 @@ pub fn lowest_mode_slepc<H: ApplyHessian + ?Sized>(
     }
 }
 
-/// [`lowest_mode`] with a typed left preconditioner on LOBPCG and JD.
+/// PRIMME `dprimme` arm of [`lowest_mode`]. `params.kind` is ignored.
+///
+/// Unbuilt `primme` (or the feature on without libprimme) returns
+/// [`Error::EigenUnavailable`]. `T` is `primme.applyPreconditioner`
+/// when `t.kind()` is not [`PreconditionerKind::None`].
+pub fn lowest_mode_primme<H, P>(
+    h: &H,
+    x: ArrayView1<f64>,
+    seed: ArrayView1<f64>,
+    params: &EigenParams,
+    t: &P,
+) -> Result<LowestMode>
+where
+    H: ApplyHessian + ?Sized,
+    P: ApplyPreconditioner + ?Sized,
+{
+    if seed.is_empty() {
+        return Err(Error::Dim { got: 0, dim: 0 });
+    }
+    #[cfg(feature = "primme")]
+    {
+        let n = seed.len();
+        let seed_owned = seed.to_owned();
+        let (vector, value, actions) = crate::primme_eps::solve(
+            seed_owned.as_slice().unwrap(),
+            x,
+            params.nev.max(1),
+            params.iterations(n),
+            params.tolerance(),
+            |v| h.apply_hessian(x, ArrayView1::from(v)),
+            t,
+        )?;
+        Ok(LowestMode {
+            vector,
+            value,
+            actions,
+        })
+    }
+    #[cfg(not(feature = "primme"))]
+    {
+        let _ = (h, x, params, t);
+        Err(Error::EigenUnavailable {
+            kind: EigensolverKind::Primme.name(),
+        })
+    }
+}
+
+/// [`lowest_mode`] with a typed left preconditioner on LOBPCG, JD, and PRIMME.
 pub fn lowest_mode_precond<H, P>(
     h: &H,
     x: ArrayView1<f64>,
@@ -417,6 +467,7 @@ where
         EigensolverKind::JacobiDavidson => Ok(jacobi_davidson(h, x, seed, params, t)),
         EigensolverKind::Lobpcg => Ok(lobpcg(h, x, seed, params, t)),
         EigensolverKind::Dimer => Ok(dimer(h, x, seed, params)),
+        EigensolverKind::Primme => lowest_mode_primme(h, x, seed, params, t),
         EigensolverKind::Slepc => lowest_mode_slepc(h, x, seed, params, &SlepcParams::default()),
         other => Err(Error::EigenUnavailable { kind: other.name() }),
     }
@@ -1514,5 +1565,84 @@ mod tests {
         assert!(mode.value < 0.0, "SLEPc curvature {}", mode.value);
         assert!(mode.vector[0].abs() > 0.9, "SLEPc mode {:?}", mode.vector);
         assert!(EigensolverKind::Slepc.is_linked());
+    }
+
+    #[test]
+    fn primme_unbuilt_is_unavailable() {
+        if EigensolverKind::Primme.is_linked() {
+            return;
+        }
+        let h = gapped_diag(4);
+        let x = Array1::zeros(4);
+        let seed = array![1.0, 0.0, 0.0, 0.0];
+        let err = lowest_mode_primme(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Primme,
+                ..EigenParams::default()
+            },
+            &crate::hvp::IdentityPrecond,
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenUnavailable { kind } => assert_eq!(kind, "primme"),
+            other => panic!("expected unavailable, got {other}"),
+        }
+        assert_eq!(EigensolverKind::Primme as u8, 4);
+        assert_eq!(EigensolverKind::Primme.name(), "primme");
+    }
+
+    #[test]
+    fn primme_shim_typed_fields_only() {
+        let shim = include_str!("primme_shim.c");
+        assert!(shim.contains("dprimme"));
+        assert!(shim.contains("primme_initialize"));
+        assert!(shim.contains("primme_smallest"));
+        assert!(shim.contains("matrixMatvec"));
+        assert!(shim.contains("applyPreconditioner"));
+        assert!(shim.contains("initSize"));
+        assert!(shim.contains("numEvals"));
+        assert!(shim.contains("correctionParams.precondition"));
+        assert!(!shim.contains("primme_params_set"));
+        assert!(!shim.contains("primme_set_member"));
+        assert!(!shim.contains("primme_get_member"));
+        assert!(!shim.contains("primme_set_method"));
+    }
+
+    #[cfg(rgmin_has_primme)]
+    #[test]
+    fn primme_recovers_the_gapped_mode() {
+        let n = 32;
+        let h = gapped_diag(n);
+        let x = Array1::zeros(n);
+        let mut seed = Array1::zeros(n);
+        seed[0] = 0.3;
+        seed[3] = 0.7;
+        seed[11] = 0.2;
+        let mode = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Primme,
+                krylov: 8,
+                max_iter: 64,
+                tol: 1e-6,
+                nev: 1,
+            },
+        );
+        let mode = match mode {
+            Ok(m) => m,
+            Err(Error::EigenUnavailable { kind }) => {
+                assert_eq!(kind, "primme");
+                return;
+            }
+            Err(other) => panic!("expected pair or unavailable, got {other}"),
+        };
+        assert!(mode.value < 0.0, "PRIMME curvature {}", mode.value);
+        assert!(mode.vector[0].abs() > 0.9, "PRIMME mode {:?}", mode.vector);
+        assert!(EigensolverKind::Primme.is_linked());
     }
 }

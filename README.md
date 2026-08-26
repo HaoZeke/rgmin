@@ -26,7 +26,10 @@ The production unconstrained local method is [`Lbfgs`] with strong Wolfe
 that type so hopping does not ship a second two-loop. Feature `highs` keeps the two-loop direction and projects it with
 HiGHS (`Q = I`) onto a box, trust region, or equalities. Constrained
 QP uses HiGHS IPM (IPX or HiPO) with crossover off; the C waist pins
-the engine (`rgmin_highs_solver_t`). Feature `slepc` links SLEPc EPS
+the engine (`rgmin_highs_solver_t`). Feature `primme` links PRIMME
+`dprimme` on the lowest-mode waist (typed `primme_params` fields only)
+when libprimme is present; otherwise `EigensolverKind::Primme` stays
+`Error::EigenUnavailable`. Feature `slepc` links SLEPc EPS
 on the lowest-mode waist (MatShell, typed `EPSSet*` / `STSet*` only)
 when PETSc/SLEPc are present; otherwise `EigensolverKind::Slepc` stays
 `Error::EigenUnavailable`.

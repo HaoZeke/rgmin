@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Feature `primme`: PRIMME `dprimme` on the lowest-mode waist via a
+  frozen `ApplyHessian` matvec and typed `primme_params` fields
+  (`numEvals`, `primme_smallest`, `matrixMatvec`, optional
+  `applyPreconditioner`). No PRIMME string keys
+  (`primme_params_set` / `primme_set_member`). Unbuilt (default, or
+  the feature on without libprimme) stays `Error::EigenUnavailable`.
 - Feature `slepc`: SLEPc EPS on the lowest-mode waist via MatShell
   and typed `EPSSet*` / `STSet*` only. No `EPSSetFromOptions` and
   no PETSc options database. A PETSc host may pass a Pmat through
@@ -16,9 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PETSc/SLEPc) stays `Error::EigenUnavailable`. The waist does not
   call `SlepcInitializeNoArguments`.
 - Typed `ApplyPreconditioner` on the lowest-mode waist:
-  `PreconditionerKind` none / diagonal / block3 / user. LOBPCG and
-  Jacobi-Davidson apply `T` to the residual. Lanczos, dimer, and
-  Rayleigh-Ritz ignore it.
+  `PreconditionerKind` none / diagonal / block3 / user. LOBPCG,
+  Jacobi-Davidson, and PRIMME apply `T` to the residual. Lanczos,
+  dimer, and Rayleigh-Ritz ignore it.
 - Lanczos two-pass full reorthogonalization of the built Q
   (SLEPc `EPS_ORTH_FULL`). Start-vector `||q0|| < eps` returns
   without a column (eOn). Residual `beta <= 1e-10 |alpha|` is
