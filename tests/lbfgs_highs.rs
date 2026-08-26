@@ -586,6 +586,7 @@ fn ipm_equality_projection_holds() {
     assert!((p[0] + p[1]).abs() < 1e-8, "ipm a·p {}", p[0] + p[1]);
 }
 
+#[cfg(feature = "capi")]
 #[test]
 fn c_abi_set_highs_solver_is_closed() {
     use rgmin::ffi::{
