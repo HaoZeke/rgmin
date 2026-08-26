@@ -2,6 +2,11 @@
   "source": {
     "sella_root": "SELLA_ROOT",
     "sella_file": "sella/optimize/stepper.py",
+    "sella_files": [
+      "sella/optimize/stepper.py",
+      "sella/optimize/restricted_step.py",
+      "sella/hessian_update.py"
+    ],
     "sella_exists": true,
     "manopt": "published-factory-formulas"
   },

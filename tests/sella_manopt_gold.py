@@ -2,7 +2,9 @@
 """Mint dest golden-master fixtures from zadorlab/sella and manopt.
 
 Set SELLA_ROOT to a zadorlab/sella checkout (the directory that contains
-the `sella/` package). Optional MANOPT_ROOT is a NicolasBoumal/manopt
+the `sella/` package). Remint loads optimize/stepper.py,
+optimize/restricted_step.py (RestrictedAtomicStep.cons), and
+hessian_update.py. Optional MANOPT_ROOT is a NicolasBoumal/manopt
 tree; when MATLAB/Octave can see it, factory numbers come from that
 source. Otherwise the remint writes the published manopt formulas
 (sphere / positive / symmetric / complexcircle / multinomial /
@@ -11,7 +13,7 @@ cite.
 
 stdin is unused. stdout is one JSON object:
 
-  source: {sella_root, sella_file, manopt, manopt_files?}
+  source: {sella_root, sella_file, sella_files, manopt, manopt_files?}
   cases:  [{name, kind, s}, ...]
 
 kind is rfo / qn / qn_irc / prfo / ts_bfgs / ras plus factory
@@ -52,7 +54,9 @@ def _sella_root() -> Path:
         here.parents[3] / "Python" / "sella",
     ]
     for c in candidates:
-        if (c / "sella" / "optimize" / "stepper.py").is_file():
+        if (c / "sella" / "optimize" / "stepper.py").is_file() and (
+            c / "sella" / "optimize" / "restricted_step.py"
+        ).is_file():
             return c
     raise SystemExit("SELLA_ROOT not set and no local zadorlab/sella checkout")
 
@@ -64,7 +68,7 @@ def _hess(dim: int, b0: np.ndarray):
 
 
 def _load_sella_modules(root: Path):
-    """Import stepper.py and hessian_update.py without sella/__init__.py (jax)."""
+    """Import stepper, restricted_step, hessian_update without sella/__init__.py (jax)."""
     import importlib.util
     import types
 
@@ -141,11 +145,34 @@ def _load_sella_modules(root: Path):
     stepper = importlib.util.module_from_spec(step_spec)
     sys.modules["sella.optimize.stepper"] = stepper
     step_spec.loader.exec_module(stepper)
-    return stepper, hess
+
+    pes = types.ModuleType("sella.peswrapper")
+
+    class PES:
+        pass
+
+    class InternalPES:
+        pass
+
+    pes.PES = PES
+    pes.InternalPES = InternalPES
+    sys.modules["sella.peswrapper"] = pes
+    pkg.peswrapper = pes
+
+    ras_path = root / "sella" / "optimize" / "restricted_step.py"
+    if not ras_path.is_file():
+        raise SystemExit(f"{ras_path} missing RestrictedAtomicStep")
+    ras_spec = importlib.util.spec_from_file_location(
+        "sella.optimize.restricted_step", ras_path
+    )
+    ras = importlib.util.module_from_spec(ras_spec)
+    sys.modules["sella.optimize.restricted_step"] = ras
+    ras_spec.loader.exec_module(ras)
+    return stepper, hess, ras
 
 
 def mint_sella(root: Path) -> tuple[dict, list[dict]]:
-    stepper, hess = _load_sella_modules(root)
+    stepper, hess, ras = _load_sella_modules(root)
     update_H = hess.update_H
     PartitionedRationalFunctionOptimization = (
         stepper.PartitionedRationalFunctionOptimization
@@ -153,6 +180,7 @@ def mint_sella(root: Path) -> tuple[dict, list[dict]]:
     QuasiNewton = stepper.QuasiNewton
     QuasiNewtonIRC = stepper.QuasiNewtonIRC
     RationalFunctionOptimization = stepper.RationalFunctionOptimization
+    RestrictedAtomicStep = ras.RestrictedAtomicStep
 
     cases: list[dict] = []
 
@@ -249,11 +277,11 @@ def mint_sella(root: Path) -> tuple[dict, list[dict]]:
         }
     )
 
-    # RestrictedAtomicStep cons: scale so max per-atom Euclidean <= delta.
+    # RestrictedAtomicStep.cons from sella/optimize/restricted_step.py.
     s_cart = np.array([0.4, 0.3, 0.0, 0.05, 0.0, 0.0])
     delta = 0.1
-    norms = np.linalg.norm(s_cart.reshape(-1, 3), axis=1)
-    scale = delta / norms.max()
+    val = RestrictedAtomicStep.cons(None, s_cart)
+    scale = delta / val
     cases.append(
         {
             "name": "ras_clip_max_atom",
@@ -265,10 +293,19 @@ def mint_sella(root: Path) -> tuple[dict, list[dict]]:
     )
 
     stepper_py = root / "sella" / "optimize" / "stepper.py"
+    ras_py = root / "sella" / "optimize" / "restricted_step.py"
+    hess_py = root / "sella" / "hessian_update.py"
     meta = {
         "sella_root": "SELLA_ROOT",
         "sella_file": "sella/optimize/stepper.py",
-        "sella_exists": stepper_py.is_file(),
+        "sella_files": [
+            "sella/optimize/stepper.py",
+            "sella/optimize/restricted_step.py",
+            "sella/hessian_update.py",
+        ],
+        "sella_exists": stepper_py.is_file()
+        and ras_py.is_file()
+        and hess_py.is_file(),
     }
     return meta, cases
 
