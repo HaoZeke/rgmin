@@ -854,6 +854,33 @@ mod tests {
     }
 
     #[test]
+    fn dimer_linear_diag_matches_cpp_bench_spectrum() {
+        let lam = array![-2.5, 0.4, 0.55, 0.7, 0.85, 1.0];
+        let h = DiagH(lam);
+        let x = Array1::zeros(6);
+        let seed = array![0.3, 0.37, 0.44, 0.51, 0.58, 0.65];
+        let mode = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Dimer,
+                max_iter: 20,
+                tol: 1e-8,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap();
+        assert!((mode.value + 2.5).abs() < 1e-10, "C {}", mode.value);
+        eprintln!("cpp-spectrum actions={}", mode.actions);
+        assert!(
+            mode.actions <= 16,
+            "C++ bench spectrum should not need 29 actions, got {}",
+            mode.actions
+        );
+    }
+
+    #[test]
     fn dimer_in_plane_rr_finishes_in_two_actions_on_a_2d_well() {
         let h = gapped_diag(2);
         let x = Array1::zeros(2);
