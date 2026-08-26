@@ -11,6 +11,7 @@
 
 use ndarray::{Array1, ArrayView1};
 
+use crate::eigenexa_kind::EigenExaParams;
 use crate::error::{Error, Result};
 use crate::hvp::HessianVector;
 use crate::slepc_kind::SlepcParams;
@@ -51,7 +52,7 @@ pub enum EigensolverKind {
     Cusolver = 11,
     /// DLA-Future. Not linked.
     DlaFuture = 12,
-    /// EigenExa. Not linked.
+    /// EigenExa. Full spectrum only. Not linked.
     EigenExa = 13,
     /// Jónsson dimer with Heyden plane rotations. Linked. Matrix-free.
     Dimer = 14,
@@ -458,6 +459,39 @@ where
     }
 }
 
+/// EigenExa arm of [`lowest_mode`]. `params.kind` is ignored.
+///
+/// EigenExa has no supported partial `nvec`. `nev < n` is
+/// [`Error::EigenFullSpectrum`]. This ApplyHessian entry never
+/// assembles `H` with `n` actions; a linked dense wrap is a
+/// separate entry. Unlinked full-spectrum stays
+/// [`Error::EigenUnavailable`].
+pub fn lowest_mode_eigenexa<H: ApplyHessian + ?Sized>(
+    h: &H,
+    x: ArrayView1<f64>,
+    seed: ArrayView1<f64>,
+    params: &EigenParams,
+    eigenexa: &EigenExaParams,
+) -> Result<LowestMode> {
+    if seed.is_empty() {
+        return Err(Error::Dim { got: 0, dim: 0 });
+    }
+    let n = seed.len();
+    let nev = params.nev;
+    if nev < n {
+        let _ = (h, x, eigenexa);
+        return Err(Error::EigenFullSpectrum {
+            kind: EigensolverKind::EigenExa.name(),
+            nev,
+            n,
+        });
+    }
+    let _ = (h, x, eigenexa);
+    Err(Error::EigenUnavailable {
+        kind: EigensolverKind::EigenExa.name(),
+    })
+}
+
 /// [`lowest_mode`] with a typed left preconditioner on LOBPCG, JD, and PRIMME.
 pub fn lowest_mode_precond<H, P>(
     h: &H,
@@ -481,6 +515,9 @@ where
         EigensolverKind::Dimer => Ok(dimer(h, x, seed, params)),
         EigensolverKind::Primme => lowest_mode_primme(h, x, seed, params, t),
         EigensolverKind::Slepc => lowest_mode_slepc(h, x, seed, params, &SlepcParams::default()),
+        EigensolverKind::EigenExa => {
+            lowest_mode_eigenexa(h, x, seed, params, &EigenExaParams::default())
+        }
         other => Err(Error::EigenUnavailable { kind: other.name() }),
     }
 }
@@ -1480,7 +1517,12 @@ mod tests {
             .unwrap_err();
             match err {
                 Error::EigenUnavailable { kind: name } => assert_eq!(name, kind.name()),
-                other => panic!("expected unavailable, got {other}"),
+                Error::EigenFullSpectrum { kind: name, nev, n } => {
+                    assert_eq!(kind, EigensolverKind::EigenExa);
+                    assert_eq!(name, kind.name());
+                    assert!(nev < n);
+                }
+                other => panic!("expected unavailable or full-spectrum, got {other}"),
             }
         }
     }
@@ -1695,5 +1737,79 @@ mod tests {
         };
         assert!(mode.value < 0.0, "PRIMME+T curvature {}", mode.value);
         assert!(mode.vector[0].abs() > 0.9, "PRIMME+T mode {:?}", mode.vector);
+    }
+
+    #[test]
+    fn eigenexa_nev_less_than_n_refuses() {
+        let h = gapped_diag(4);
+        let x = Array1::zeros(4);
+        let seed = array![1.0, 0.0, 0.0, 0.0];
+        let err = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::EigenExa,
+                nev: 1,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenFullSpectrum { kind, nev, n } => {
+                assert_eq!(kind, "eigenExa");
+                assert_eq!(nev, 1);
+                assert_eq!(n, 4);
+            }
+            other => panic!("expected full-spectrum refuse, got {other}"),
+        }
+    }
+
+    #[test]
+    fn eigenexa_full_n_stays_unavailable_and_does_not_assemble() {
+        use std::cell::Cell;
+        struct CountH<'a>(&'a Cell<usize>);
+        impl ApplyHessian for CountH<'_> {
+            fn apply_hessian(&self, _x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
+                self.0.set(self.0.get() + 1);
+                v.to_owned()
+            }
+        }
+        let actions = Cell::new(0);
+        let h = CountH(&actions);
+        let x = Array1::zeros(4);
+        let seed = array![1.0, 0.0, 0.0, 0.0];
+        let err = lowest_mode_eigenexa(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::EigenExa,
+                nev: 4,
+                ..EigenParams::default()
+            },
+            &EigenExaParams::default(),
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenUnavailable { kind } => assert_eq!(kind, "eigenExa"),
+            other => panic!("expected unavailable, got {other}"),
+        }
+        assert_eq!(actions.get(), 0, "EigenExa must not assemble H from actions");
+        assert!(!EigensolverKind::EigenExa.is_linked());
+        assert_eq!(EigensolverKind::EigenExa as u8, 13);
+    }
+
+    #[test]
+    fn eigenexa_algo_ordinals_are_closed() {
+        assert_eq!(crate::EigenExaAlgo::S as u8, 0);
+        assert_eq!(crate::EigenExaAlgo::Sx as u8, 1);
+        assert_eq!(crate::EigenExaAlgo::S.name(), "eigen_s");
+        assert_eq!(crate::EigenExaAlgo::Sx.name(), "eigen_sx");
+        assert!(crate::EigenExaAlgo::from_ordinal(2).is_none());
+        assert_eq!(
+            crate::EigenExaParams::default().algo,
+            crate::EigenExaAlgo::Sx
+        );
     }
 }

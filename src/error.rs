@@ -67,6 +67,17 @@ pub enum Error {
         /// What the typed `primme_params` / `dprimme` call failed to produce.
         what: &'static str,
     },
+    /// Named backend only computes the full spectrum. Partial `nev`
+    /// is refused rather than silently solved as `n` and trimmed.
+    #[error("eigensolver {kind} is full-spectrum only; nev {nev} < n {n}")]
+    EigenFullSpectrum {
+        /// Closed-enum name (`eigenExa`, ...).
+        kind: &'static str,
+        /// Requested pair count.
+        nev: usize,
+        /// Matrix order.
+        n: usize,
+    },
 }
 
 /// Result alias for this crate.

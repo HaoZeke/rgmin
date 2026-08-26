@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- EigenExa is full-spectrum only. `nev < n` is
+  `Error::EigenFullSpectrum` and does not compute `n` pairs and
+  drop them. `eigen_s` versus `eigen_sx` is `EigenExaAlgo` (0/1),
+  not a string. The ApplyHessian entry never assembles `H`.
 - Feature `primme`: PRIMME `dprimme` on the lowest-mode waist via a
   frozen `ApplyHessian` matvec and typed `primme_params` fields
   (`numEvals`, `primme_smallest`, `matrixMatvec`, optional

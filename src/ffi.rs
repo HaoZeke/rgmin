@@ -48,6 +48,7 @@ fn status_from_error(e: &Error) -> rgmin_status_t {
             rgmin_status_t::RGMIN_INTERNAL_ERROR
         }
         Error::EigenUnavailable { .. } => rgmin_status_t::RGMIN_UNAVAILABLE,
+        Error::EigenFullSpectrum { .. } => rgmin_status_t::RGMIN_INVALID_PARAMETER,
         _ => rgmin_status_t::RGMIN_INVALID_PARAMETER,
     }
 }
