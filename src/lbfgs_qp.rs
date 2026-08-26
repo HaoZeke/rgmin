@@ -128,7 +128,9 @@ unsafe extern "C" fn highs_cb_trampoline(
     }
     let ctx = unsafe { &*(user as *const HighsCbCtx) };
     let mut interrupt = 0_i32;
-    (ctx.cb)(kind, message, &mut interrupt, ctx.user);
+    unsafe {
+        (ctx.cb)(kind, message, &mut interrupt, ctx.user);
+    }
     if !data_in.is_null() && interrupt != 0 {
         unsafe {
             (*(data_in as *mut HighsCallbackDataIn)).user_interrupt = 1;
@@ -198,19 +200,16 @@ impl Lbfgs {
         if !opts.has_box() && !opts.needs_qp() && opts.center_axes.is_none() {
             return Ok(d);
         }
+        if opts.needs_qp() {
+            return project_qp(&d, x, opts);
+        }
         let mut p = d;
         if let Some((n_atoms, dim)) = opts.center_axes {
             project_center_scale(&mut p, x, opts, n_atoms, dim);
         } else if opts.has_box() {
             scale_to_bounds(&mut p, x, opts);
         }
-        if !opts.needs_qp() {
-            return Ok(p);
-        }
-        match project_qp(&p, x, opts) {
-            Ok(q) => Ok(q),
-            Err(_) => Ok(p),
-        }
+        Ok(p)
     }
 }
 
@@ -231,7 +230,9 @@ fn project_qp(d: &Array1<f64>, x: ArrayView1<f64>, opts: &HighsStep) -> Result<A
     let mut model = pb
         .try_optimise(Sense::Minimise)
         .map_err(|e| Error::Highs(format!("pass LP {e:?}")))?;
-    model.make_quiet();
+    if opts.callback.is_none() {
+        model.make_quiet();
+    }
     serialise_openmp_once();
     model
         .try_set_option("parallel", "off")
@@ -242,6 +243,9 @@ fn project_qp(d: &Array1<f64>, x: ArrayView1<f64>, opts: &HighsStep) -> Result<A
     model
         .try_set_option("time_limit", 0.05_f64)
         .map_err(|_| Error::Highs("cannot set time_limit".into()))?;
+    if opts.callback.is_some() {
+        let _ = model.try_set_option("output_flag", true);
+    }
     apply_engine(&mut model, opts.solver, opts.crossover)?;
     apply_callback(&mut model, opts)?;
 
