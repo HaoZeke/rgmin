@@ -29,6 +29,8 @@ QP uses HiGHS IPM (IPX or HiPO) with crossover off; the C waist pins
 the engine (`rgmin_highs_solver_t`). Feature `primme` links PRIMME
 `dprimme` on the lowest-mode waist (typed `primme_params` fields only)
 when libprimme is present; otherwise `EigensolverKind::Primme` stays
+`Error::EigenUnavailable`. Feature `chase` is the assembled-H
+ChASE entry (`lowest_mode_chase`); `ApplyHessian` stays
 `Error::EigenUnavailable`. Feature `slepc` links SLEPc EPS
 on the lowest-mode waist (MatShell, typed `EPSSet*` / `STSet*` only)
 when PETSc/SLEPc are present; otherwise `EigensolverKind::Slepc` stays

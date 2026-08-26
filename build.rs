@@ -3,10 +3,13 @@ fn main() {
     println!("cargo:rerun-if-changed=include/");
     println!("cargo:rustc-check-cfg=cfg(rgmin_has_slepc)");
     println!("cargo:rustc-check-cfg=cfg(rgmin_has_primme)");
+    println!("cargo:rustc-check-cfg=cfg(rgmin_has_chase)");
     #[cfg(feature = "slepc")]
     probe_slepc();
     #[cfg(feature = "primme")]
     probe_primme();
+    #[cfg(feature = "chase")]
+    probe_chase();
 }
 
 #[cfg(feature = "slepc")]
@@ -213,4 +216,13 @@ fn probe_primme_prefix(prefix: &std::path::Path) -> Option<PrimmeProbe> {
         link_paths: vec![lib],
         link_libs: vec!["primme".into()],
     })
+}
+
+#[cfg(feature = "chase")]
+fn probe_chase() {
+    println!("cargo:rerun-if-env-changed=CHASE_DIR");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    println!(
+        "cargo:warning=chase feature on, dest has no ChASE C shim; EigensolverKind::Chase stays EigenUnavailable"
+    );
 }

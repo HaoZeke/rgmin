@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Feature `chase`: assembled-H entry `lowest_mode_chase`.
+  `ApplyHessian` `lowest_mode` stays `Error::EigenUnavailable`
+  and does not assemble `H` or run a matrix-free Chebyshev
+  recurrence. Unbuilt (default, or the feature on without a
+  ChASE C shim) stays unavailable. `is_matrix_free` is false.
 - `EigenParams.degree` / `extra` (schema `@5` / `@6`, C layout
   32 bytes). ChASE zeros map to degree 20 and
   `extra = max(8, ceil(0.2 * nev))`. `max_iter == 0` is 25 on

@@ -39,7 +39,7 @@ pub enum EigensolverKind {
     Primme = 4,
     /// SLEPc EPS. Linked with the `slepc` feature when PETSc/SLEPc are present.
     Slepc = 5,
-    /// ChASE Chebyshev filter. Not linked.
+    /// ChASE Chebyshev filter on assembled dense H. Linked with the `chase` feature when libchase is present.
     Chase = 6,
     /// ELPA dense distributed. Not linked.
     Elpa = 7,
@@ -88,6 +88,7 @@ impl EigensolverKind {
             Self::Lanczos | Self::RayleighRitz | Self::JacobiDavidson | Self::Lobpcg | Self::Dimer
         ) || (cfg!(rgmin_has_primme) && matches!(self, Self::Primme))
             || (cfg!(rgmin_has_slepc) && matches!(self, Self::Slepc))
+            || (cfg!(rgmin_has_chase) && matches!(self, Self::Chase))
     }
 
     /// Works from Hessian actions, no assembled matrix.
@@ -558,6 +559,50 @@ pub fn lowest_mode_dlaf(
     let _ = params;
     Err(Error::EigenUnavailable {
         kind: EigensolverKind::DlaFuture.name(),
+    })
+}
+
+/// ChASE arm on an assembled symmetric `H`. `params.kind` is ignored.
+///
+/// [`lowest_mode`] on `ApplyHessian` never calls this and stays
+/// [`Error::EigenUnavailable`], so the waist cannot form `H` with
+/// `n` actions and does not run a matrix-free Chebyshev recurrence
+/// under [`EigensolverKind::Chase`]. `extra == 0` maps through
+/// [`EigenParams::chase_extra`]. A previous [`LowestMode`] seed is
+/// the only approximation; there is no `char` mode flag.
+/// Unbuilt `chase` stays [`Error::EigenUnavailable`].
+pub fn lowest_mode_chase(
+    h: ArrayView2<f64>,
+    seed: ArrayView1<f64>,
+    params: &EigenParams,
+) -> Result<LowestMode> {
+    if h.nrows() != h.ncols() {
+        return Err(Error::Dim {
+            got: h.nrows(),
+            dim: h.ncols(),
+        });
+    }
+    let n = h.nrows();
+    if n == 0 {
+        return Err(Error::Dim { got: 0, dim: 0 });
+    }
+    if seed.len() != n {
+        return Err(Error::Dim {
+            got: seed.len(),
+            dim: n,
+        });
+    }
+    let _ = (
+        params.nev.max(1),
+        params.chase_degree(),
+        params.chase_extra(),
+        params.chase_iterations(),
+        params.tolerance(),
+        h,
+        seed,
+    );
+    Err(Error::EigenUnavailable {
+        kind: EigensolverKind::Chase.name(),
     })
 }
 
@@ -1313,6 +1358,60 @@ mod tests {
         assert!(!schema.contains("chase_set"));
         assert!(!EigensolverKind::Chase.is_linked());
         assert!(!EigensolverKind::Chase.is_matrix_free());
+    }
+
+    #[test]
+    fn chase_applyhessian_stays_unavailable_and_does_not_assemble() {
+        use std::cell::Cell;
+        struct CountH<'a>(&'a Cell<usize>);
+        impl ApplyHessian for CountH<'_> {
+            fn apply_hessian(&self, _x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
+                self.0.set(self.0.get() + 1);
+                v.to_owned()
+            }
+        }
+        let actions = Cell::new(0);
+        let h = CountH(&actions);
+        let x = Array1::zeros(4);
+        let seed = array![1.0, 0.0, 0.0, 0.0];
+        let err = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Chase,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenUnavailable { kind } => assert_eq!(kind, "chase"),
+            other => panic!("expected unavailable, got {other}"),
+        }
+        assert_eq!(actions.get(), 0, "Chase must not assemble H from actions");
+        let dense = ndarray::Array2::<f64>::zeros((8, 8));
+        let seed8 = Array1::from(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        let err = lowest_mode_chase(
+            dense.view(),
+            seed8.view(),
+            &EigenParams {
+                kind: EigensolverKind::Chase,
+                nev: 1,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenUnavailable { kind } => assert_eq!(kind, "chase"),
+            other => panic!("expected unavailable, got {other}"),
+        }
+        let kick = EigenParams {
+            kind: EigensolverKind::Chase,
+            nev: 1,
+            ..EigenParams::default()
+        };
+        assert_eq!(kick.chase_extra(), 8);
+        assert_ne!(kick.chase_extra(), 0);
     }
 
     struct DiagH(Array1<f64>);
