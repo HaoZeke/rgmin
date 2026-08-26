@@ -49,7 +49,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 24
+#define RGMIN_ABI_VERSION_MINOR 25
 #define RGMIN_ABI_LAYOUT_REVISION 4
 
 /** Solver selector. \c RGMIN_LBFGS is the production unconstrained method. */
@@ -254,6 +254,22 @@ _Static_assert(sizeof(rgmin_highs_crossover_t) == sizeof(int32_t),
 #endif
 int32_t rgmin_solver_set_highs_crossover(rgmin_solver_t *solver,
                                          rgmin_highs_crossover_t kind);
+/** HiGHS callback kind. Integers match HiGHS `HighsCallbackType`. */
+typedef enum rgmin_highs_cb_kind_t {
+    RGMIN_HIGHS_CB_LOGGING = 0,
+    RGMIN_HIGHS_CB_SIMPLEX_INTERRUPT = 1,
+    RGMIN_HIGHS_CB_IPM_INTERRUPT = 2
+} rgmin_highs_cb_kind_t;
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(rgmin_highs_cb_kind_t) == sizeof(int32_t),
+               "rgmin_highs_cb_kind_t is i32-wide; do not build this header with -fshort-enums");
+#endif
+/** HiGHS user callback. \a interrupt nonzero stops the solve.
+ *  Stored on the session for every later constrained step. */
+typedef void (*rgmin_highs_callback_t)(int32_t kind, const char *message,
+                                       int32_t *interrupt, void *user);
+int32_t rgmin_solver_set_highs_callback(rgmin_solver_t *solver,
+                                        rgmin_highs_callback_t cb, void *user);
 /** Embedded manifold. Euclidean is the default.
  *  Molecular clusters use RIGID_QUOTIENT (Sella Cartesian T+R,
  *  R^{3N}/SE(3)) or MW_RIGID (Page-McIver / Sella IRC Eckart).

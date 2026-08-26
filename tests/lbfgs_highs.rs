@@ -636,3 +636,142 @@ fn c_abi_set_highs_solver_is_closed() {
         1
     );
 }
+
+fn scipy_qp_gold(payload: &str) -> Vec<f64> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/highs_scipy_gold.py");
+    let py = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
+    let mut child = Command::new(&py)
+        .arg(&script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("{py} spawn: {e}"));
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(payload.as_bytes())
+        .expect("write gold stdin");
+    let out = child.wait_with_output().expect("gold wait");
+    assert!(
+        out.status.success(),
+        "scipy gold failed: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("\"success\": true") || text.contains("\"success\":true"),
+        "scipy gold not success: {text}"
+    );
+    let start = text.find("\"p\"").expect("p key");
+    let lb = text[start..].find('[').expect("[") + start;
+    let rb = text[lb..].find(']').expect("]") + lb;
+    text[lb + 1..rb]
+        .split(',')
+        .map(|s| s.trim().parse::<f64>().expect("p i"))
+        .collect()
+}
+
+#[test]
+fn dest_ipm_matches_scipy_trust_constr() {
+    let x0 = Array1::from(vec![1.0, -0.5, 0.25, 0.0]);
+    let g0 = quad(x0.view()).1;
+    let mut dest = Lbfgs::default();
+    dest.highs = Some(HighsStep {
+        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.0)],
+        solver: rgmin::HighsSolverKind::Ipm,
+        crossover: rgmin::HighsCrossover::Off,
+        ..HighsStep::default()
+    });
+    let p_dest = dest.highs_step(x0.view(), g0.view()).unwrap();
+    let d = dest.two_loop(g0.view());
+    let payload = format!(
+        r#"{{"d":[{},{},{},{}],"A":[[1,1,0,0]],"b":[0]}}"#,
+        d[0], d[1], d[2], d[3]
+    );
+    let p_scipy = scipy_qp_gold(&payload);
+    assert_eq!(p_dest.len(), p_scipy.len());
+    for i in 0..p_dest.len() {
+        assert!(
+            (p_dest[i] - p_scipy[i]).abs() < 1e-5,
+            "coord {i}: dest {} scipy {}",
+            p_dest[i],
+            p_scipy[i]
+        );
+    }
+}
+
+#[test]
+fn dest_ipm_box_equality_matches_scipy() {
+    let x = Array1::from(vec![0.0, 0.0, 0.0]);
+    let g = Array1::from(vec![2.0, -1.0, 0.5]);
+    let mut dest = Lbfgs::default();
+    dest.highs = Some(HighsStep {
+        lo: Some(vec![-0.2, -0.2, -0.2]),
+        hi: Some(vec![0.2, 0.2, 0.2]),
+        equalities: vec![(vec![(0, 1.0), (1, 1.0), (2, 1.0)], 0.0)],
+        solver: rgmin::HighsSolverKind::Ipm,
+        ..HighsStep::default()
+    });
+    let p_dest = dest.highs_step(x.view(), g.view()).unwrap();
+    let d = dest.two_loop(g.view());
+    let payload = format!(
+        r#"{{"d":[{},{},{}],"lo":[-0.2,-0.2,-0.2],"hi":[0.2,0.2,0.2],"A":[[1,1,1]],"b":[0]}}"#,
+        d[0], d[1], d[2]
+    );
+    let p_scipy = scipy_qp_gold(&payload);
+    for i in 0..3 {
+        assert!(
+            (p_dest[i] - p_scipy[i]).abs() < 2e-5,
+            "coord {i}: dest {} scipy {}",
+            p_dest[i],
+            p_scipy[i]
+        );
+    }
+}
+
+struct CbHits {
+    n: std::sync::atomic::AtomicU32,
+}
+
+unsafe extern "C" fn count_highs_cb(
+    _kind: i32,
+    _message: *const std::os::raw::c_char,
+    _interrupt: *mut i32,
+    user: *mut std::os::raw::c_void,
+) {
+    if user.is_null() {
+        return;
+    }
+    unsafe {
+        (*(user as *const CbHits))
+            .n
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn highs_callback_fires_on_ipm_equality() {
+    let hits = CbHits {
+        n: std::sync::atomic::AtomicU32::new(0),
+    };
+    let mut dest = Lbfgs::default();
+    dest.highs = Some(HighsStep {
+        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.0)],
+        callback: Some(count_highs_cb),
+        callback_user: (&hits as *const CbHits).cast_mut().cast(),
+        ..HighsStep::default()
+    });
+    let x0 = Array1::from(vec![1.0, -0.5, 0.25, 0.0]);
+    let g0 = quad(x0.view()).1;
+    let p = dest.highs_step(x0.view(), g0.view()).unwrap();
+    assert!(p.iter().all(|v| v.is_finite()));
+    assert!(
+        hits.n.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "HiGHS callback never ran"
+    );
+}

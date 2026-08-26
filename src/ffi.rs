@@ -63,7 +63,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 24;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 25;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -1583,6 +1583,30 @@ pub unsafe extern "C" fn rgmin_solver_set_highs_crossover(
     {
         let _ = tok;
         set_last_error("rgmin_solver_set_highs_crossover: build has no highs feature");
+        1
+    }
+}
+
+/// HiGHS user callback. NULL `cb` clears it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_highs_callback(
+    solver: *mut rgmin_solver_t,
+    cb: Option<crate::HighsCCallback>,
+    user: *mut c_void,
+) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_highs_callback: null solver");
+        return 1;
+    }
+    #[cfg(feature = "highs")]
+    {
+        let _ = unsafe { (*solver).solver.set_highs_callback(cb, user) };
+        0
+    }
+    #[cfg(not(feature = "highs"))]
+    {
+        let _ = (cb, user);
+        set_last_error("rgmin_solver_set_highs_callback: build has no highs feature");
         1
     }
 }

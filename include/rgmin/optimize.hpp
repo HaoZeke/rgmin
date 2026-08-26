@@ -231,6 +231,9 @@ public:
     int set_highs_crossover(rgmin_highs_crossover_t kind) {
         return rgmin_solver_set_highs_crossover(ptr_, kind);
     }
+    int set_highs_callback(rgmin_highs_callback_t cb, void* user) {
+        return rgmin_solver_set_highs_callback(ptr_, cb, user);
+    }
     void set_manifold(rgmin_manifold_t m) { rgmin_solver_set_manifold(ptr_, m); }
     void set_oblique(std::size_t n, std::size_t m) {
         rgmin_solver_set_oblique(ptr_, n, m);

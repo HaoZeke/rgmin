@@ -87,6 +87,38 @@ impl HighsCrossover {
     }
 }
 
+/// HiGHS callback kind. Integers match `HighsCallbackType` /
+/// `rgmin_highs_cb_kind_t`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HighsCallbackKind {
+    /// General log line.
+    Logging = 0,
+    /// Simplex interrupt poll.
+    SimplexInterrupt = 1,
+    /// IPM interrupt poll.
+    IpmInterrupt = 2,
+}
+
+impl HighsCallbackKind {
+    /// Closed map from the C token.
+    pub fn from_ordinal(raw: i32) -> Option<Self> {
+        Some(match raw {
+            0 => Self::Logging,
+            1 => Self::SimplexInterrupt,
+            2 => Self::IpmInterrupt,
+            _ => return None,
+        })
+    }
+}
+
+/// Dest HiGHS user callback. `interrupt` nonzero stops the solve.
+pub type HighsCCallback = unsafe extern "C" fn(
+    kind: i32,
+    message: *const std::os::raw::c_char,
+    interrupt: *mut i32,
+    user: *mut std::os::raw::c_void,
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +138,14 @@ mod tests {
         assert_eq!(HighsCrossover::from_ordinal(2), Some(HighsCrossover::Off));
         assert!(HighsCrossover::from_ordinal(3).is_none());
         assert_eq!(HighsCrossover::Off.as_highs(), Some("off"));
+    }
+
+    #[test]
+    fn callback_tokens_match_highs() {
+        assert_eq!(
+            HighsCallbackKind::from_ordinal(2),
+            Some(HighsCallbackKind::IpmInterrupt)
+        );
+        assert!(HighsCallbackKind::from_ordinal(3).is_none());
     }
 }

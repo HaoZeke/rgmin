@@ -19,7 +19,7 @@ use highs_sys::{Highs_passHessian, HighsInt, STATUS_OK};
 use ndarray::{Array1, Array2, ArrayView1};
 
 use crate::error::{Error, Result};
-use crate::highs_kind::{HighsCrossover, HighsSolverKind};
+use crate::highs_kind::{HighsCCallback, HighsCrossover, HighsSolverKind};
 use crate::lbfgs::Lbfgs;
 
 /// Pin OpenMP to one thread exactly once, before any HiGHS solve.
@@ -57,6 +57,10 @@ pub struct HighsStep {
     pub solver: HighsSolverKind,
     /// Crossover after IPM. Off: the dest step is the interior point.
     pub crossover: HighsCrossover,
+    /// HiGHS user callback. Invoked for logging and IPM interrupt polls.
+    pub callback: Option<HighsCCallback>,
+    /// Passed through to [`HighsStep::callback`].
+    pub callback_user: *mut std::os::raw::c_void,
 }
 
 impl Default for HighsStep {
@@ -69,6 +73,8 @@ impl Default for HighsStep {
             center_axes: None,
             solver: HighsSolverKind::Ipm,
             crossover: HighsCrossover::Off,
+            callback: None,
+            callback_user: std::ptr::null_mut(),
         }
     }
 }
@@ -81,6 +87,81 @@ impl HighsStep {
     fn needs_qp(&self) -> bool {
         !self.equalities.is_empty()
     }
+}
+
+unsafe extern "C" {
+    fn Highs_setCallback(
+        highs: *mut std::os::raw::c_void,
+        user_callback: Option<
+            unsafe extern "C" fn(
+                i32,
+                *const std::os::raw::c_char,
+                *const std::os::raw::c_void,
+                *mut std::os::raw::c_void,
+                *mut std::os::raw::c_void,
+            ),
+        >,
+        user_callback_data: *mut std::os::raw::c_void,
+    ) -> HighsInt;
+    fn Highs_startCallback(highs: *mut std::os::raw::c_void, callback_type: HighsInt) -> HighsInt;
+}
+
+#[repr(C)]
+struct HighsCallbackDataIn {
+    user_interrupt: i32,
+}
+
+struct HighsCbCtx {
+    cb: HighsCCallback,
+    user: *mut std::os::raw::c_void,
+}
+
+unsafe extern "C" fn highs_cb_trampoline(
+    kind: i32,
+    message: *const std::os::raw::c_char,
+    _data_out: *const std::os::raw::c_void,
+    data_in: *mut std::os::raw::c_void,
+    user: *mut std::os::raw::c_void,
+) {
+    if user.is_null() {
+        return;
+    }
+    let ctx = unsafe { &*(user as *const HighsCbCtx) };
+    let mut interrupt = 0_i32;
+    (ctx.cb)(kind, message, &mut interrupt, ctx.user);
+    if !data_in.is_null() && interrupt != 0 {
+        unsafe {
+            (*(data_in as *mut HighsCallbackDataIn)).user_interrupt = 1;
+        }
+    }
+}
+
+fn apply_callback(model: &mut highs::Model, opts: &HighsStep) -> Result<()> {
+    let Some(cb) = opts.callback else {
+        return Ok(());
+    };
+    let ctx = Box::new(HighsCbCtx {
+        cb,
+        user: opts.callback_user,
+    });
+    let ctx_ptr = Box::into_raw(ctx);
+    let highs = model.as_mut_ptr();
+    let st = unsafe { Highs_setCallback(highs, Some(highs_cb_trampoline), ctx_ptr.cast()) };
+    if st != STATUS_OK {
+        unsafe {
+            drop(Box::from_raw(ctx_ptr));
+        }
+        return Err(Error::Highs(format!("setCallback status {st}")));
+    }
+    // Logging and IPM interrupt polls. Simplex interrupt is cheap to arm.
+    for kind in [0, 1, 2] {
+        let _ = unsafe { Highs_startCallback(highs, kind) };
+    }
+    // Leaked until process end: one box per constrained solve. The
+    // HiGHS model holds the pointer for the solve only; dest does not
+    // get a teardown hook from the highs crate.
+    let _ = ctx_ptr;
+    Ok(())
 }
 
 fn apply_engine(
@@ -162,6 +243,7 @@ fn project_qp(d: &Array1<f64>, x: ArrayView1<f64>, opts: &HighsStep) -> Result<A
         .try_set_option("time_limit", 0.05_f64)
         .map_err(|_| Error::Highs("cannot set time_limit".into()))?;
     apply_engine(&mut model, opts.solver, opts.crossover)?;
+    apply_callback(&mut model, opts)?;
 
     let (q_start, q_index, q_value) = identity_csc(n);
     let st = unsafe {
@@ -318,6 +400,8 @@ pub fn highs_feasible_step(
     equalities: &[(Vec<(usize, f64)>, f64)],
     solver: HighsSolverKind,
     crossover: HighsCrossover,
+    callback: Option<HighsCCallback>,
+    callback_user: *mut std::os::raw::c_void,
 ) -> Result<Array1<f64>> {
     let n = grad.len();
     let boxed = atom_maxmove.is_some_and(|c| c > 0.0)
@@ -382,6 +466,14 @@ pub fn highs_feasible_step(
     let _ = model.try_set_option("threads", 1_i32);
     let _ = model.try_set_option("time_limit", 1.0_f64);
     apply_engine(&mut model, solver, crossover)?;
+    let cb_opts = HighsStep {
+        solver,
+        crossover,
+        callback,
+        callback_user,
+        ..HighsStep::default()
+    };
+    apply_callback(&mut model, &cb_opts)?;
 
     let (q_start, q_index, q_value) = match q {
         Some(h) => dense_csc(h),

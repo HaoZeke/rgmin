@@ -60,6 +60,10 @@ pub struct Solver {
     highs_solver: crate::HighsSolverKind,
     #[cfg(feature = "highs")]
     highs_crossover: crate::HighsCrossover,
+    #[cfg(feature = "highs")]
+    highs_callback: Option<crate::HighsCCallback>,
+    #[cfg(feature = "highs")]
+    highs_callback_user: *mut std::os::raw::c_void,
     last_pos: Option<Array1<f64>>,
     last_value: f64,
     last_grad: Array1<f64>,
@@ -155,6 +159,10 @@ impl Solver {
             highs_solver: crate::HighsSolverKind::Ipm,
             #[cfg(feature = "highs")]
             highs_crossover: crate::HighsCrossover::Off,
+            #[cfg(feature = "highs")]
+            highs_callback: None,
+            #[cfg(feature = "highs")]
+            highs_callback_user: std::ptr::null_mut(),
             last_pos: None,
             last_value: 0.0,
             last_grad: Array1::zeros(dim),
@@ -393,6 +401,27 @@ impl Solver {
         }
     }
 
+    /// HiGHS user callback for logging and IPM interrupt. Returns
+    /// `true` with `highs`.
+    pub fn set_highs_callback(
+        &mut self,
+        cb: Option<crate::HighsCCallback>,
+        user: *mut std::os::raw::c_void,
+    ) -> bool {
+        #[cfg(not(feature = "highs"))]
+        {
+            let _ = (cb, user);
+            false
+        }
+        #[cfg(feature = "highs")]
+        {
+            self.highs_callback = cb;
+            self.highs_callback_user = user;
+            self.apply_highs_opts();
+            true
+        }
+    }
+
     /// HiGHS `run_crossover`. Returns `true` with `highs`.
     pub fn set_highs_crossover(&mut self, kind: crate::HighsCrossover) -> bool {
         #[cfg(not(feature = "highs"))]
@@ -431,6 +460,8 @@ impl Solver {
             },
             solver: self.highs_solver,
             crossover: self.highs_crossover,
+            callback: self.highs_callback,
+            callback_user: self.highs_callback_user,
         };
         if let Inner::Lbfgs(solver) = &mut self.inner {
             solver.highs = Some(step);
@@ -681,6 +712,8 @@ impl Solver {
                 &self.equalities,
                 self.highs_solver,
                 self.highs_crossover,
+                self.highs_callback,
+                self.highs_callback_user,
             ) {
                 let old = x.clone();
                 let gold = grad.clone();

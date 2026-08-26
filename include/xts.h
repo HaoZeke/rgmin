@@ -107,6 +107,7 @@ typedef rgmin_hvp_fn xts_hvp_fn;
 #define xts_solver_clear_equalities rgmin_solver_clear_equalities
 #define xts_solver_set_highs_solver rgmin_solver_set_highs_solver
 #define xts_solver_set_highs_crossover rgmin_solver_set_highs_crossover
+#define xts_solver_set_highs_callback rgmin_solver_set_highs_callback
 #define XTS_HIGHS_CHOOSE RGMIN_HIGHS_CHOOSE
 #define XTS_HIGHS_SIMPLEX RGMIN_HIGHS_SIMPLEX
 #define XTS_HIGHS_IPM RGMIN_HIGHS_IPM

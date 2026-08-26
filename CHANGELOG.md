@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- HiGHS user callback (`rgmin_solver_set_highs_callback`) for
+  logging and IPM interrupt. Constrained dest QPs are checked
+  against SciPy `trust-constr` (and `linprog` `highs-ipm` on LPs).
+  `abi_minor` 25.
 - Closed HiGHS engine waist: `rgmin_highs_solver_t` (choose / simplex /
   ipm / ipx / hipo / pdlp / hipdlp / qpasm) and
   `rgmin_highs_crossover_t`. Constrained dest defaults to IPM with
