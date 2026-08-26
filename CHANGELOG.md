@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Feature `slepc`: SLEPc EPS on the lowest-mode waist via MatShell
+  and typed `EPSSet*` / `STSet*` only. No `EPSSetFromOptions` and
+  no PETSc options database. A PETSc host may pass a Pmat through
+  `SlepcParams`. Unbuilt (default, or the feature on without
+  PETSc/SLEPc) stays `Error::EigenUnavailable`. The waist does not
+  call `SlepcInitializeNoArguments`.
 - Typed `ApplyPreconditioner` on the lowest-mode waist:
   `PreconditionerKind` none / diagonal / block3 / user. LOBPCG and
   Jacobi-Davidson apply `T` to the residual. Lanczos, dimer, and
