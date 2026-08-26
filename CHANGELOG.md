@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Typed `ApplyPreconditioner` on the lowest-mode waist:
+  `PreconditionerKind` none / diagonal / block3 / user. LOBPCG and
+  Jacobi-Davidson apply `T` to the residual. Lanczos, dimer, and
+  Rayleigh-Ritz ignore it.
 - Lanczos two-pass full reorthogonalization of the built Q
   (SLEPc `EPS_ORTH_FULL`). Start-vector `||q0|| < eps` returns
   without a column (eOn). Residual `beta <= 1e-10 |alpha|` is

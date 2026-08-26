@@ -175,6 +175,124 @@ impl EigenParams {
     }
 }
 
+/// Closed left-preconditioner on the lowest-mode waist.
+///
+/// Ordinals are dest tokens, not PETSc strings. [`crate::hvp::Preconditioner`]
+/// implements this as `T r = P^{-1} r`.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PreconditionerKind {
+    /// `T = I`.
+    None = 0,
+    /// Inverse diagonal (Jacobi).
+    Diagonal = 1,
+    /// Inverse 3-by-3 blocks on a 3N packing.
+    Block3 = 2,
+    /// Host-supplied [`ApplyPreconditioner`].
+    User = 3,
+}
+
+impl PreconditionerKind {
+    /// Token name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Diagonal => "diagonal",
+            Self::Block3 => "block3",
+            Self::User => "user",
+        }
+    }
+
+    /// Closed ordinal, or `None`.
+    pub fn from_ordinal(raw: u8) -> Option<Self> {
+        match raw {
+            0 => Some(Self::None),
+            1 => Some(Self::Diagonal),
+            2 => Some(Self::Block3),
+            3 => Some(Self::User),
+            _ => None,
+        }
+    }
+}
+
+/// `T r` at the current point. LOBPCG and Jacobi-Davidson apply this
+/// to the residual. Lanczos, dimer, and Rayleigh-Ritz ignore it.
+pub trait ApplyPreconditioner {
+    /// Left preconditioner `T r`.
+    fn apply_preconditioner(&self, x: ArrayView1<f64>, r: ArrayView1<f64>) -> Array1<f64>;
+    /// Closed kind for the C waist.
+    fn kind(&self) -> PreconditionerKind {
+        PreconditionerKind::User
+    }
+}
+
+impl ApplyPreconditioner for crate::hvp::IdentityPrecond {
+    fn apply_preconditioner(&self, _x: ArrayView1<f64>, r: ArrayView1<f64>) -> Array1<f64> {
+        self.solve(r)
+    }
+    fn kind(&self) -> PreconditionerKind {
+        PreconditionerKind::None
+    }
+}
+
+/// Inverse-diagonal Jacobi. `T r_i = r_i / max(|d_i|, floor)`.
+#[derive(Clone, Debug)]
+pub struct DiagonalJacobi {
+    /// Inverse diagonal entries.
+    pub inv: Array1<f64>,
+}
+
+impl DiagonalJacobi {
+    /// Build `T` from a stored diagonal.
+    pub fn from_diag(diag: ArrayView1<f64>) -> Self {
+        Self {
+            inv: Array1::from_iter(diag.iter().map(|d| 1.0 / d.abs().max(1e-8))),
+        }
+    }
+}
+
+impl ApplyPreconditioner for DiagonalJacobi {
+    fn apply_preconditioner(&self, _x: ArrayView1<f64>, r: ArrayView1<f64>) -> Array1<f64> {
+        Array1::from_iter(
+            r.iter()
+                .zip(self.inv.iter())
+                .map(|(ri, ti)| ri * ti),
+        )
+    }
+    fn kind(&self) -> PreconditionerKind {
+        PreconditionerKind::Diagonal
+    }
+}
+
+/// Inverse 3-by-3 Jacobi on a 3N packing. Remainder entries pass through.
+#[derive(Clone, Debug)]
+pub struct Block3Jacobi {
+    /// Inverse 3-by-3 blocks, row-major.
+    pub inv_blocks: Vec<[f64; 9]>,
+}
+
+impl ApplyPreconditioner for Block3Jacobi {
+    fn apply_preconditioner(&self, _x: ArrayView1<f64>, r: ArrayView1<f64>) -> Array1<f64> {
+        let n = r.len();
+        let mut z = r.to_owned();
+        let atoms = self.inv_blocks.len().min(n / 3);
+        for a in 0..atoms {
+            let b = &self.inv_blocks[a];
+            let i0 = 3 * a;
+            let r0 = r[i0];
+            let r1 = r[i0 + 1];
+            let r2 = r[i0 + 2];
+            z[i0] = b[0] * r0 + b[1] * r1 + b[2] * r2;
+            z[i0 + 1] = b[3] * r0 + b[4] * r1 + b[5] * r2;
+            z[i0 + 2] = b[6] * r0 + b[7] * r1 + b[8] * r2;
+        }
+        z
+    }
+    fn kind(&self) -> PreconditionerKind {
+        PreconditionerKind::Block3
+    }
+}
+
 /// Hessian action used by the lowest-mode waist.
 ///
 /// [`HessianVector`] implements this. Closures `Fn(x, v) -> H v` do too,
@@ -230,11 +348,29 @@ pub fn lowest_mode<H: ApplyHessian + ?Sized>(
     if seed.is_empty() {
         return Err(Error::Dim { got: 0, dim: 0 });
     }
+    lowest_mode_precond(h, x, seed, params, &crate::hvp::IdentityPrecond)
+}
+
+/// [`lowest_mode`] with a typed left preconditioner on LOBPCG and JD.
+pub fn lowest_mode_precond<H, P>(
+    h: &H,
+    x: ArrayView1<f64>,
+    seed: ArrayView1<f64>,
+    params: &EigenParams,
+    t: &P,
+) -> Result<LowestMode>
+where
+    H: ApplyHessian + ?Sized,
+    P: ApplyPreconditioner + ?Sized,
+{
+    if seed.is_empty() {
+        return Err(Error::Dim { got: 0, dim: 0 });
+    }
     match params.kind {
         EigensolverKind::Lanczos => Ok(lanczos(h, x, seed, params.krylov_dim(seed.len()))),
         EigensolverKind::RayleighRitz => Ok(rayleigh_ritz(h, x, seed, params)),
-        EigensolverKind::JacobiDavidson => Ok(jacobi_davidson(h, x, seed, params)),
-        EigensolverKind::Lobpcg => Ok(lobpcg(h, x, seed, params)),
+        EigensolverKind::JacobiDavidson => Ok(jacobi_davidson(h, x, seed, params, t)),
+        EigensolverKind::Lobpcg => Ok(lobpcg(h, x, seed, params, t)),
         EigensolverKind::Dimer => Ok(dimer(h, x, seed, params)),
         other => Err(Error::EigenUnavailable { kind: other.name() }),
     }
@@ -554,7 +690,7 @@ fn apply_jd<H: ApplyHessian + ?Sized>(
 
 /// Matrix-free Jacobi-Davidson correction: CG on
 /// `(I-uu^T)(H-θI)(I-uu^T) t = -r`, `t ⊥ u`.
-fn jd_correction<H: ApplyHessian + ?Sized>(
+fn jd_correction<H, P>(
     h: &H,
     x: ArrayView1<f64>,
     u: ArrayView1<f64>,
@@ -562,16 +698,23 @@ fn jd_correction<H: ApplyHessian + ?Sized>(
     residual: ArrayView1<f64>,
     max_inner: usize,
     actions: &mut usize,
-) -> Option<Array1<f64>> {
+    t: &P,
+) -> Option<Array1<f64>>
+where
+    H: ApplyHessian + ?Sized,
+    P: ApplyPreconditioner + ?Sized,
+{
     let n = residual.len();
     let mut b = residual.to_owned();
     b.mapv_inplace(|c| -c);
     project_against(u, &mut b);
     let mut sol = Array1::zeros(n);
     let mut r = b;
-    let mut p = r.clone();
-    let mut rsold = dot(r.view(), r.view());
-    if rsold <= 1e-30 {
+    let mut z = t.apply_preconditioner(x, r.view());
+    project_against(u, &mut z);
+    let mut p = z.clone();
+    let mut rsold = dot(r.view(), z.view());
+    if rsold.abs() <= 1e-30 {
         return None;
     }
     for _ in 0..max_inner {
@@ -584,12 +727,14 @@ fn jd_correction<H: ApplyHessian + ?Sized>(
         let alpha = rsold / pap;
         axpy(alpha, p.view(), &mut sol);
         axpy(-alpha, ap.view(), &mut r);
-        let rsnew = dot(r.view(), r.view());
-        if rsnew.sqrt() <= 1e-10 {
+        if nrm2(r.view()) <= 1e-10 {
             break;
         }
+        z = t.apply_preconditioner(x, r.view());
+        project_against(u, &mut z);
+        let rsnew = dot(r.view(), z.view());
         let beta = rsnew / rsold;
-        let mut p_new = r.clone();
+        let mut p_new = z;
         axpy(beta, p.view(), &mut p_new);
         p = p_new;
         rsold = rsnew;
@@ -602,12 +747,17 @@ fn jd_correction<H: ApplyHessian + ?Sized>(
     }
 }
 
-fn jacobi_davidson<H: ApplyHessian + ?Sized>(
+fn jacobi_davidson<H, P>(
     h: &H,
     x: ArrayView1<f64>,
     seed: ArrayView1<f64>,
     params: &EigenParams,
-) -> LowestMode {
+    t: &P,
+) -> LowestMode
+where
+    H: ApplyHessian + ?Sized,
+    P: ApplyPreconditioner + ?Sized,
+{
     let n = seed.len();
     let m = params.krylov_dim(n);
     let tol = params.tolerance();
@@ -648,6 +798,7 @@ fn jacobi_davidson<H: ApplyHessian + ?Sized>(
             residual.view(),
             inner,
             &mut extra_actions,
+            t,
         )
         .unwrap_or(residual);
         if !space.try_append(h, x, next) {
@@ -658,12 +809,17 @@ fn jacobi_davidson<H: ApplyHessian + ?Sized>(
     last
 }
 
-fn lobpcg<H: ApplyHessian + ?Sized>(
+fn lobpcg<H, P>(
     h: &H,
     x: ArrayView1<f64>,
     seed: ArrayView1<f64>,
     params: &EigenParams,
-) -> LowestMode {
+    t: &P,
+) -> LowestMode
+where
+    H: ApplyHessian + ?Sized,
+    P: ApplyPreconditioner + ?Sized,
+{
     let n = seed.len();
     let tol = params.tolerance();
     let max_iter = params.iterations(n);
@@ -678,6 +834,7 @@ fn lobpcg<H: ApplyHessian + ?Sized>(
         if nrm2(residual.view()) <= tol * (1.0 + theta.abs()) {
             break;
         }
+        residual = t.apply_preconditioner(x, residual.view());
         let mut space = Subspace::with_capacity(3);
         space.q.push(vec.clone());
         space.aq.push(avec.clone());
@@ -873,6 +1030,70 @@ mod tests {
         fn apply_hessian(&self, _x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
             Array1::from_iter(self.0.iter().zip(v.iter()).map(|(l, vi)| l * vi))
         }
+    }
+
+    #[test]
+    fn preconditioner_ordinals_are_closed() {
+        assert_eq!(PreconditionerKind::from_ordinal(0), Some(PreconditionerKind::None));
+        assert_eq!(PreconditionerKind::from_ordinal(1), Some(PreconditionerKind::Diagonal));
+        assert_eq!(PreconditionerKind::from_ordinal(2), Some(PreconditionerKind::Block3));
+        assert_eq!(PreconditionerKind::from_ordinal(3), Some(PreconditionerKind::User));
+        assert!(PreconditionerKind::from_ordinal(4).is_none());
+        assert_eq!(crate::hvp::IdentityPrecond.kind(), PreconditionerKind::None);
+    }
+
+    #[test]
+    fn lobpcg_none_recovers_gapped_32() {
+        let n = 32;
+        let mut lam = Array1::from_elem(n, 1.0);
+        lam[0] = -2.5;
+        let h = DiagH(lam);
+        let x = Array1::zeros(n);
+        let mut seed = Array1::zeros(n);
+        seed[0] = 0.3;
+        seed[3] = 0.7;
+        seed[11] = 0.2;
+        let mode = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Lobpcg,
+                max_iter: 16,
+                tol: 1e-6,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap();
+        assert!(mode.value < 0.0);
+        assert!(mode.vector[0].abs() > 0.9);
+    }
+
+    #[test]
+    fn lobpcg_diagonal_uses_fewer_actions_than_none() {
+        let n = 32;
+        let mut lam = Array1::from_elem(n, 50.0);
+        lam[0] = -1.0;
+        let h = DiagH(lam.clone());
+        let x = Array1::zeros(n);
+        let seed = Array1::ones(n);
+        let params = EigenParams {
+            kind: EigensolverKind::Lobpcg,
+            max_iter: 40,
+            tol: 1e-8,
+            ..EigenParams::default()
+        };
+        let none = lowest_mode(&h, x.view(), seed.view(), &params).unwrap();
+        let t = DiagonalJacobi::from_diag(lam.view());
+        let diag = lowest_mode_precond(&h, x.view(), seed.view(), &params, &t).unwrap();
+        assert!(none.value < 0.0 && diag.value < 0.0);
+        assert!(none.vector[0].abs() > 0.9 && diag.vector[0].abs() > 0.9);
+        assert!(
+            diag.actions < none.actions,
+            "Diagonal {} actions, None {}",
+            diag.actions,
+            none.actions
+        );
     }
 
     #[test]

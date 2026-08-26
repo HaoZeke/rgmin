@@ -84,7 +84,8 @@ pub use qn_irc::{
 };
 pub use sella_step::{prfo_restricted, ras_clip, rfo_get_s, rfo_restricted, ts_bfgs_update};
 pub use lowest_mode::{
-    lowest_eigenpair, lowest_mode, ApplyHessian, EigenParams, EigensolverKind, LowestMode,
+    lowest_eigenpair, lowest_mode, lowest_mode_precond, ApplyHessian, ApplyPreconditioner,
+    Block3Jacobi, DiagonalJacobi, EigenParams, EigensolverKind, LowestMode, PreconditionerKind,
     DENSE_EIGEN_CUTOFF,
 };
 pub use hvp::{
