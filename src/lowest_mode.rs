@@ -323,7 +323,7 @@ fn reorthogonalize(w: &mut Array1<f64>, q: &[Array1<f64>]) {
 
 fn gram_inf_error(q: &[Array1<f64>]) -> f64 {
     let k = q.len();
-    let mut worst = 0.0;
+    let mut worst: f64 = 0.0;
     for i in 0..k {
         for j in i..k {
             let g = dot(q[i].view(), q[j].view());
