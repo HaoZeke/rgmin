@@ -4,8 +4,9 @@
 //! not a full ELPA / SLATE spectrum. Dispatch is a closed
 //! [`EigensolverKind`]: Lanczos, Rayleigh-Ritz, Jacobi-Davidson,
 //! LOBPCG, and the Jónsson dimer with Heyden plane rotations run
-//! here; every other named backend fail-closes with
-//! [`Error::EigenUnavailable`]. Integers match `schema/eigen.capnp`.
+//! here; SLEPc EPS runs only with feature `slepc` (MatShell plus
+//! typed `EPSSet*` / `STSet*`); every other named backend fail-closes
+//! with [`Error::EigenUnavailable`]. Integers match `schema/eigen.capnp`.
 
 use ndarray::{Array1, ArrayView1};
 
@@ -32,7 +33,7 @@ pub enum EigensolverKind {
     Lobpcg = 3,
     /// PRIMME. Not linked.
     Primme = 4,
-    /// SLEPc EPS. Not linked.
+    /// SLEPc EPS. Linked only with feature `slepc`.
     Slepc = 5,
     /// ChASE Chebyshev filter. Not linked.
     Chase = 6,
@@ -78,10 +79,15 @@ impl EigensolverKind {
 
     /// Built into this crate. Unlinked kinds return [`Error::EigenUnavailable`].
     pub const fn is_linked(self) -> bool {
-        matches!(
-            self,
-            Self::Lanczos | Self::RayleighRitz | Self::JacobiDavidson | Self::Lobpcg | Self::Dimer
-        )
+        match self {
+            Self::Lanczos
+            | Self::RayleighRitz
+            | Self::JacobiDavidson
+            | Self::Lobpcg
+            | Self::Dimer => true,
+            Self::Slepc => cfg!(feature = "slepc"),
+            _ => false,
+        }
     }
 
     /// Works from Hessian actions, no assembled matrix.
@@ -149,7 +155,7 @@ impl Default for EigenParams {
 }
 
 impl EigenParams {
-    fn krylov_dim(self, n: usize) -> usize {
+    pub(crate) fn krylov_dim(self, n: usize) -> usize {
         let k = if self.krylov == 0 {
             12.min(n)
         } else {
@@ -158,15 +164,11 @@ impl EigenParams {
         k.clamp(1, n.max(1))
     }
 
-    fn tolerance(self) -> f64 {
-        if self.tol > 0.0 {
-            self.tol
-        } else {
-            1e-8
-        }
+    pub(crate) fn tolerance(self) -> f64 {
+        if self.tol > 0.0 { self.tol } else { 1e-8 }
     }
 
-    fn iterations(self, n: usize) -> usize {
+    pub(crate) fn iterations(self, n: usize) -> usize {
         if self.max_iter == 0 {
             n.max(8)
         } else {
@@ -236,6 +238,9 @@ pub fn lowest_mode<H: ApplyHessian + ?Sized>(
         EigensolverKind::JacobiDavidson => Ok(jacobi_davidson(h, x, seed, params)),
         EigensolverKind::Lobpcg => Ok(lobpcg(h, x, seed, params)),
         EigensolverKind::Dimer => Ok(dimer(h, x, seed, params)),
+        EigensolverKind::Slepc => {
+            crate::slepc_eps::lowest(h, x, seed, params, crate::slepc_eps::SlepcHost::default())
+        }
         other => Err(Error::EigenUnavailable { kind: other.name() }),
     }
 }
@@ -781,8 +786,8 @@ fn jacobi_eigen(a: &mut [Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hvp::HvpOracle;
     use crate::Error;
+    use crate::hvp::HvpOracle;
     use ndarray::array;
 
     fn gapped_diag(
@@ -912,10 +917,7 @@ mod tests {
         let seed = Array1::from_iter((0..n).map(|i| 1.0 + i as f64 / (n as f64 - 1.0)));
         let (q, _alpha, _beta, _actions) = lanczos_basis(&h, x.view(), seed.view(), 55);
         let err = gram_inf_error(&q);
-        assert!(
-            err < 1e-10,
-            "two-pass full reortho Gram inf-error {err}"
-        );
+        assert!(err < 1e-10, "two-pass full reortho Gram inf-error {err}");
     }
 
     #[test]
@@ -1127,6 +1129,29 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "slepc"))]
+    #[test]
+    fn slepc_kind_fail_closes_without_the_feature() {
+        assert!(!EigensolverKind::Slepc.is_linked());
+        let h = gapped_diag(4);
+        let x = Array1::zeros(4);
+        let seed = array![1.0, 0.0, 0.0, 0.0];
+        let err = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Slepc,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenUnavailable { kind: name } => assert_eq!(name, "slepc"),
+            other => panic!("expected unavailable, got {other}"),
+        }
+    }
+
     #[test]
     fn unlinked_kinds_fail_closed() {
         let h = gapped_diag(4);
@@ -1134,7 +1159,9 @@ mod tests {
         let seed = array![1.0, 0.0, 0.0, 0.0];
         for raw in 4u8..=13 {
             let kind = EigensolverKind::from_ordinal(raw).unwrap();
-            assert!(!kind.is_linked());
+            if kind.is_linked() {
+                continue;
+            }
             let err = lowest_mode(
                 &h,
                 x.view(),

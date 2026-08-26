@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Feature `slepc`: SLEPc EPS on the lowest-mode waist. MatShell wraps
+  `ApplyHessian`; typed `EPSSet*` / `STSet*` only (`EPS_HEP`,
+  `EPS_SMALLEST_REAL`, `STSHIFT` or `STPRECOND` when the host supplies
+  a Pmat). No `EPSSetFromOptions`, no PETSc options database. Unbuilt
+  feature still `Error::EigenUnavailable` / `RGMIN_UNAVAILABLE`.
 - Lanczos two-pass full reorthogonalization of the built Q
   (SLEPc `EPS_ORTH_FULL`). Start-vector `||q0|| < eps` returns
   without a column (eOn). Residual `beta <= 1e-10 |alpha|` is

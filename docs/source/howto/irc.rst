@@ -19,9 +19,12 @@ It is an equality on ``MwRigid``:
 pair from ``H v``, not a full ELPA / SLATE spectrum)
 :cite:`ishidaIntrinsicReactionCoordinate1977,pageEvaluatingReactionPath1988,davidsonIterativeCalculationFew1975,sleijpenJacobidavidsonIterationMethod1996,knyazevTowardOptimalPreconditioned2001`.
 Dispatch is the closed ``EigensolverKind`` in ``schema/eigen.capnp``:
-Lanczos (default), Rayleigh-Ritz, Jacobi-Davidson, LOBPCG. PRIMME,
-SLEPc, ChASE, ELPA, ELPA2, SLATE, MAGMA, cuSOLVER, DLA-Future,
-and EigenExa return ``Error::EigenUnavailable`` until linked
+Lanczos (default), Rayleigh-Ritz, Jacobi-Davidson, LOBPCG. SLEPc
+EPS is feature ``slepc``: ``MatCreateShell`` plus typed ``EPSSet*`` /
+``STSet*`` only, never ``EPSSetFromOptions``. A host that already
+lives in PETSc may pass a Pmat (``STPRECOND``). PRIMME, ChASE, ELPA,
+ELPA2, SLATE, MAGMA, cuSOLVER, DLA-Future, EigenExa, and unbuilt
+SLEPc return ``Error::EigenUnavailable``
 :cite:`winkelmannChase2019,marekElpaLibraryScalable2014,yuGpuaccelerationElpa2Distributed2021`.
 There is no string key. The session that owns forward and reverse
 branches lives in

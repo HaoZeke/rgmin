@@ -51,6 +51,8 @@ mod minimize;
 pub mod hvp;
 /// Matrix-free lowest Hessian eigenpair (IRC kick / lambda_min).
 pub mod lowest_mode;
+/// SLEPc EPS waist: MatShell plus typed EPSSet* / STSet*.
+pub mod slepc_eps;
 /// Shifted Newton and Banerjee RFO on a dense Hessian.
 pub mod newton;
 mod oracle;
@@ -86,6 +88,9 @@ pub use sella_step::{prfo_restricted, ras_clip, rfo_get_s, rfo_restricted, ts_bf
 pub use lowest_mode::{
     lowest_eigenpair, lowest_mode, ApplyHessian, EigenParams, EigensolverKind, LowestMode,
     DENSE_EIGEN_CUTOFF,
+};
+pub use slepc_eps::{
+    lowest_mode_slepc, SlepcHost, SlepcPlan, SlepcProblem, SlepcStKind, SlepcWhich,
 };
 pub use hvp::{
     FdHvp, HessianVector, HvpOracle, IdentityPrecond, NystromPrecond, Preconditioner,
