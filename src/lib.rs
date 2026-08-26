@@ -37,6 +37,8 @@ pub mod ffi;
 pub mod fire;
 /// Persistent L-BFGS (Nocedal-Wright 7.4) with strong Wolfe.
 pub mod lbfgs;
+/// Closed HiGHS solver and crossover tokens.
+pub mod highs_kind;
 /// L-BFGS quadratic model solved by HiGHS.
 #[cfg(feature = "highs")]
 pub mod lbfgs_qp;
@@ -73,6 +75,7 @@ pub use accept::Accept;
 pub use adam::minimize_adam;
 pub use control::Control;
 pub use error::{Error, Result};
+pub use highs_kind::{HighsCrossover, HighsSolverKind};
 pub use fire::FireKind;
 pub use irc_trust::{sqrt_masses_3n, IrcTrust};
 pub use qn_irc::{

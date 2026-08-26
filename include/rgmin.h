@@ -49,7 +49,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 23
+#define RGMIN_ABI_VERSION_MINOR 24
 #define RGMIN_ABI_LAYOUT_REVISION 4
 
 /** Solver selector. \c RGMIN_LBFGS is the production unconstrained method. */
@@ -222,6 +222,38 @@ int32_t rgmin_solver_add_equality(rgmin_solver_t *solver, const size_t *idx,
                                 const double *coef, size_t nnz, double rhs);
 /** Drop every stored HiGHS equality. Returns 0, or 1 without highs. */
 int32_t rgmin_solver_clear_equalities(rgmin_solver_t *solver);
+/** HiGHS `solver` token. Constrained dest defaults to
+ *  \c RGMIN_HIGHS_IPM. Unknown integers return 1. Returns 0, or 1
+ *  without highs. */
+typedef enum rgmin_highs_solver_t {
+    RGMIN_HIGHS_CHOOSE = 0,
+    RGMIN_HIGHS_SIMPLEX = 1,
+    RGMIN_HIGHS_IPM = 2,
+    RGMIN_HIGHS_IPX = 3,
+    RGMIN_HIGHS_HIPO = 4,
+    RGMIN_HIGHS_PDLP = 5,
+    RGMIN_HIGHS_HIPDLP = 6,
+    RGMIN_HIGHS_QPASM = 7
+} rgmin_highs_solver_t;
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(rgmin_highs_solver_t) == sizeof(int32_t),
+               "rgmin_highs_solver_t is i32-wide; do not build this header with -fshort-enums");
+#endif
+int32_t rgmin_solver_set_highs_solver(rgmin_solver_t *solver,
+                                      rgmin_highs_solver_t kind);
+/** HiGHS `run_crossover`. Constrained dest defaults to
+ *  \c RGMIN_HIGHS_CROSSOVER_OFF. Unknown integers return 1. */
+typedef enum rgmin_highs_crossover_t {
+    RGMIN_HIGHS_CROSSOVER_CHOOSE = 0,
+    RGMIN_HIGHS_CROSSOVER_ON = 1,
+    RGMIN_HIGHS_CROSSOVER_OFF = 2
+} rgmin_highs_crossover_t;
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(rgmin_highs_crossover_t) == sizeof(int32_t),
+               "rgmin_highs_crossover_t is i32-wide; do not build this header with -fshort-enums");
+#endif
+int32_t rgmin_solver_set_highs_crossover(rgmin_solver_t *solver,
+                                         rgmin_highs_crossover_t kind);
 /** Embedded manifold. Euclidean is the default.
  *  Molecular clusters use RIGID_QUOTIENT (Sella Cartesian T+R,
  *  R^{3N}/SE(3)) or MW_RIGID (Page-McIver / Sella IRC Eckart).

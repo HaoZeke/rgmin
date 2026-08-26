@@ -63,7 +63,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 23;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 24;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -127,6 +127,29 @@ pub enum rgmin_conjugacy_t {
     RGMIN_CONJUGACY_HAGER_ZHANG = 5,
     RGMIN_CONJUGACY_LIU_STOREY = 6,
     RGMIN_CONJUGACY_FR_PR = 7,
+}
+
+/// HiGHS `solver`. Integers match [`crate::HighsSolverKind`].
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum rgmin_highs_solver_t {
+    RGMIN_HIGHS_CHOOSE = 0,
+    RGMIN_HIGHS_SIMPLEX = 1,
+    RGMIN_HIGHS_IPM = 2,
+    RGMIN_HIGHS_IPX = 3,
+    RGMIN_HIGHS_HIPO = 4,
+    RGMIN_HIGHS_PDLP = 5,
+    RGMIN_HIGHS_HIPDLP = 6,
+    RGMIN_HIGHS_QPASM = 7,
+}
+
+/// HiGHS `run_crossover`. Integers match [`crate::HighsCrossover`].
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum rgmin_highs_crossover_t {
+    RGMIN_HIGHS_CROSSOVER_CHOOSE = 0,
+    RGMIN_HIGHS_CROSSOVER_ON = 1,
+    RGMIN_HIGHS_CROSSOVER_OFF = 2,
 }
 
 /// Iteration controls. `memory` is used only by L-BFGS (0 means 10).
@@ -1510,6 +1533,60 @@ pub unsafe extern "C" fn rgmin_solver_clear_equalities(solver: *mut rgmin_solver
     }
 }
 
+/// HiGHS `solver` token. Unknown integers return 1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_highs_solver(
+    solver: *mut rgmin_solver_t,
+    kind: rgmin_highs_solver_t,
+) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_highs_solver: null solver");
+        return 1;
+    }
+    let Some(tok) = crate::HighsSolverKind::from_ordinal(kind as i32) else {
+        set_last_error("rgmin_solver_set_highs_solver: unknown token");
+        return 1;
+    };
+    #[cfg(feature = "highs")]
+    {
+        let _ = unsafe { (*solver).solver.set_highs_solver(tok) };
+        0
+    }
+    #[cfg(not(feature = "highs"))]
+    {
+        let _ = tok;
+        set_last_error("rgmin_solver_set_highs_solver: build has no highs feature");
+        1
+    }
+}
+
+/// HiGHS `run_crossover`. Unknown integers return 1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_highs_crossover(
+    solver: *mut rgmin_solver_t,
+    kind: rgmin_highs_crossover_t,
+) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_highs_crossover: null solver");
+        return 1;
+    }
+    let Some(tok) = crate::HighsCrossover::from_ordinal(kind as i32) else {
+        set_last_error("rgmin_solver_set_highs_crossover: unknown token");
+        return 1;
+    };
+    #[cfg(feature = "highs")]
+    {
+        let _ = unsafe { (*solver).solver.set_highs_crossover(tok) };
+        0
+    }
+    #[cfg(not(feature = "highs"))]
+    {
+        let _ = tok;
+        set_last_error("rgmin_solver_set_highs_crossover: build has no highs feature");
+        1
+    }
+}
+
 /// Embedded manifold.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2210,6 +2287,8 @@ mod conjugacy_abi_tests {
     #[test]
     fn scg_params_layout_is_five_doubles_then_i32() {
         assert_eq!(size_of::<rgmin_conjugacy_t>(), 4);
+        assert_eq!(size_of::<rgmin_highs_solver_t>(), 4);
+        assert_eq!(size_of::<rgmin_highs_crossover_t>(), 4);
         assert_eq!(size_of::<rgmin_scg_params_t>(), 48);
         assert_eq!(offset_of!(rgmin_scg_params_t, sigma0), 0);
         assert_eq!(offset_of!(rgmin_scg_params_t, lambda), 8);

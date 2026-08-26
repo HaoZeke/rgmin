@@ -225,6 +225,12 @@ public:
         return rgmin_solver_add_equality(ptr_, idx, coef, nnz, rhs);
     }
     int clear_equalities() { return rgmin_solver_clear_equalities(ptr_); }
+    int set_highs_solver(rgmin_highs_solver_t kind) {
+        return rgmin_solver_set_highs_solver(ptr_, kind);
+    }
+    int set_highs_crossover(rgmin_highs_crossover_t kind) {
+        return rgmin_solver_set_highs_crossover(ptr_, kind);
+    }
     void set_manifold(rgmin_manifold_t m) { rgmin_solver_set_manifold(ptr_, m); }
     void set_oblique(std::size_t n, std::size_t m) {
         rgmin_solver_set_oblique(ptr_, n, m);

@@ -56,6 +56,10 @@ pub struct Solver {
     highs_trust: Option<f64>,
     #[cfg(feature = "highs")]
     equalities: Vec<(Vec<(usize, f64)>, f64)>,
+    #[cfg(feature = "highs")]
+    highs_solver: crate::HighsSolverKind,
+    #[cfg(feature = "highs")]
+    highs_crossover: crate::HighsCrossover,
     last_pos: Option<Array1<f64>>,
     last_value: f64,
     last_grad: Array1<f64>,
@@ -147,6 +151,10 @@ impl Solver {
             highs_trust: None,
             #[cfg(feature = "highs")]
             equalities: Vec::new(),
+            #[cfg(feature = "highs")]
+            highs_solver: crate::HighsSolverKind::Ipm,
+            #[cfg(feature = "highs")]
+            highs_crossover: crate::HighsCrossover::Off,
             last_pos: None,
             last_value: 0.0,
             last_grad: Array1::zeros(dim),
@@ -370,6 +378,36 @@ impl Solver {
         }
     }
 
+    /// HiGHS `solver` token. Returns `true` with `highs`.
+    pub fn set_highs_solver(&mut self, kind: crate::HighsSolverKind) -> bool {
+        #[cfg(not(feature = "highs"))]
+        {
+            let _ = kind;
+            false
+        }
+        #[cfg(feature = "highs")]
+        {
+            self.highs_solver = kind;
+            self.apply_highs_opts();
+            true
+        }
+    }
+
+    /// HiGHS `run_crossover`. Returns `true` with `highs`.
+    pub fn set_highs_crossover(&mut self, kind: crate::HighsCrossover) -> bool {
+        #[cfg(not(feature = "highs"))]
+        {
+            let _ = kind;
+            false
+        }
+        #[cfg(feature = "highs")]
+        {
+            self.highs_crossover = kind;
+            self.apply_highs_opts();
+            true
+        }
+    }
+
     #[cfg(feature = "highs")]
     fn apply_highs_opts(&mut self) {
         if !self.highs {
@@ -391,6 +429,8 @@ impl Solver {
             } else {
                 None
             },
+            solver: self.highs_solver,
+            crossover: self.highs_crossover,
         };
         if let Inner::Lbfgs(solver) = &mut self.inner {
             solver.highs = Some(step);
@@ -639,6 +679,8 @@ impl Solver {
                 self.highs_trust.or(self.control.maxmove),
                 center,
                 &self.equalities,
+                self.highs_solver,
+                self.highs_crossover,
             ) {
                 let old = x.clone();
                 let gold = grad.clone();

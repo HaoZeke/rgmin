@@ -11,14 +11,15 @@
 //! mean. Arbitrary equalities still go to HiGHS as
 //! `min 1/2 ||p - d||^2` with `Q = I`.
 //!
-//! Huangfu and Hall, *Parallelizing the dual revised simplex method*,
-//! <https://doi.org/10.1007/s12532-017-0130-5>.
+//! Constrained QP uses HiGHS IPM (`solver=ipm`, crossover off) unless
+//! the caller pins IPX, HiPO, simplex, PDLP, or qpasm.
 
 use highs::{HighsModelStatus, RowProblem, Sense};
 use highs_sys::{Highs_passHessian, HighsInt, STATUS_OK};
 use ndarray::{Array1, Array2, ArrayView1};
 
 use crate::error::{Error, Result};
+use crate::highs_kind::{HighsCrossover, HighsSolverKind};
 use crate::lbfgs::Lbfgs;
 
 /// Pin OpenMP to one thread exactly once, before any HiGHS solve.
@@ -37,7 +38,7 @@ fn serialise_openmp_once() {
 }
 
 /// Bounds and equalities on one L-BFGS model step.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct HighsStep {
     /// L_inf trust radius on the step. `None` is unbounded.
     pub trust: Option<f64>,
@@ -52,6 +53,24 @@ pub struct HighsStep {
     /// Packed `(n_atoms, dim)`: enforce `sum_i p[i * dim + h] = 0` per axis.
     /// This is a mean subtract, not a QP.
     pub center_axes: Option<(usize, usize)>,
+    /// HiGHS engine. Constrained dest uses IPM.
+    pub solver: HighsSolverKind,
+    /// Crossover after IPM. Off: the dest step is the interior point.
+    pub crossover: HighsCrossover,
+}
+
+impl Default for HighsStep {
+    fn default() -> Self {
+        Self {
+            trust: None,
+            lo: None,
+            hi: None,
+            equalities: Vec::new(),
+            center_axes: None,
+            solver: HighsSolverKind::Ipm,
+            crossover: HighsCrossover::Off,
+        }
+    }
 }
 
 impl HighsStep {
@@ -62,6 +81,24 @@ impl HighsStep {
     fn needs_qp(&self) -> bool {
         !self.equalities.is_empty()
     }
+}
+
+fn apply_engine(
+    model: &mut highs::Model,
+    solver: HighsSolverKind,
+    crossover: HighsCrossover,
+) -> Result<()> {
+    if let Some(name) = solver.as_highs() {
+        model
+            .try_set_option("solver", name)
+            .map_err(|_| Error::Highs(format!("cannot set solver={name}")))?;
+    }
+    if let Some(name) = crossover.as_highs() {
+        model
+            .try_set_option("run_crossover", name)
+            .map_err(|_| Error::Highs(format!("cannot set run_crossover={name}")))?;
+    }
+    Ok(())
 }
 
 impl Lbfgs {
@@ -124,6 +161,7 @@ fn project_qp(d: &Array1<f64>, x: ArrayView1<f64>, opts: &HighsStep) -> Result<A
     model
         .try_set_option("time_limit", 0.05_f64)
         .map_err(|_| Error::Highs("cannot set time_limit".into()))?;
+    apply_engine(&mut model, opts.solver, opts.crossover)?;
 
     let (q_start, q_index, q_value) = identity_csc(n);
     let st = unsafe {
@@ -278,6 +316,8 @@ pub fn highs_feasible_step(
     trust: Option<f64>,
     center_axes: Option<(usize, usize)>,
     equalities: &[(Vec<(usize, f64)>, f64)],
+    solver: HighsSolverKind,
+    crossover: HighsCrossover,
 ) -> Result<Array1<f64>> {
     let n = grad.len();
     let boxed = atom_maxmove.is_some_and(|c| c > 0.0)
@@ -341,6 +381,7 @@ pub fn highs_feasible_step(
     let _ = model.try_set_option("parallel", "off");
     let _ = model.try_set_option("threads", 1_i32);
     let _ = model.try_set_option("time_limit", 1.0_f64);
+    apply_engine(&mut model, solver, crossover)?;
 
     let (q_start, q_index, q_value) = match q {
         Some(h) => dense_csc(h),

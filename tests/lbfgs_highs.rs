@@ -60,6 +60,7 @@ fn box_keeps_the_trial_inside() {
         hi: Some(vec![0.3]),
         equalities: Vec::new(),
         center_axes: None,
+        ..Default::default()
     });
     let x = Array1::from(vec![0.2, -0.2]);
     let g = Array1::from(vec![10.0, -10.0]);
@@ -113,6 +114,7 @@ fn trust_scale_keeps_the_two_loop_direction() {
         hi: None,
         equalities: Vec::new(),
         center_axes: None,
+        ..Default::default()
     });
     let p = opt.highs_step(x.view(), g.view()).unwrap();
     let n2 = raw.dot(&raw).sqrt();
@@ -133,6 +135,7 @@ fn center_axes_kills_the_mean() {
         hi: None,
         equalities: Vec::new(),
         center_axes: Some((4, 2)),
+        ..Default::default()
     });
     let x = Array1::zeros(8);
     let g = Array1::from(vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
@@ -226,6 +229,7 @@ fn per_coordinate_box_is_independent() {
         hi: Some(vec![0.1, 10.0]),
         equalities: Vec::new(),
         center_axes: None,
+        ..Default::default()
     });
     let x = Array1::from(vec![0.0, 0.0]);
     let g = Array1::from(vec![10.0, 10.0]);
@@ -246,6 +250,7 @@ fn per_coord_box_is_not_uniform() {
         hi: Some(vec![0.05, 10.0]),
         equalities: Vec::new(),
         center_axes: None,
+        ..Default::default()
     });
     let x = Array1::from(vec![0.0, 0.0]);
     let g = Array1::from(vec![1.0, 100.0]);
@@ -417,6 +422,7 @@ fn null_side_is_unbounded_on_that_side() {
         hi: None,
         equalities: Vec::new(),
         center_axes: None,
+        ..Default::default()
     });
     let x = Array1::from(vec![0.5, 0.5]);
     let g = Array1::from(vec![-10.0, -1.0]);
@@ -554,5 +560,77 @@ fn newton_qp_applies_session_equalities() {
     assert!(
         (dp0 + dp1).abs() < 1e-8,
         "Newton equality a·p=0 missed: p=({dp0}, {dp1})"
+    );
+}
+
+#[test]
+fn default_highs_step_is_ipm_without_crossover() {
+    let s = HighsStep::default();
+    assert_eq!(s.solver, rgmin::HighsSolverKind::Ipm);
+    assert_eq!(s.crossover, rgmin::HighsCrossover::Off);
+}
+
+#[test]
+fn ipm_equality_projection_holds() {
+    let mut opt = Lbfgs::default();
+    opt.highs = Some(HighsStep {
+        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.0)],
+        solver: rgmin::HighsSolverKind::Ipm,
+        crossover: rgmin::HighsCrossover::Off,
+        ..HighsStep::default()
+    });
+    let x0 = Array1::from(vec![1.0, -0.5, 0.25, 0.0]);
+    let g0 = quad(x0.view()).1;
+    let p = opt.highs_step(x0.view(), g0.view()).unwrap();
+    assert!(p.iter().all(|v| v.is_finite()));
+    assert!((p[0] + p[1]).abs() < 1e-8, "ipm a·p {}", p[0] + p[1]);
+}
+
+#[test]
+fn c_abi_set_highs_solver_is_closed() {
+    use rgmin::ffi::{
+        rgmin_control_t, rgmin_highs_crossover_t, rgmin_highs_solver_t, rgmin_method_t,
+        rgmin_solver_create, rgmin_solver_free, rgmin_solver_set_highs,
+        rgmin_solver_set_highs_crossover, rgmin_solver_set_highs_solver,
+    };
+    let ctrl = rgmin_control_t {
+        maxiter: 1,
+        gtol: 1e-8,
+        istep: 0.1,
+        memory: 4,
+        maxmove: 0.0,
+    };
+    let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_LBFGS, &ctrl, 2) };
+    assert!(!session.is_null());
+    assert_eq!(unsafe { rgmin_solver_set_highs(session, 1) }, 0);
+    assert_eq!(
+        unsafe { rgmin_solver_set_highs_solver(session, rgmin_highs_solver_t::RGMIN_HIGHS_IPM) },
+        0
+    );
+    assert_eq!(
+        unsafe { rgmin_solver_set_highs_solver(session, rgmin_highs_solver_t::RGMIN_HIGHS_IPX) },
+        0
+    );
+    assert_eq!(
+        unsafe {
+            rgmin_solver_set_highs_crossover(
+                session,
+                rgmin_highs_crossover_t::RGMIN_HIGHS_CROSSOVER_OFF,
+            )
+        },
+        0
+    );
+    let unknown = unsafe { std::mem::transmute::<i32, rgmin_highs_solver_t>(99) };
+    assert_eq!(unsafe { rgmin_solver_set_highs_solver(session, unknown) }, 1);
+    let unknown_x = unsafe { std::mem::transmute::<i32, rgmin_highs_crossover_t>(9) };
+    assert_eq!(
+        unsafe { rgmin_solver_set_highs_crossover(session, unknown_x) },
+        1
+    );
+    unsafe { rgmin_solver_free(session) };
+    let null = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { rgmin_solver_set_highs_solver(null, rgmin_highs_solver_t::RGMIN_HIGHS_IPM) },
+        1
     );
 }

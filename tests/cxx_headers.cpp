@@ -48,6 +48,9 @@ int main() {
     double lo[2] = {-1.0, -2.0};
     double hi[2] = {1.0, 2.0};
     int st = solver.set_box(lo, hi, 2);
-    std::printf("optimize nit=%zu grad=%g set_box=%d\n", r.nit, r.grad_norm, st);
+    int st_ipm = solver.set_highs_solver(RGMIN_HIGHS_IPM);
+    int st_x = solver.set_highs_crossover(RGMIN_HIGHS_CROSSOVER_OFF);
+    std::printf("optimize nit=%zu grad=%g set_box=%d ipm=%d xover=%d\n", r.nit,
+                r.grad_norm, st, st_ipm, st_x);
     return 0;
 }
