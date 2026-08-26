@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Assembled-H entry `lowest_mode_dense` is the only path that
+  would call ELPA / ELPA2 / SLATE. `lowest_mode` on `ApplyHessian`
+  stays `Error::EigenUnavailable` for those kinds and does not
+  assemble `H`. Gate is `n >= 512`. C `rgmin_lowest_eigenpair`
+  stays Hessian-vector and `RGMIN_UNAVAILABLE` for those kinds.
 - DLA-Future assembled-H entry (`lowest_mode_dlaf`): `begin` must
   be 0 and `n >= 512`. ApplyHessian `lowest_mode` stays
   `Error::EigenUnavailable` and does not assemble `H`.

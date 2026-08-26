@@ -9,7 +9,7 @@
 //! every other named backend fail-closes with
 //! [`Error::EigenUnavailable`]. Integers match `schema/eigen.capnp`.
 
-use ndarray::{Array1, ArrayView1};
+use ndarray::{Array1, ArrayView1, ArrayView2};
 
 use crate::dlaf_kind::DlaFutureParams;
 use crate::eigenexa_kind::EigenExaParams;
@@ -525,6 +525,45 @@ pub fn lowest_mode_dlaf(
     Err(Error::EigenUnavailable {
         kind: EigensolverKind::DlaFuture.name(),
     })
+}
+
+/// Assembled symmetric `H` entry for ELPA / ELPA2 / SLATE.
+///
+/// [`lowest_mode`] on `ApplyHessian` never calls this: those kinds
+/// stay [`Error::EigenUnavailable`] so the waist cannot form `H`
+/// with `n` actions. `n` must be at least [`DENSE_EIGEN_CUTOFF`].
+/// Unlinked builds stay unavailable. The C `rgmin_lowest_eigenpair`
+/// waist is Hessian-vector only.
+pub fn lowest_mode_dense(
+    h: ArrayView2<f64>,
+    params: &EigenParams,
+) -> Result<LowestMode> {
+    if h.nrows() != h.ncols() {
+        return Err(Error::Dim {
+            got: h.nrows(),
+            dim: h.ncols(),
+        });
+    }
+    let n = h.nrows();
+    if n == 0 {
+        return Err(Error::Dim { got: 0, dim: 0 });
+    }
+    match params.kind {
+        EigensolverKind::Elpa | EigensolverKind::Elpa2 | EigensolverKind::Slate => {
+            if n < DENSE_EIGEN_CUTOFF {
+                return Err(Error::EigenDenseCutoff {
+                    kind: params.kind.name(),
+                    n,
+                    cutoff: DENSE_EIGEN_CUTOFF,
+                });
+            }
+            let _ = h;
+            Err(Error::EigenUnavailable {
+                kind: params.kind.name(),
+            })
+        }
+        other => Err(Error::EigenUnavailable { kind: other.name() }),
+    }
 }
 
 /// [`lowest_mode`] with a typed left preconditioner on LOBPCG, JD, and PRIMME.
@@ -1937,5 +1976,90 @@ mod tests {
         assert!(!EigensolverKind::DlaFuture.is_linked());
         assert_eq!(EigensolverKind::DlaFuture as u8, 12);
         assert_eq!(DlaFutureParams::default().begin, 0);
+    }
+
+    #[test]
+    fn dense_applyhessian_elpa_slate_stay_unavailable_and_do_not_assemble() {
+        use std::cell::Cell;
+        struct CountH<'a>(&'a Cell<usize>);
+        impl ApplyHessian for CountH<'_> {
+            fn apply_hessian(&self, _x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
+                self.0.set(self.0.get() + 1);
+                v.to_owned()
+            }
+        }
+        let x = Array1::zeros(4);
+        let seed = array![1.0, 0.0, 0.0, 0.0];
+        for kind in [
+            EigensolverKind::Elpa,
+            EigensolverKind::Elpa2,
+            EigensolverKind::Slate,
+        ] {
+            let actions = Cell::new(0);
+            let h = CountH(&actions);
+            let err = lowest_mode(
+                &h,
+                x.view(),
+                seed.view(),
+                &EigenParams {
+                    kind,
+                    ..EigenParams::default()
+                },
+            )
+            .unwrap_err();
+            match err {
+                Error::EigenUnavailable { kind: name } => assert_eq!(name, kind.name()),
+                other => panic!("expected unavailable, got {other}"),
+            }
+            assert_eq!(actions.get(), 0, "{kind:?} must not assemble H");
+            assert!(!kind.is_linked());
+        }
+        assert_eq!(EigenParams::default().kind, EigensolverKind::Lanczos);
+    }
+
+    #[test]
+    fn dense_entry_below_cutoff_is_rejected() {
+        let h = ndarray::Array2::<f64>::zeros((32, 32));
+        let err = lowest_mode_dense(
+            h.view(),
+            &EigenParams {
+                kind: EigensolverKind::Elpa,
+                nev: 1,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenDenseCutoff { kind, n, cutoff } => {
+                assert_eq!(kind, "elpa");
+                assert_eq!(n, 32);
+                assert_eq!(cutoff, DENSE_EIGEN_CUTOFF);
+            }
+            other => panic!("expected cutoff, got {other}"),
+        }
+    }
+
+    #[test]
+    fn dense_entry_at_cutoff_stays_unavailable() {
+        let h = ndarray::Array2::<f64>::zeros((DENSE_EIGEN_CUTOFF, DENSE_EIGEN_CUTOFF));
+        for kind in [
+            EigensolverKind::Elpa,
+            EigensolverKind::Elpa2,
+            EigensolverKind::Slate,
+        ] {
+            let err = lowest_mode_dense(
+                h.view(),
+                &EigenParams {
+                    kind,
+                    nev: 1,
+                    ..EigenParams::default()
+                },
+            )
+            .unwrap_err();
+            match err {
+                Error::EigenUnavailable { kind: name } => assert_eq!(name, kind.name()),
+                other => panic!("expected unavailable, got {other}"),
+            }
+        }
     }
 }
