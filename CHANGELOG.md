@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- DLA-Future assembled-H entry (`lowest_mode_dlaf`): `begin` must
+  be 0 and `n >= 512`. ApplyHessian `lowest_mode` stays
+  `Error::EigenUnavailable` and does not assemble `H`.
 - EigenExa is full-spectrum only. `nev < n` is
   `Error::EigenFullSpectrum` and does not compute `n` pairs and
   drop them. `eigen_s` versus `eigen_sx` is `EigenExaAlgo` (0/1),

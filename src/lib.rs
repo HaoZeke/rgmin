@@ -55,6 +55,8 @@ pub mod lowest_mode;
 pub mod slepc_kind;
 /// Closed EigenExa `eigen_s` / `eigen_sx` tokens.
 pub mod eigenexa_kind;
+/// Closed DLA-Future partial-spectrum window.
+pub mod dlaf_kind;
 /// Feature-gated SLEPc EPS (MatShell + typed EPSSet/STSet).
 #[cfg(feature = "slepc")]
 mod slepc_eps;
@@ -95,11 +97,13 @@ pub use qn_irc::{
 pub use sella_step::{prfo_restricted, ras_clip, rfo_get_s, rfo_restricted, ts_bfgs_update};
 pub use lowest_mode::{
     lowest_eigenpair, lowest_mode, lowest_mode_precond, lowest_mode_primme, lowest_mode_slepc,
-    lowest_mode_eigenexa, ApplyHessian, ApplyPreconditioner, Block3Jacobi, DiagonalJacobi,
-    EigenParams, EigensolverKind, LowestMode, PreconditionerKind, DENSE_EIGEN_CUTOFF,
+    lowest_mode_dlaf, lowest_mode_eigenexa, ApplyHessian, ApplyPreconditioner, Block3Jacobi,
+    DiagonalJacobi, EigenParams, EigensolverKind, LowestMode, PreconditionerKind,
+    DENSE_EIGEN_CUTOFF,
 };
 pub use slepc_kind::{SlepcParams, SlepcPmat, SlepcStKind};
 pub use eigenexa_kind::{EigenExaAlgo, EigenExaParams};
+pub use dlaf_kind::DlaFutureParams;
 pub use hvp::{
     FdHvp, HessianVector, HvpOracle, IdentityPrecond, NystromPrecond, Preconditioner,
     minimize_newton_cg, steihaug_cg, steihaug_pcg,

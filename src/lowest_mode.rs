@@ -11,6 +11,7 @@
 
 use ndarray::{Array1, ArrayView1};
 
+use crate::dlaf_kind::DlaFutureParams;
 use crate::eigenexa_kind::EigenExaParams;
 use crate::error::{Error, Result};
 use crate::hvp::HessianVector;
@@ -50,7 +51,7 @@ pub enum EigensolverKind {
     Magma = 10,
     /// cuSOLVER dense / batched. Not linked.
     Cusolver = 11,
-    /// DLA-Future. Not linked.
+    /// DLA-Future partial spectrum. `begin` fixed at 0. Not linked.
     DlaFuture = 12,
     /// EigenExa. Full spectrum only. Not linked.
     EigenExa = 13,
@@ -489,6 +490,40 @@ pub fn lowest_mode_eigenexa<H: ApplyHessian + ?Sized>(
     let _ = (h, x, eigenexa);
     Err(Error::EigenUnavailable {
         kind: EigensolverKind::EigenExa.name(),
+    })
+}
+
+/// DLA-Future partial-spectrum arm. This is the assembled-H entry.
+///
+/// `dlaf.begin` must be 0 (`hermitian_eigensolver(..., 0, nev)` /
+/// `il = 1`). `n` must be at least [`DENSE_EIGEN_CUTOFF`]. The
+/// ApplyHessian [`lowest_mode`] path never calls this and stays
+/// [`Error::EigenUnavailable`] so the waist cannot form `H` with
+/// `n` actions. Unlinked full-window stays unavailable.
+pub fn lowest_mode_dlaf(
+    n: usize,
+    params: &EigenParams,
+    dlaf: &DlaFutureParams,
+) -> Result<LowestMode> {
+    if n == 0 {
+        return Err(Error::Dim { got: 0, dim: 0 });
+    }
+    if dlaf.begin != 0 {
+        return Err(Error::EigenBegin {
+            kind: EigensolverKind::DlaFuture.name(),
+            begin: dlaf.begin,
+        });
+    }
+    if n < DENSE_EIGEN_CUTOFF {
+        return Err(Error::EigenDenseCutoff {
+            kind: EigensolverKind::DlaFuture.name(),
+            n,
+            cutoff: DENSE_EIGEN_CUTOFF,
+        });
+    }
+    let _ = params;
+    Err(Error::EigenUnavailable {
+        kind: EigensolverKind::DlaFuture.name(),
     })
 }
 
@@ -1811,5 +1846,96 @@ mod tests {
             crate::EigenExaParams::default().algo,
             crate::EigenExaAlgo::Sx
         );
+    }
+
+    #[test]
+    fn dlaf_begin_nonzero_is_rejected() {
+        let err = lowest_mode_dlaf(
+            DENSE_EIGEN_CUTOFF,
+            &EigenParams {
+                kind: EigensolverKind::DlaFuture,
+                nev: 1,
+                ..EigenParams::default()
+            },
+            &DlaFutureParams { begin: 3 },
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenBegin { kind, begin } => {
+                assert_eq!(kind, "dlaFuture");
+                assert_eq!(begin, 3);
+            }
+            other => panic!("expected begin refuse, got {other}"),
+        }
+    }
+
+    #[test]
+    fn dlaf_below_cutoff_is_rejected() {
+        let err = lowest_mode_dlaf(
+            32,
+            &EigenParams {
+                kind: EigensolverKind::DlaFuture,
+                nev: 1,
+                ..EigenParams::default()
+            },
+            &DlaFutureParams::default(),
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenDenseCutoff { kind, n, cutoff } => {
+                assert_eq!(kind, "dlaFuture");
+                assert_eq!(n, 32);
+                assert_eq!(cutoff, DENSE_EIGEN_CUTOFF);
+            }
+            other => panic!("expected cutoff refuse, got {other}"),
+        }
+    }
+
+    #[test]
+    fn dlaf_applyhessian_stays_unavailable_and_does_not_assemble() {
+        use std::cell::Cell;
+        struct CountH<'a>(&'a Cell<usize>);
+        impl ApplyHessian for CountH<'_> {
+            fn apply_hessian(&self, _x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
+                self.0.set(self.0.get() + 1);
+                v.to_owned()
+            }
+        }
+        let actions = Cell::new(0);
+        let h = CountH(&actions);
+        let x = Array1::zeros(4);
+        let seed = array![1.0, 0.0, 0.0, 0.0];
+        let err = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::DlaFuture,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenUnavailable { kind } => assert_eq!(kind, "dlaFuture"),
+            other => panic!("expected unavailable, got {other}"),
+        }
+        assert_eq!(actions.get(), 0, "DLA-Future must not assemble H from actions");
+        let err = lowest_mode_dlaf(
+            DENSE_EIGEN_CUTOFF,
+            &EigenParams {
+                kind: EigensolverKind::DlaFuture,
+                nev: 1,
+                ..EigenParams::default()
+            },
+            &DlaFutureParams::default(),
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenUnavailable { kind } => assert_eq!(kind, "dlaFuture"),
+            other => panic!("expected unavailable, got {other}"),
+        }
+        assert!(!EigensolverKind::DlaFuture.is_linked());
+        assert_eq!(EigensolverKind::DlaFuture as u8, 12);
+        assert_eq!(DlaFutureParams::default().begin, 0);
     }
 }

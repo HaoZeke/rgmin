@@ -67,6 +67,24 @@ pub enum Error {
         /// What the typed `primme_params` / `dprimme` call failed to produce.
         what: &'static str,
     },
+    /// Partial-spectrum window must start at the lowest pair.
+    #[error("eigensolver {kind} begin must be 0, got {begin}")]
+    EigenBegin {
+        /// Closed-enum name (`dlaFuture`, ...).
+        kind: &'static str,
+        /// Requested first index.
+        begin: usize,
+    },
+    /// Dense assembled-H backend is gated on [`crate::DENSE_EIGEN_CUTOFF`].
+    #[error("eigensolver {kind} needs n >= {cutoff}, got {n}")]
+    EigenDenseCutoff {
+        /// Closed-enum name (`dlaFuture`, ...).
+        kind: &'static str,
+        /// Matrix order.
+        n: usize,
+        /// Cutoff (`DENSE_EIGEN_CUTOFF`).
+        cutoff: usize,
+    },
     /// Named backend only computes the full spectrum. Partial `nev`
     /// is refused rather than silently solved as `n` and trimmed.
     #[error("eigensolver {kind} is full-spectrum only; nev {nev} < n {n}")]
