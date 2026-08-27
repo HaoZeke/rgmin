@@ -13,11 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mul_assign`, `scale`, `div_assign_floor`, `nrm2`). The inner
   IRC MW project does not call ELPA. Feature `par` has a
   sphere-bound test.
-- Feature `chase`: assembled-H entry `lowest_mode_chase`.
-  `ApplyHessian` `lowest_mode` stays `Error::EigenUnavailable`
-  and does not assemble `H` or run a matrix-free Chebyshev
-  recurrence. Unbuilt (default, or the feature on without a
-  ChASE C shim) stays unavailable. `is_matrix_free` is false.
+- Feature `chase`: assembled-H entry `lowest_mode_chase` calls
+  `dchase_init_` / `dchase_` / `dchase_finalize_` through
+  `src/chase_shim.c`. Seed is the only approximation (`mode=A`);
+  degree optimization stays on (`opt=S`). `ApplyHessian`
+  `lowest_mode` stays `Error::EigenUnavailable` and does not
+  assemble `H`. Unbuilt (default, or the feature on without
+  libchase) stays unavailable. `is_matrix_free` is false.
 - `EigenParams.degree` / `extra` (schema `@5` / `@6`, C layout
   32 bytes). ChASE zeros map to degree 20 and
   `extra = max(8, ceil(0.2 * nev))`. `max_iter == 0` is 25 on

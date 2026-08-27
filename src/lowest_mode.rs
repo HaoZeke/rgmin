@@ -592,17 +592,25 @@ pub fn lowest_mode_chase(
             dim: n,
         });
     }
-    let _ = (
-        params.nev.max(1),
-        params.chase_degree(),
-        params.chase_extra(),
-        params.chase_iterations(),
-        params.tolerance(),
+    let Some(seed_sl) = seed.as_slice() else {
+        return Err(Error::Dim {
+            got: seed.len(),
+            dim: n,
+        });
+    };
+    let (vector, value, actions) = crate::chase_eps::solve(
         h,
-        seed,
-    );
-    Err(Error::EigenUnavailable {
-        kind: EigensolverKind::Chase.name(),
+        seed_sl,
+        params.nev.max(1),
+        params.chase_extra(),
+        params.chase_degree(),
+        params.tolerance(),
+    )?;
+    let _ = params.chase_iterations();
+    Ok(LowestMode {
+        vector,
+        value,
+        actions,
     })
 }
 
@@ -1356,7 +1364,10 @@ mod tests {
         assert!(schema.contains("degree @5"));
         assert!(schema.contains("extra @6"));
         assert!(!schema.contains("chase_set"));
+        #[cfg(not(rgmin_has_chase))]
         assert!(!EigensolverKind::Chase.is_linked());
+        #[cfg(rgmin_has_chase)]
+        assert!(EigensolverKind::Chase.is_linked());
         assert!(!EigensolverKind::Chase.is_matrix_free());
     }
 

@@ -219,10 +219,98 @@ fn probe_primme_prefix(prefix: &std::path::Path) -> Option<PrimmeProbe> {
 }
 
 #[cfg(feature = "chase")]
+struct ChaseProbe {
+    includes: Vec<std::path::PathBuf>,
+    link_paths: Vec<std::path::PathBuf>,
+    link_libs: Vec<String>,
+}
+
+#[cfg(feature = "chase")]
 fn probe_chase() {
+    println!("cargo:rerun-if-changed=src/chase_shim.c");
     println!("cargo:rerun-if-env-changed=CHASE_DIR");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
-    println!(
-        "cargo:warning=chase feature on, dest has no ChASE C shim; EigensolverKind::Chase stays EigenUnavailable"
-    );
+    println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
+
+    let Some(cfg) = discover_chase() else {
+        println!(
+            "cargo:warning=chase feature on, libchase not found; EigensolverKind::Chase stays EigenUnavailable"
+        );
+        return;
+    };
+    let mut build = cc::Build::new();
+    build.file("src/chase_shim.c");
+    build.warnings(false);
+    for inc in &cfg.includes {
+        build.include(inc);
+    }
+    match build.try_compile("rgmin_chase_shim") {
+        Ok(()) => {
+            for path in &cfg.link_paths {
+                println!("cargo:rustc-link-search=native={}", path.display());
+            }
+            for lib in &cfg.link_libs {
+                println!("cargo:rustc-link-lib={lib}");
+            }
+            println!("cargo:rustc-cfg=rgmin_has_chase");
+        }
+        Err(err) => {
+            println!(
+                "cargo:warning=chase shim did not compile ({err}); EigensolverKind::Chase stays EigenUnavailable"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "chase")]
+fn discover_chase() -> Option<ChaseProbe> {
+    for name in ["chase", "ChASE"] {
+        if let Ok(lib) = pkg_config::Config::new()
+            .cargo_metadata(false)
+            .probe(name)
+        {
+            return Some(ChaseProbe {
+                includes: lib.include_paths,
+                link_paths: lib.link_paths,
+                link_libs: lib.libs,
+            });
+        }
+    }
+    if let Ok(dir) = std::env::var("CHASE_DIR") {
+        if let Some(probe) = probe_chase_prefix(std::path::Path::new(&dir)) {
+            return Some(probe);
+        }
+    }
+    if let Ok(prefix) = std::env::var("CONDA_PREFIX") {
+        if let Some(probe) = probe_chase_prefix(std::path::Path::new(&prefix)) {
+            return Some(probe);
+        }
+    }
+    probe_chase_prefix(std::path::Path::new("/usr"))
+}
+
+#[cfg(feature = "chase")]
+fn chase_header_in(dir: &std::path::Path) -> bool {
+    dir.join("chase_c_interface.h").is_file()
+        || dir.join("interface").join("chase_c_interface.h").is_file()
+}
+
+#[cfg(feature = "chase")]
+fn probe_chase_prefix(prefix: &std::path::Path) -> Option<ChaseProbe> {
+    let include = prefix.join("include");
+    let lib = prefix.join("lib");
+    let has_lib = lib.join("libchase.a").is_file()
+        || lib.join("libchase.so").is_file()
+        || lib.join("libChASE.so").is_file();
+    if !has_lib && !chase_header_in(&include) {
+        return None;
+    }
+    if !has_lib {
+        return None;
+    }
+    Some(ChaseProbe {
+        includes: vec![include],
+        link_paths: vec![lib],
+        link_libs: vec!["chase".into()],
+    })
 }

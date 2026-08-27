@@ -67,6 +67,12 @@ pub enum Error {
         /// What the typed `primme_params` / `dprimme` call failed to produce.
         what: &'static str,
     },
+    /// Linked ChASE `dchase` rejected the assembled dense pair.
+    #[error("ChASE: {what}")]
+    Chase {
+        /// What the typed `dchase_init_` / `dchase_` call failed to produce.
+        what: &'static str,
+    },
     /// Partial-spectrum window must start at the lowest pair.
     #[error("eigensolver {kind} begin must be 0, got {begin}")]
     EigenBegin {

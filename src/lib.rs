@@ -65,6 +65,8 @@ mod slepc_eps;
 /// Feature-gated PRIMME (`dprimme` + typed `primme_params`).
 #[cfg(feature = "primme")]
 mod primme_eps;
+/// Feature-gated ChASE (`dchase` on assembled dense H).
+mod chase_eps;
 /// Shifted Newton and Banerjee RFO on a dense Hessian.
 pub mod newton;
 mod oracle;
