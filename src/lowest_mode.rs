@@ -1400,21 +1400,23 @@ mod tests {
             other => panic!("expected unavailable, got {other}"),
         }
         assert_eq!(actions.get(), 0, "Chase must not assemble H from actions");
-        let dense = ndarray::Array2::<f64>::zeros((8, 8));
-        let seed8 = Array1::from(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-        let err = lowest_mode_chase(
-            dense.view(),
-            seed8.view(),
-            &EigenParams {
-                kind: EigensolverKind::Chase,
-                nev: 1,
-                ..EigenParams::default()
-            },
-        )
-        .unwrap_err();
-        match err {
-            Error::EigenUnavailable { kind } => assert_eq!(kind, "chase"),
-            other => panic!("expected unavailable, got {other}"),
+        if !EigensolverKind::Chase.is_linked() {
+            let dense = ndarray::Array2::<f64>::zeros((8, 8));
+            let seed8 = Array1::from(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+            let err = lowest_mode_chase(
+                dense.view(),
+                seed8.view(),
+                &EigenParams {
+                    kind: EigensolverKind::Chase,
+                    nev: 1,
+                    ..EigenParams::default()
+                },
+            )
+            .unwrap_err();
+            match err {
+                Error::EigenUnavailable { kind } => assert_eq!(kind, "chase"),
+                other => panic!("expected unavailable, got {other}"),
+            }
         }
         let kick = EigenParams {
             kind: EigensolverKind::Chase,
