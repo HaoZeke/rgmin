@@ -7,7 +7,7 @@
 
 use ndarray::Array1;
 
-use crate::vecops::nrm2;
+use crate::vecops::{axpy, div_assign_floor, mul_assign, nrm2, scale};
 
 /// Per-atom masses (length N) to a 3N \(\sqrt{m}\) weight.
 pub fn sqrt_masses_3n(masses: &[f64]) -> Array1<f64> {
@@ -48,48 +48,46 @@ impl IrcTrust {
         if n == 0 {
             return 0.0;
         }
-        let mut acc = 0.0;
-        for i in 0..n {
-            let t = (s[i] + self.d1[i]) * self.sqrtm[i];
-            acc += t * t;
-        }
-        acc.sqrt()
+        let mut w = s.slice(ndarray::s![..n]).to_owned();
+        axpy(1.0, self.d1.slice(ndarray::s![..n]), &mut w);
+        mul_assign(self.sqrtm.slice(ndarray::s![..n]), &mut w);
+        nrm2(w.view())
     }
 
     /// Radial projection of `s` onto the MW sphere of radius `dx`.
+    ///
+    /// Weighted add / scale / divide go through [`crate::vecops`].
+    /// This path does not assemble a Hessian and does not call ELPA.
     pub fn project(&self, s: &Array1<f64>) -> Array1<f64> {
         let n = s.len().min(self.d1.len()).min(self.sqrtm.len());
         let mut out = s.clone();
         if n == 0 {
             return out;
         }
-        let mut w = Array1::zeros(n);
-        for i in 0..n {
-            w[i] = (s[i] + self.d1[i]) * self.sqrtm[i];
-        }
+        let d1 = self.d1.slice(ndarray::s![..n]);
+        let sm = self.sqrtm.slice(ndarray::s![..n]);
+        let mut w = s.slice(ndarray::s![..n]).to_owned();
+        axpy(1.0, d1, &mut w);
+        mul_assign(sm, &mut w);
         let norm = nrm2(w.view());
         if norm <= 1e-16 {
-            // Degenerate: sit on the first weighted axis.
-            let wnorm = nrm2(self.sqrtm.view());
+            let wnorm = nrm2(sm);
             if wnorm <= 1e-16 || self.dx == 0.0 {
-                for i in 0..n {
-                    out[i] = -self.d1[i];
-                }
+                let mut back = d1.to_owned();
+                scale(-1.0, &mut back);
+                out.slice_mut(ndarray::s![..n]).assign(&back);
                 return out;
             }
-            let scale = self.dx / self.sqrtm[0].max(1e-16);
-            out[0] = scale - self.d1[0];
-            for i in 1..n {
-                out[i] = -self.d1[i];
-            }
+            let mut back = d1.to_owned();
+            scale(-1.0, &mut back);
+            back[0] = self.dx / self.sqrtm[0].max(1e-16) - self.d1[0];
+            out.slice_mut(ndarray::s![..n]).assign(&back);
             return out;
         }
-        let scale = self.dx / norm;
-        for i in 0..n {
-            let wi = w[i] * scale;
-            let sm = self.sqrtm[i].max(1e-16);
-            out[i] = wi / sm - self.d1[i];
-        }
+        scale(self.dx / norm, &mut w);
+        div_assign_floor(sm, &mut w, 1e-16);
+        axpy(-1.0, d1, &mut w);
+        out.slice_mut(ndarray::s![..n]).assign(&w);
         out
     }
 
@@ -130,5 +128,40 @@ mod tests {
         for (a, b) in s.iter().zip(again.iter()) {
             assert!((a - b).abs() < 1e-12, "{a} vs {b}");
         }
+    }
+
+    #[test]
+    fn inner_project_has_no_elpa_and_uses_vecops() {
+        let src = include_str!("irc_trust.rs");
+        let impl_only = src.split("#[cfg(test)]").next().expect("impl");
+        for line in impl_only.lines() {
+            let t = line.trim();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            assert!(!t.to_ascii_lowercase().contains("elpa"), "ELPA in {t}");
+            assert!(!t.contains("lowest_mode_dense"), "dense eigen in {t}");
+        }
+        assert!(impl_only.contains("axpy"));
+        assert!(impl_only.contains("mul_assign"));
+        assert!(impl_only.contains("nrm2"));
+        assert!(impl_only.contains("scale"));
+        assert!(impl_only.contains("div_assign_floor"));
+    }
+
+    #[cfg(feature = "par")]
+    #[test]
+    fn par_project_sits_on_the_mw_sphere() {
+        let masses = [1.0, 12.0, 16.0];
+        let d1 = Array1::zeros(9);
+        let tr = IrcTrust::from_atom_masses(d1, &masses, 0.25);
+        let s = array![0.4, -0.1, 0.2, 0.0, 0.3, -0.2, 0.1, 0.0, 0.05];
+        let p = tr.project(&s);
+        assert!(
+            tr.on_bound(&p, 1e-12),
+            "par cons={} dx={}",
+            tr.cons(&p),
+            tr.dx
+        );
     }
 }

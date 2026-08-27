@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `IrcTrust::project` / `cons` go through vecops (`axpy`,
+  `mul_assign`, `scale`, `div_assign_floor`, `nrm2`). The inner
+  IRC MW project does not call ELPA. Feature `par` has a
+  sphere-bound test.
 - Feature `chase`: assembled-H entry `lowest_mode_chase`.
   `ApplyHessian` `lowest_mode` stays `Error::EigenUnavailable`
   and does not assemble `H` or run a matrix-free Chebyshev
