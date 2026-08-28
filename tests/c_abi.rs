@@ -52,6 +52,7 @@ fn quadratic_objective() -> Box<eindir_objective_t> {
         grad_fn: Some(quadratic_grad),
         user_data: std::ptr::null_mut(),
         free_fn: None,
+        descriptor: std::ptr::null(),
     })
 }
 
