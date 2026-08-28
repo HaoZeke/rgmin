@@ -23,7 +23,7 @@ par = ["dep:rayon"]
 highs = ["dep:highs", "dep:highs-sys"]
 
 [dependencies]
-eindir-core = { version = "0.6.0", git = "https://github.com/HaoZeke/eindir.git", rev = "f3c42130bb389ba6cd6e4cfdc8b2e182f4a764e9", features = ["capi"] }
+eindir-core = { version = "0.6.0", git = "https://github.com/HaoZeke/eindir.git", rev = "091c6f7d6ea70821c3374152481fb9500e799af2", features = ["capi"] }
 dlpk = { version = "0.1.5", features = ["ndarray"] }
 ndarray = "0.17"
 thiserror = "2"
