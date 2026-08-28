@@ -34,7 +34,7 @@ highs-sys = { version = "1.12", optional = true }
 
 [dev-dependencies]
 approx = "0.5"
-rgpot-core = { package = "rgpot-core", git = "https://github.com/OmniPotentRPC/rgpot.git", rev = "b19227f9197a4c927633f1225f1e7546794a6f1e" }
+rgpot-core = { package = "rgpot-core", git = "https://github.com/HaoZeke/potlib.git", rev = "65d5488f202e0c7b1b3aeddeb388b3d3ba707fcf" }
 
 [build-dependencies]
 cbindgen = "0.29"
