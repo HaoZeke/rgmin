@@ -498,7 +498,11 @@ const RADIUS_FLOOR: f64 = 1e-14;
 /// region. `control.maxmove` caps the trust radius, so the region
 /// plays the role the step clip plays elsewhere; `control.istep` seeds
 /// the initial radius when positive.
-pub fn minimize_newton_cg<O>(obj: &O, init: impl Into<Array1<f64>>, control: &Control) -> Result<Report>
+pub fn minimize_newton_cg<O>(
+    obj: &O,
+    init: impl Into<Array1<f64>>,
+    control: &Control,
+) -> Result<Report>
 where
     O: HessianVector + ?Sized,
 {

@@ -49,11 +49,7 @@ fn bfgs_and_sr1_reach_the_minimum() {
     for method in [Method::Bfgs, Method::Sr1] {
         let report =
             minimize_method(&obj, array![-1.2, 1.0], &control(), method.clone(), brent()).unwrap();
-        assert!(
-            report.value < 1e-8,
-            "{method:?} value {}",
-            report.value
-        );
+        assert!(report.value < 1e-8, "{method:?} value {}", report.value);
     }
 }
 
@@ -61,14 +57,8 @@ fn bfgs_and_sr1_reach_the_minimum() {
 fn sr2_descends_from_the_classic_start() {
     let obj = Rosenbrock::<2>::new();
     let start_f = f0();
-    let report = minimize_method(
-        &obj,
-        array![-1.2, 1.0],
-        &control(),
-        Method::Sr2,
-        brent(),
-    )
-    .unwrap();
+    let report =
+        minimize_method(&obj, array![-1.2, 1.0], &control(), Method::Sr2, brent()).unwrap();
     assert!(
         report.value < start_f,
         "SR2 {} -> {}",
@@ -81,14 +71,8 @@ fn sr2_descends_from_the_classic_start() {
 fn adam_and_steepest_descend() {
     let obj = Rosenbrock::<2>::new();
     let start_f = f0();
-    let adam = minimize_method(
-        &obj,
-        array![-1.2, 1.0],
-        &control(),
-        Method::adam(),
-        brent(),
-    )
-    .unwrap();
+    let adam =
+        minimize_method(&obj, array![-1.2, 1.0], &control(), Method::adam(), brent()).unwrap();
     assert!(adam.value < start_f, "Adam {} -> {}", start_f, adam.value);
     let sd = minimize_method(
         &obj,

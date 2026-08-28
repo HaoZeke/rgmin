@@ -110,8 +110,7 @@ fn recognising_nothing_changes_nothing() {
     let mut a = Lbfgs::default();
     let (fa, xa, ea) = a.minimize(x0.view(), 50, |v| Some(quad(v)));
     let mut b = Lbfgs::default();
-    let (fb, xb, eb, hit) =
-        b.minimize_recognized(x0.view(), 50, |v| Some(quad(v)), |_, _, _| None);
+    let (fb, xb, eb, hit) = b.minimize_recognized(x0.view(), 50, |v| Some(quad(v)), |_, _, _| None);
     assert!(!hit);
     assert_eq!(ea, eb);
     assert_eq!(fa, fb);

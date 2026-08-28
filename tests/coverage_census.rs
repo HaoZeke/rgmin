@@ -3,12 +3,10 @@
 //! Coverage here is behavioural, not ceremonial: each test states the
 //! contract the API promises and fails when the contract does.
 
-use ndarray::{array, Array1, ArrayView1};
-use rgmin::manifold::{Manifold, MwRigid, Sphere, Stiefel};
-use rgmin::{
-    minimize_scg_exact, Conjugacy, Control, DirectionalCurvature, Restart, ScgParams,
-};
 use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+use ndarray::{Array1, ArrayView1, array};
+use rgmin::manifold::{Manifold, MwRigid, Sphere, Stiefel};
+use rgmin::{Conjugacy, Control, DirectionalCurvature, Restart, ScgParams, minimize_scg_exact};
 
 /// Stiefel at p = 1 is the sphere, in all three operations, which is
 /// the whole content of the type: divergence in any one of them means
@@ -20,10 +18,7 @@ fn stiefel_p1_is_the_sphere_in_all_three_operations() {
     let y = array![0.0, 1.0, 0.0];
     assert_eq!(Stiefel.project(&x, &v), Sphere.project(&x, &v));
     assert_eq!(Stiefel.retract(&x, &v), Sphere.retract(&x, &v));
-    assert_eq!(
-        Stiefel.transport(&x, &y, &v),
-        Sphere.transport(&x, &y, &v)
-    );
+    assert_eq!(Stiefel.transport(&x, &y, &v), Sphere.transport(&x, &y, &v));
 }
 
 /// The Eckart quotient's projection removes every rigid-body component:
@@ -72,11 +67,7 @@ impl Objective<f64> for CurvedBowl {
     fn bounds(&self) -> &Bounds<f64> {
         static BOUNDS: std::sync::OnceLock<Bounds<f64>> = std::sync::OnceLock::new();
         BOUNDS.get_or_init(|| {
-            Bounds::new(
-                Array1::from_elem(4, -1e12),
-                Array1::from_elem(4, 1e12),
-                0.0,
-            )
+            Bounds::new(Array1::from_elem(4, -1e12), Array1::from_elem(4, 1e12), 0.0)
         })
     }
     fn eval(&self, x: ArrayView1<f64>) -> f64 {
@@ -104,7 +95,12 @@ impl DifferentiableObjective<f64> for CurvedBowl {
 
 impl DirectionalCurvature for CurvedBowl {
     fn directional_curvature(&self, _x: ArrayView1<f64>, d: ArrayView1<f64>) -> Option<f64> {
-        Some(d.iter().enumerate().map(|(i, v)| (i + 1) as f64 * v * v).sum())
+        Some(
+            d.iter()
+                .enumerate()
+                .map(|(i, v)| (i + 1) as f64 * v * v)
+                .sum(),
+        )
     }
 }
 
@@ -113,7 +109,10 @@ fn scg_exact_reaches_the_bowl_floor_on_supplied_curvature() {
     let rep = minimize_scg_exact(
         &CurvedBowl,
         array![1.0, -2.0, 3.0, -4.0],
-        &Control { maxiter: 200, ..Control::default() },
+        &Control {
+            maxiter: 200,
+            ..Control::default()
+        },
         &ScgParams::default(),
         Conjugacy::PolakRibiere,
         Restart::Njws { threshold: 0.1 },

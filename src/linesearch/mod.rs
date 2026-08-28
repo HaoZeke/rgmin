@@ -204,11 +204,7 @@ fn bracket(phi: &mut impl FnMut(f64) -> f64, mut a: f64, mut b: f64, maxiter: us
         let _ = fa;
         fa = fb;
     }
-    if a < c {
-        (a, c)
-    } else {
-        (c, a)
-    }
+    if a < c { (a, c) } else { (c, a) }
 }
 
 fn brent(

@@ -25,13 +25,7 @@ fn free_bounds(dim: usize) -> &'static Bounds<f64> {
         2 => (&B2, 2),
         _ => (&B4, 4),
     };
-    cell.get_or_init(|| {
-        Bounds::new(
-            Array1::from_elem(n, -1e12),
-            Array1::from_elem(n, 1e12),
-            0.0,
-        )
-    })
+    cell.get_or_init(|| Bounds::new(Array1::from_elem(n, -1e12), Array1::from_elem(n, 1e12), 0.0))
 }
 
 struct Bowl;
@@ -43,7 +37,10 @@ impl Objective<f64> for Bowl {
         free_bounds(4)
     }
     fn eval(&self, x: ArrayView1<f64>) -> f64 {
-        x.iter().enumerate().map(|(i, v)| (i + 1) as f64 * v * v).sum()
+        x.iter()
+            .enumerate()
+            .map(|(i, v)| (i + 1) as f64 * v * v)
+            .sum()
     }
 }
 impl Gradient<f64> for Bowl {

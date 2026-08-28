@@ -2,9 +2,9 @@
 
 use eindir_core::{Bounds, DifferentiableObjective, Objective};
 use ndarray::Array1;
-use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 use crate::control::Control;
 use crate::error::{Error, Result};
