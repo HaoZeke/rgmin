@@ -14,11 +14,7 @@ fn conjugacy_resolves_a_small_change_beside_a_large_common_gradient() {
     };
 
     // The gradient change is one unit along the second coordinate.
-    assert_relative_eq!(
-        Conjugacy::LiuStorey.beta(&context),
-        1e-16,
-        epsilon = 1e-30
-    );
+    assert_relative_eq!(Conjugacy::LiuStorey.beta(&context), 1e-16, epsilon = 1e-30);
     assert_relative_eq!(
         Conjugacy::PolakRibiere.beta(&context),
         1e-16,

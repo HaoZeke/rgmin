@@ -7,9 +7,9 @@ use ndarray::{Array1, Array2, ArrayView1};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
-use crate::accept::{Accept, accept_step};
 #[cfg(feature = "highs")]
 use crate::accept::accept_step_with_fallback;
+use crate::accept::{Accept, accept_step};
 use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::Control;
