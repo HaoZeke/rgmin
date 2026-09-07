@@ -1254,7 +1254,8 @@ pub unsafe extern "C" fn rgmin_solver_create(
             None
         },
     };
-    let solver = Solver::new(method_from_c(method, c.memory), control, dim).with_gtol(c.gtol);
+    let mut solver = Solver::new(method_from_c(method, c.memory), control, dim).with_gtol(c.gtol);
+    solver.set_accept(Accept::Energy);
     Box::into_raw(Box::new(rgmin_solver_t { solver }))
 }
 
