@@ -165,9 +165,7 @@ pub fn ras_clip(s: &Array1<f64>, delta: f64) -> Array1<f64> {
     }
     let mut maxn = 0.0;
     for i in 0..atoms {
-        let r = (s[3 * i] * s[3 * i]
-            + s[3 * i + 1] * s[3 * i + 1]
-            + s[3 * i + 2] * s[3 * i + 2])
+        let r = (s[3 * i] * s[3 * i] + s[3 * i + 1] * s[3 * i + 1] + s[3 * i + 2] * s[3 * i + 2])
             .sqrt();
         if r > maxn {
             maxn = r;

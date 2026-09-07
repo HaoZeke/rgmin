@@ -4,22 +4,22 @@ use std::collections::VecDeque;
 
 use eindir_core::{DifferentiableObjective, Objective};
 use ndarray::{Array1, Array2, ArrayView1};
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 
-use crate::accept::{accept_step, Accept};
+use crate::accept::{Accept, accept_step};
 use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::Control;
 use crate::error::{Error, Result};
-use crate::fire::{fire_after_v1, fire_displacement, FireState};
+use crate::fire::{FireState, fire_after_v1, fire_displacement};
 use crate::lbfgs::{GradNorm, Lbfgs};
 use crate::linesearch::LineSearch;
 use crate::manifold::{Manifold, ManifoldKind};
 use crate::method::Method;
-use crate::newton::{rfo_direction, shifted_newton, HessianObjective, NewtonKind};
+use crate::newton::{HessianObjective, NewtonKind, rfo_direction, shifted_newton};
 use crate::nlcg::{Conjugacy, ConjugacyContext, Restart};
-use crate::pso::{random_velocity, update_swarm, Particle, RNG_SEED};
+use crate::pso::{Particle, RNG_SEED, random_velocity, update_swarm};
 use crate::qn::{bfgs_inverse_update, solve_dense, sr1_inverse_update, sr2_hessian_update};
 use crate::qn_step::QnStep;
 use crate::report::Report;
@@ -724,43 +724,43 @@ impl Solver {
                 self.highs_callback,
                 self.highs_callback_user,
             )?;
-                let old = x.clone();
-                let gold = grad.clone();
-                let (npos, nval, ngrad, moved) = accept_step(
-                    obj,
-                    x,
-                    value,
-                    &gold,
-                    &dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    None,
-                    self.manifold,
-                );
-                if moved {
-                    *x = npos;
-                    value = nval;
-                    grad = ngrad;
-                }
-                grad = self.horizontal_grad(x, &grad);
-                self.remember(x, value, &grad);
-                let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
-                    let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
-                    Some((s, y, l2(&grad)))
-                } else {
-                    None
-                };
-                if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
-                    solver.push_pair(s, y, Some(gn));
-                }
-                self.steps += 1;
-                return Ok(Report {
-                    value,
-                    coords: x.clone(),
-                    steps: self.steps,
-                    grad_norm: l2(&grad),
-                });
+            let old = x.clone();
+            let gold = grad.clone();
+            let (npos, nval, ngrad, moved) = accept_step(
+                obj,
+                x,
+                value,
+                &gold,
+                &dir,
+                &self.control,
+                self.accept,
+                &mut self.e_hist,
+                None,
+                self.manifold,
+            );
+            if moved {
+                *x = npos;
+                value = nval;
+                grad = ngrad;
+            }
+            grad = self.horizontal_grad(x, &grad);
+            self.remember(x, value, &grad);
+            let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
+                let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
+                Some((s, y, l2(&grad)))
+            } else {
+                None
+            };
+            if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
+                solver.push_pair(s, y, Some(gn));
+            }
+            self.steps += 1;
+            return Ok(Report {
+                value,
+                coords: x.clone(),
+                steps: self.steps,
+                grad_norm: l2(&grad),
+            });
         }
         let mut dir = if let Some(kind) = newton_kind {
             match kind {

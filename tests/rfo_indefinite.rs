@@ -1,5 +1,5 @@
-use ndarray::{array, ArrayView1};
-use rgmin::{minimize_newton, Control, HessianOracle, NewtonKind};
+use ndarray::{ArrayView1, array};
+use rgmin::{Control, HessianOracle, NewtonKind, minimize_newton};
 
 #[test]
 fn rfo_minimization_selects_the_lowest_augmented_mode() {
@@ -73,7 +73,10 @@ fn constrained_rfo_keeps_every_trial_inside_the_trust_and_box() {
     let report = solver.step_hess(&objective, &mut array![0.0]).unwrap();
 
     for q in visited.lock().unwrap().iter() {
-        assert!(q.abs() <= 0.001 + 1e-12, "trial {q} leaves the feasible set");
+        assert!(
+            q.abs() <= 0.001 + 1e-12,
+            "trial {q} leaves the feasible set"
+        );
     }
     assert!((report.coords[0] + 0.001).abs() < 1e-9);
 }
