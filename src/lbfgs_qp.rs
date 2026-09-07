@@ -552,8 +552,7 @@ fn dense_csc(h: &Array2<f64>) -> (Vec<HighsInt>, Vec<HighsInt>, Vec<f64>) {
     let mut value = Vec::new();
     start.push(0);
     for j in 0..n {
-        // HiGHS triangular format stores each symmetric pair once.
-        for i in j..n {
+        for i in 0..n {
             let v = h[(i, j)];
             if v.abs() > 1e-16 {
                 index.push(i as HighsInt);
