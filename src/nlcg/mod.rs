@@ -129,25 +129,26 @@ impl Conjugacy {
         let d = ctx.previous_direction;
         let gg = dot(g, g);
         let gg_old = dot(gold, gold);
-        let y_g = dot(g, g) - dot(g, gold); // g · (g - gold)
+        let y = &g - &gold;
+        let y_g = dot(g, y.view());
         match self {
             Self::FletcherReeves => div(gg, gg_old),
             Self::PolakRibiere => div(y_g, gg_old),
             Self::HestenesStiefel => {
-                let y_d = dot(g, d) - dot(gold, d);
+                let y_d = dot(y.view(), d);
                 div(y_g, y_d)
             }
             Self::DaiYuan => {
-                let y_d = dot(g, d) - dot(gold, d);
+                let y_d = dot(y.view(), d);
                 div(gg, y_d)
             }
             Self::ConjugateDescent => div(gg, -dot(d, gold)),
             Self::HagerZhang => {
-                let y_d = dot(g, d) - dot(gold, d);
+                let y_d = dot(y.view(), d);
                 if y_d.abs() <= f64::EPSILON {
                     return 0.0;
                 }
-                let yy = gg + gg_old - 2.0 * dot(g, gold);
+                let yy = dot(y.view(), y.view());
                 let d_g = dot(d, g);
                 y_g / y_d - 2.0 * yy * d_g / (y_d * y_d)
             }
