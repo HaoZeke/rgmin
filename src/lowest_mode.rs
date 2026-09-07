@@ -305,19 +305,15 @@ fn lanczos<H: ApplyHessian + ?Sized>(
 ///
 /// The dimer axis is the current mode. One Hessian action gives the
 /// curvature `C = N·HN` and the rotational force `F_rot = HN − C N`.
-/// Heyden rotates `N` in the plane `{N, Θ}`, `Θ = F_rot/‖F_rot‖`, by
-/// `φ = −½ atan2(dC/dφ, 2|C|)` with `dC/dφ = 2 Θ·HN`. That is not
-/// Jacobi-Davidson and not a trial-rotation Fourier fit.
+/// A Rayleigh-Ritz solve selects the lower-curvature axis in the plane
+/// `{N, Θ}`, with `Θ = F_rot/‖F_rot‖`. The Hessian is fixed at `x`, so
+/// its action rotates with the axis and each plane needs one new action.
 fn dimer<H: ApplyHessian + ?Sized>(
     h: &H,
     x: ArrayView1<f64>,
     seed: ArrayView1<f64>,
     params: &EigenParams,
 ) -> LowestMode {
-    // Jónsson dimer in the (n, F') plane. One Rayleigh-Ritz angle in
-    // that plane needs H n and H θ (two actions). The first-order
-    // |C| step (one action, 20 outer) never trips the residual
-    // break and is slower than the in-tree Fourier one-step.
     let mut nvec = normalize(seed.to_owned());
     let max_rot = if params.max_iter == 0 {
         20
@@ -325,11 +321,10 @@ fn dimer<H: ApplyHessian + ?Sized>(
         params.max_iter
     };
     let tol = params.tolerance();
-    let mut actions = 0;
+    let mut hn = h.apply_hessian(x, nvec.view());
+    let mut actions = 1;
     let mut curvature = 0.0;
     for _ in 0..max_rot {
-        let hn = h.apply_hessian(x, nvec.view());
-        actions += 1;
         curvature = dot(hn.view(), nvec.view());
         let mut frot = hn.clone();
         axpy(-curvature, nvec.view(), &mut frot);
@@ -353,6 +348,9 @@ fn dimer<H: ApplyHessian + ?Sized>(
         };
         let mut next = nvec.mapv(|v| v * cuse);
         axpy(suse, theta.view(), &mut next);
+        let mut hnext = hn.mapv(|v| v * cuse);
+        axpy(suse, ht.view(), &mut hnext);
+        hn = hnext / nrm2(next.view());
         nvec = normalize(next);
         curvature = cval;
     }
