@@ -19,9 +19,18 @@ const ALPHA_MAXITER: usize = 64;
 /// Augmented matrix \(\alpha\begin{bmatrix}\alpha H & g\\ g^\top & 0\end{bmatrix}\);
 /// the step is the `order`-th eigenvector, scaled by \(\alpha/V_{n}\).
 pub fn rfo_get_s(h: &Array2<f64>, g: &Array1<f64>, order: usize, alpha: f64) -> Array1<f64> {
+    rfo_step_and_shift(h, g, order, alpha).0
+}
+
+pub(crate) fn rfo_step_and_shift(
+    h: &Array2<f64>,
+    g: &Array1<f64>,
+    order: usize,
+    alpha: f64,
+) -> (Array1<f64>, f64) {
     let n = g.len();
     if n == 0 || h.nrows() != n || h.ncols() != n {
-        return Array1::zeros(n);
+        return (Array1::zeros(n), 0.0);
     }
     let a = alpha.max(0.0);
     let mut aug = Array2::<f64>::zeros((n + 1, n + 1));
@@ -52,7 +61,7 @@ pub fn rfo_get_s(h: &Array2<f64>, g: &Array1<f64>, order: usize, alpha: f64) -> 
     for i in 0..n {
         s[i] = evecs[(i, col)] * a / denom;
     }
-    s
+    (s, evals[col])
 }
 
 /// Sella TrustRegion + RFO: \(\|s\|\le\delta\). Alpha lives in \([0,1]\);

@@ -699,9 +699,18 @@ impl Solver {
             } else {
                 None
             };
-            if let Ok(dir) = crate::lbfgs_qp::highs_feasible_step(
+            let mut model_hess = hess.clone();
+            if newton_kind == Some(NewtonKind::Rfo) {
+                // The lowest augmented eigenvalue makes H - lambda I
+                // convex and preserves the unconstrained RFO direction.
+                let (_, shift) = crate::sella_step::rfo_step_and_shift(&hess, &grad, 0, 1.0);
+                for k in 0..self.dim {
+                    model_hess[(k, k)] -= shift;
+                }
+            }
+            let dir = crate::lbfgs_qp::highs_feasible_step(
                 None,
-                Some(&hess),
+                Some(&model_hess),
                 &grad,
                 x.view(),
                 self.box_lo.as_deref(),
@@ -714,7 +723,7 @@ impl Solver {
                 self.highs_crossover,
                 self.highs_callback,
                 self.highs_callback_user,
-            ) {
+            )?;
                 let old = x.clone();
                 let gold = grad.clone();
                 let (npos, nval, ngrad, moved) = accept_step(
@@ -752,7 +761,6 @@ impl Solver {
                     steps: self.steps,
                     grad_norm: l2(&grad),
                 });
-            }
         }
         let mut dir = if let Some(kind) = newton_kind {
             match kind {
