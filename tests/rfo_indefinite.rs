@@ -115,3 +115,46 @@ fn inactive_constraints_preserve_the_rfo_model() {
         report.coords[0]
     );
 }
+
+#[cfg(feature = "highs")]
+#[test]
+fn constrained_rfo_rejects_without_an_unconstrained_fallback() {
+    use rgmin::{Accept, Method, Solver};
+    use std::sync::Mutex;
+
+    let visited = Mutex::new(Vec::new());
+    let objective = HessianOracle::unbounded(
+        1,
+        |x: ArrayView1<f64>| {
+            let q = x[0];
+            visited.lock().unwrap().push(q);
+            (q + 1e30 * q.powi(4), array![1.0 + 4e30 * q.powi(3)])
+        },
+        |x: ArrayView1<f64>| array![[12e30 * x[0] * x[0]]],
+    );
+    let mut solver = Solver::new(
+        Method::Newton {
+            kind: NewtonKind::Rfo,
+        },
+        Control {
+            maxiter: 1,
+            gtol: 1e-12,
+            istep: 1.0,
+            maxmove: None,
+        },
+        1,
+    );
+    solver.set_highs(true);
+    solver.set_accept(Accept::Energy);
+    assert!(solver.set_box(Some(vec![-0.002]), Some(vec![0.002])));
+    assert!(solver.set_trust(0.001));
+    let report = solver.step_hess(&objective, &mut array![0.0]).unwrap();
+
+    for q in visited.lock().unwrap().iter() {
+        assert!(
+            q.abs() <= 0.001 + 1e-12,
+            "rejected trial {q} leaves the feasible set"
+        );
+    }
+    assert_eq!(report.coords[0], 0.0);
+}
