@@ -8,6 +8,8 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 use crate::accept::{Accept, accept_step};
+#[cfg(feature = "highs")]
+use crate::accept::accept_step_with_fallback;
 use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::Control;
@@ -726,7 +728,7 @@ impl Solver {
             )?;
             let old = x.clone();
             let gold = grad.clone();
-            let (npos, nval, ngrad, moved) = accept_step(
+            let (npos, nval, ngrad, moved) = accept_step_with_fallback(
                 obj,
                 x,
                 value,
@@ -737,6 +739,7 @@ impl Solver {
                 &mut self.e_hist,
                 None,
                 self.manifold,
+                false,
             );
             if moved {
                 *x = npos;

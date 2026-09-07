@@ -69,6 +69,30 @@ pub(crate) fn accept_step<O>(
 where
     O: DifferentiableObjective<f64> + ?Sized,
 {
+    accept_step_with_fallback(
+        obj, pos, value, grad, dir, control, accept, e_hist, atom_maxmove, manifold, true,
+    )
+}
+
+/// Accept a direction with an optional steepest-descent fallback.
+/// A constrained direction must keep the fallback disabled because it
+/// cannot inherit the proposed direction's feasible set.
+pub(crate) fn accept_step_with_fallback<O>(
+    obj: &O,
+    pos: &Array1<f64>,
+    value: f64,
+    grad: &Array1<f64>,
+    dir: &Array1<f64>,
+    control: &Control,
+    accept: Accept,
+    e_hist: &mut VecDeque<f64>,
+    atom_maxmove: Option<f64>,
+    manifold: ManifoldKind,
+    steepest_fallback: bool,
+) -> (Array1<f64>, f64, Array1<f64>, bool)
+where
+    O: DifferentiableObjective<f64> + ?Sized,
+{
     match accept {
         Accept::None => {
             let trial = trial_point(obj, pos, dir, 1.0, control, atom_maxmove, manifold);
@@ -95,6 +119,9 @@ where
                     return (trial, ft, gt, true);
                 }
                 alpha *= 0.5;
+            }
+            if !steepest_fallback {
+                return (pos.clone(), value, grad.clone(), false);
             }
             // The fallback faces the same test it exists to satisfy. It
             // was returned as moved unconditionally, so after refusing ten
