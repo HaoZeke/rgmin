@@ -112,12 +112,7 @@ fn armijo_backtracking_descends() {
         },
     )
     .unwrap();
-    assert!(
-        report.value < f0,
-        "Armijo {} -> {}",
-        f0,
-        report.value
-    );
+    assert!(report.value < f0, "Armijo {} -> {}", f0, report.value);
 }
 
 #[test]

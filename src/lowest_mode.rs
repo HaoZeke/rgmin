@@ -159,11 +159,7 @@ impl EigenParams {
     }
 
     fn tolerance(self) -> f64 {
-        if self.tol > 0.0 {
-            self.tol
-        } else {
-            1e-8
-        }
+        if self.tol > 0.0 { self.tol } else { 1e-8 }
     }
 
     fn iterations(self, n: usize) -> usize {
@@ -728,8 +724,8 @@ fn jacobi_eigen(a: &mut [Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hvp::HvpOracle;
     use crate::Error;
+    use crate::hvp::HvpOracle;
     use ndarray::array;
 
     fn gapped_diag(

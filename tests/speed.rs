@@ -21,18 +21,12 @@ fn lbfgs_fewer_steps_than_steepest_on_rosenbrock() {
     let lbfgs = minimize_method(&obj, start.clone(), &ctrl, Method::lbfgs(), ls).unwrap();
     let nlcg = minimize_method(&obj, start.clone(), &ctrl, Method::polak_ribiere(), ls).unwrap();
     let sd = minimize_method(&obj, start, &ctrl, Method::Steepest, ls).unwrap();
-    eprintln!(
-        "L-BFGS steps {} value {}",
-        lbfgs.steps, lbfgs.value
-    );
+    eprintln!("L-BFGS steps {} value {}", lbfgs.steps, lbfgs.value);
     eprintln!(
         "Polak-Ribiere NLCG steps {} value {}",
         nlcg.steps, nlcg.value
     );
-    eprintln!(
-        "steepest descent steps {} value {}",
-        sd.steps, sd.value
-    );
+    eprintln!("steepest descent steps {} value {}", sd.steps, sd.value);
     assert!(
         lbfgs.steps < sd.steps,
         "L-BFGS steps {} vs steepest {}",

@@ -335,9 +335,7 @@ impl Manifold for ManifoldKind {
             Self::MultinomialDoublyStochastic { n: dn } => {
                 MultinomialDoublyStochastic { n: *dn }.required_dim(n)
             }
-            Self::MultinomialSymmetric { n: sn } => {
-                MultinomialSymmetric { n: *sn }.required_dim(n)
-            }
+            Self::MultinomialSymmetric { n: sn } => MultinomialSymmetric { n: *sn }.required_dim(n),
             Self::SphereComplex { n: cn } => SphereComplex { n: *cn }.required_dim(n),
             Self::Positive { n: pn } => Positive { n: *pn }.required_dim(n),
             Self::CenteredMatrix { m, n: cn, rows } => CenteredMatrix {

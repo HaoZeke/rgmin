@@ -26,11 +26,7 @@ use ndarray::ArrayView1;
 /// so partial implementations degrade gracefully.
 pub trait DirectionalCurvature: DifferentiableObjective<f64> {
     /// `d . grad^2 f(x) . d`, or `None` to fall back to the probe.
-    fn directional_curvature(
-        &self,
-        x: ArrayView1<f64>,
-        d: ArrayView1<f64>,
-    ) -> Option<f64>;
+    fn directional_curvature(&self, x: ArrayView1<f64>, d: ArrayView1<f64>) -> Option<f64>;
 }
 
 /// Damping schedule and convergence tolerances for [`minimize_scg`].
@@ -109,7 +105,15 @@ pub fn minimize_scg<O>(
 where
     O: DifferentiableObjective<f64> + ?Sized,
 {
-    run_scg(obj, init.into(), control, params, conjugacy, restart, |_, _| None)
+    run_scg(
+        obj,
+        init.into(),
+        control,
+        params,
+        conjugacy,
+        restart,
+        |_, _| None,
+    )
 }
 
 /// [`minimize_scg`] with exact curvature: the probe (and its extra
@@ -128,9 +132,15 @@ pub fn minimize_scg_exact<O>(
 where
     O: DirectionalCurvature + ?Sized,
 {
-    run_scg(obj, init.into(), control, params, conjugacy, restart, |x, d| {
-        obj.directional_curvature(x, d)
-    })
+    run_scg(
+        obj,
+        init.into(),
+        control,
+        params,
+        conjugacy,
+        restart,
+        |x, d| obj.directional_curvature(x, d),
+    )
 }
 
 fn run_scg<O>(
@@ -202,33 +212,27 @@ where
 
             // Exact Hessian-vector curvature when the objective
             // offers one; the one-sided probe otherwise.
-            if let Some(exact) = curvature(w.view(), dir.view())
-                .filter(|c| c.is_finite())
-            {
+            if let Some(exact) = curvature(w.view(), dir.view()).filter(|c| c.is_finite()) {
                 gamma = exact;
             } else {
-            let mut sigma = params.sigma0 / kappa.sqrt();
-            let mut probed =
-                obj.value_and_gradient((&w + &(sigma * &dir)).view());
-            let mut probe_retries = 0;
-            while !(probed.0.is_finite()
-                && probed.1.iter().all(|g| g.is_finite()))
-                && sigma.is_finite()
-                && probe_retries < MAX_PROBE_RETRIES
-            {
-                sigma *= 2.0;
-                probed = obj.value_and_gradient((&w + &(sigma * &dir)).view());
-                probe_retries += 1;
-            }
-            if !(probed.0.is_finite()
-                && probed.1.iter().all(|g| g.is_finite()))
-            {
-                return Err(Error::ScgStalled {
-                    what: "no finite curvature probe along the search direction",
-                });
-            }
-            let dg = &probed.1 - &grad;
-            gamma = crate::vecops::dot(dg.view(), dir.view()) / sigma;
+                let mut sigma = params.sigma0 / kappa.sqrt();
+                let mut probed = obj.value_and_gradient((&w + &(sigma * &dir)).view());
+                let mut probe_retries = 0;
+                while !(probed.0.is_finite() && probed.1.iter().all(|g| g.is_finite()))
+                    && sigma.is_finite()
+                    && probe_retries < MAX_PROBE_RETRIES
+                {
+                    sigma *= 2.0;
+                    probed = obj.value_and_gradient((&w + &(sigma * &dir)).view());
+                    probe_retries += 1;
+                }
+                if !(probed.0.is_finite() && probed.1.iter().all(|g| g.is_finite())) {
+                    return Err(Error::ScgStalled {
+                        what: "no finite curvature probe along the search direction",
+                    });
+                }
+                let dg = &probed.1 - &grad;
+                gamma = crate::vecops::dot(dg.view(), dir.view()) / sigma;
             }
         }
 
@@ -271,8 +275,7 @@ where
             nsuccess += 1;
             let step_inf = alpha.abs() * crate::vecops::nrminf(dir.view());
             let solution_converged = step_inf < params.tol_sol;
-            let objective_converged =
-                (f_new - f_old).abs() < params.tol_func * (f_old.abs() + 1.0);
+            let objective_converged = (f_new - f_old).abs() < params.tol_func * (f_old.abs() + 1.0);
             w = trial;
             if solution_converged && objective_converged {
                 return Ok(Report {

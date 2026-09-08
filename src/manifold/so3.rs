@@ -99,11 +99,7 @@ fn qr_pos(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
 
 impl Manifold for So3 {
     fn required_dim(&self, n: usize) -> Result<(), usize> {
-        if n == 9 {
-            Ok(())
-        } else {
-            Err(9)
-        }
+        if n == 9 { Ok(()) } else { Err(9) }
     }
 
     fn project(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {

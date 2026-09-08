@@ -333,7 +333,11 @@ fn alpha_search(
 }
 
 fn cons_deriv(trust: &IrcTrust, s: &Array1<f64>, ds: &Array1<f64>) -> f64 {
-    let n = s.len().min(trust.d1.len()).min(trust.sqrtm.len()).min(ds.len());
+    let n = s
+        .len()
+        .min(trust.d1.len())
+        .min(trust.sqrtm.len())
+        .min(ds.len());
     let mut w = Array1::zeros(n);
     let mut dw = Array1::zeros(n);
     for i in 0..n {
@@ -345,7 +349,11 @@ fn cons_deriv(trust: &IrcTrust, s: &Array1<f64>, ds: &Array1<f64>) -> f64 {
 }
 
 /// MW pair from a Cartesian displacement and gradient change.
-pub fn mw_pair(s: &Array1<f64>, y: &Array1<f64>, sqrtm: &Array1<f64>) -> (Array1<f64>, Array1<f64>) {
+pub fn mw_pair(
+    s: &Array1<f64>,
+    y: &Array1<f64>,
+    sqrtm: &Array1<f64>,
+) -> (Array1<f64>, Array1<f64>) {
     let mut s_mw = Array1::zeros(s.len());
     let mut y_mw = Array1::zeros(y.len());
     let n = s.len().min(y.len()).min(sqrtm.len());

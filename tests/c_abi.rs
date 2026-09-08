@@ -1611,10 +1611,16 @@ fn c_abi_one_eval_search_direction_is_steepest_when_empty() {
     let mut dir = [0.0_f64, 0.0];
     let st = unsafe { rgmin_solver_search_direction(session, g.as_ptr(), dir.as_mut_ptr(), 2) };
     assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
-    assert!((dir[0] + 2.0).abs() < 1e-12, "empty two-loop is -g, got {dir:?}");
+    assert!(
+        (dir[0] + 2.0).abs() < 1e-12,
+        "empty two-loop is -g, got {dir:?}"
+    );
     assert!(dir[1].abs() < 1e-12);
     let s = [-0.02_f64, 0.0];
     let y = [-0.04_f64, 0.0];
-    assert_eq!(unsafe { rgmin_solver_push_pair(session, s.as_ptr(), y.as_ptr(), 2) }, 0);
+    assert_eq!(
+        unsafe { rgmin_solver_push_pair(session, s.as_ptr(), y.as_ptr(), 2) },
+        0
+    );
     unsafe { rgmin_solver_free(session) };
 }

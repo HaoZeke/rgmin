@@ -111,12 +111,7 @@ mod tests {
         let tr = IrcTrust::from_atom_masses(d1, &masses, 0.2);
         let s = array![0.5, 0.1, -0.2, 0.3, 0.0, 0.4];
         let p = tr.project(&s);
-        assert!(
-            tr.on_bound(&p, 1e-12),
-            "cons={} dx={}",
-            tr.cons(&p),
-            tr.dx
-        );
+        assert!(tr.on_bound(&p, 1e-12), "cons={} dx={}", tr.cons(&p), tr.dx);
     }
 
     #[test]

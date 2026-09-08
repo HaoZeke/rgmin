@@ -93,7 +93,12 @@ where
     let mut delta = -&r;
     let r0 = nrm2(r.view());
     if !(r0 > 0.0) {
-        return TcgResult { eta, model_decrease: 0.0, stop: TcgStop::ZeroGradient, iterations: 0 };
+        return TcgResult {
+            eta,
+            model_decrease: 0.0,
+            stop: TcgStop::ZeroGradient,
+            iterations: 0,
+        };
     }
     let tol = r0 * r0.powf(theta).min(kappa);
     let mut rr = r0 * r0;
@@ -130,7 +135,12 @@ where
     }
     let heta = project(&hvp(&eta));
     let model_decrease = -(dot(g.view(), eta.view()) + 0.5 * dot(eta.view(), heta.view()));
-    TcgResult { eta, model_decrease, stop, iterations }
+    TcgResult {
+        eta,
+        model_decrease,
+        stop,
+        iterations,
+    }
 }
 
 /// Trust radius state with the reference update rule.
@@ -144,7 +154,10 @@ impl RtrRadius {
     /// Reference initialisation: `Delta_0 = Delta_bar / 8`.
     pub fn new(radius_max: f64) -> Self {
         let rm = radius_max.max(f64::MIN_POSITIVE);
-        Self { radius: rm / 8.0, radius_max: rm }
+        Self {
+            radius: rm / 8.0,
+            radius_max: rm,
+        }
     }
 
     /// Reduction ratio `rho = actual / predicted` and the acceptance and
@@ -152,7 +165,11 @@ impl RtrRadius {
     /// the step is accepted (`rho > 1/10`). A non-positive predicted
     /// decrease is treated as a failed model (`rho = -inf`).
     pub fn update(&mut self, actual_decrease: f64, model_decrease: f64, eta_norm: f64) -> bool {
-        let rho = if model_decrease > 0.0 { actual_decrease / model_decrease } else { f64::NEG_INFINITY };
+        let rho = if model_decrease > 0.0 {
+            actual_decrease / model_decrease
+        } else {
+            f64::NEG_INFINITY
+        };
         if rho < 0.25 {
             self.radius = (0.25 * self.radius).max(f64::MIN_POSITIVE);
         } else if rho > 0.75 && eta_norm >= self.radius * (1.0 - 1e-12) {
@@ -179,15 +196,22 @@ where
     F: FnMut(&Array1<f64>) -> Array1<f64>,
 {
     let anchor = x.to_owned();
-    truncated_cg_projected(|v| manifold.project(&anchor, v), grad, hvp,
-                           radius, theta, kappa, maxiter)
+    truncated_cg_projected(
+        |v| manifold.project(&anchor, v),
+        grad,
+        hvp,
+        radius,
+        theta,
+        kappa,
+        maxiter,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::manifold::{Euclidean, Sphere};
-    use ndarray::{array, Array2};
+    use ndarray::{Array2, array};
 
     fn quad_hvp(h: &Array2<f64>) -> impl Fn(&Array1<f64>) -> Array1<f64> + '_ {
         move |v| h.dot(v)
@@ -198,9 +222,22 @@ mod tests {
         let h = Array2::from_diag(&array![1.0, 2.0, 3.0]);
         let g = array![1.0, -2.0, 0.5];
         let x = Array1::zeros(3);
-        let r = truncated_cg(&Euclidean, x.view(), g.view(), quad_hvp(&h), 100.0, 1.0, 0.1, 50);
+        let r = truncated_cg(
+            &Euclidean,
+            x.view(),
+            g.view(),
+            quad_hvp(&h),
+            100.0,
+            1.0,
+            0.1,
+            50,
+        );
         let newton = array![-1.0, 1.0, -0.5 / 3.0];
-        assert!((r.eta.clone() - newton.clone()).mapv(f64::abs).sum() < 1e-10, "{:?}", r.eta);
+        assert!(
+            (r.eta.clone() - newton.clone()).mapv(f64::abs).sum() < 1e-10,
+            "{:?}",
+            r.eta
+        );
         let expected = -(g.dot(&newton) + 0.5 * newton.dot(&h.dot(&newton)));
         assert!((r.model_decrease - expected).abs() < 1e-10);
         assert_eq!(r.stop, TcgStop::Residual);
@@ -211,7 +248,16 @@ mod tests {
         let h = Array2::from_diag(&array![-1.0, 2.0]);
         let g = array![1.0, 0.0];
         let x = Array1::zeros(2);
-        let r = truncated_cg(&Euclidean, x.view(), g.view(), quad_hvp(&h), 0.5, 1.0, 0.1, 50);
+        let r = truncated_cg(
+            &Euclidean,
+            x.view(),
+            g.view(),
+            quad_hvp(&h),
+            0.5,
+            1.0,
+            0.1,
+            50,
+        );
         assert_eq!(r.stop, TcgStop::NegativeCurvature);
         assert!((nrm2(r.eta.view()) - 0.5).abs() < 1e-12);
         assert!(r.eta[0] < 0.0);
@@ -231,7 +277,16 @@ mod tests {
         let mut radius = RtrRadius::new(1.0);
         for _ in 0..100 {
             let g = &a.dot(&x) * 2.0;
-            let r = truncated_cg(&sphere, x.view(), g.view(), |v| &a.dot(v) * 2.0, radius.radius, 1.0, 0.1, 20);
+            let r = truncated_cg(
+                &sphere,
+                x.view(),
+                g.view(),
+                |v| &a.dot(v) * 2.0,
+                radius.radius,
+                1.0,
+                0.1,
+                20,
+            );
             if nrm2(sphere.project(&x, &g).view()) < 1e-10 {
                 break;
             }

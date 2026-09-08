@@ -63,14 +63,15 @@ pub fn axpy(a: f64, x: ArrayView1<f64>, y: &mut Array1<f64>) {
         return;
     }
     match (x.as_slice(), y.as_slice_mut()) {
-        (Some(xs), Some(ys)) => ys
-            .par_chunks_mut(4096)
-            .zip(xs.par_chunks(4096))
-            .for_each(|(cy, cx)| {
-                for (p, q) in cy.iter_mut().zip(cx) {
-                    *p += a * q;
-                }
-            }),
+        (Some(xs), Some(ys)) => {
+            ys.par_chunks_mut(4096)
+                .zip(xs.par_chunks(4096))
+                .for_each(|(cy, cx)| {
+                    for (p, q) in cy.iter_mut().zip(cx) {
+                        *p += a * q;
+                    }
+                })
+        }
         _ => y.scaled_add(a, &x),
     }
 }

@@ -2,7 +2,7 @@
 
 use eindir_core::DifferentiableObjective;
 use eindir_core::objectives::Rosenbrock;
-use ndarray::{array, Array1, ArrayView1};
+use ndarray::{Array1, ArrayView1, array};
 use rgmin::linesearch::zoom;
 use rgmin::{Conjugacy, Control, LineSearch, Restart, minimize};
 
@@ -43,12 +43,7 @@ fn wolfe_on_rosenbrock_descends() {
         wolfe(),
     )
     .unwrap();
-    assert!(
-        report.value < f0,
-        "Wolfe {} -> {}",
-        f0,
-        report.value
-    );
+    assert!(report.value < f0, "Wolfe {} -> {}", f0, report.value);
 }
 
 #[test]
@@ -158,7 +153,16 @@ fn zoom_without_iterations_returns_lo() {
     let pos = array![0.0];
     let dir = array![1.0];
     let lo = 0.25;
-    let alpha = zoom(&mut quadratic, pos.view(), dir.view(), lo, 1.75, 1e-4, 0.9, 0);
+    let alpha = zoom(
+        &mut quadratic,
+        pos.view(),
+        dir.view(),
+        lo,
+        1.75,
+        1e-4,
+        0.9,
+        0,
+    );
     assert!(
         (alpha - lo).abs() < 1e-15,
         "empty zoom should keep lo={lo}, got {alpha}"
@@ -183,10 +187,5 @@ fn goldstein_backtracking_descends() {
         },
     )
     .unwrap();
-    assert!(
-        report.value < f0,
-        "Goldstein {} -> {}",
-        f0,
-        report.value
-    );
+    assert!(report.value < f0, "Goldstein {} -> {}", f0, report.value);
 }
