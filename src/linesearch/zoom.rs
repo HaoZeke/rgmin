@@ -100,9 +100,7 @@ where
             hi = alpha;
             continue;
         }
-        if armijo(phi_a, phi0, alpha, dphi0, c1)
-            && strong_curvature(dphi_a, dphi0, c2)
-        {
+        if armijo(phi_a, phi0, alpha, dphi0, c1) && strong_curvature(dphi_a, dphi0, c2) {
             return (alpha, phi_a);
         }
         if !armijo(phi_a, phi0, alpha, dphi0, c1) || phi_a >= phi_lo {

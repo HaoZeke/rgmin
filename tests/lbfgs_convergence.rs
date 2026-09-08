@@ -57,7 +57,11 @@ fn lbfgs_energy_acceptance_converges_below_energy_resolution() {
             }
             report = solver.step(&obj, &mut x).unwrap();
         }
-        assert!(report.grad_norm <= 1e-12, "gradient {}, x={x}", report.grad_norm);
+        assert!(
+            report.grad_norm <= 1e-12,
+            "gradient {}, x={x}",
+            report.grad_norm
+        );
         assert!(x[0].abs() <= 1e-12 && (x[1] - 1.0).abs() <= 1e-12);
     }
 }
