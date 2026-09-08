@@ -4,7 +4,8 @@
 //! Found. Comput. Math. 7, 303 (2007). At the current point `x` on the
 //! manifold the model
 //!
-//!     m(eta) = f(x) + <grad f(x), eta> + 1/2 <Hess f(x)[eta], eta>,   eta in T_x M
+//! `m(eta) = f(x) + <grad f(x), eta> + 1/2 <Hess f(x)[eta], eta>`,
+//! for `eta` in the tangent space `T_x M`,
 //!
 //! is minimised inside the ball `||eta|| <= Delta` by the Steihaug–Toint
 //! truncated CG iteration run entirely in the tangent space: every
@@ -19,6 +20,17 @@
 //! `rho > rho' = 0.1`, shrink by 1/4 below `rho = 1/4`, grow by 2 above
 //! `rho = 3/4` at the boundary, never past `Delta_bar`. Nothing here is a
 //! per-fixture number.
+//!
+//! For `f(x) = x^2` at `x = 1`, the model has its minimizer at `eta = -1`:
+//! ```
+//! use ndarray::array;
+//! use rgmin::rtr::truncated_cg_projected;
+//! let result = truncated_cg_projected(
+//!     |v| v.clone(), array![2.0].view(), |v| v * 2.0, 2.0, 1.0, 0.1, 10,
+//! );
+//! assert!((result.eta[0] + 1.0).abs() < 1e-12);
+//! assert!((result.model_decrease - 1.0).abs() < 1e-12);
+//! ```
 
 use ndarray::{Array1, ArrayView1};
 
