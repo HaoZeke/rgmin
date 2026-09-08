@@ -45,4 +45,5 @@ jobs:
         with:
           toolchain: 1.88.0
       - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked ${{ matrix.args }}
       - run: cargo test --locked ${{ matrix.args }}
