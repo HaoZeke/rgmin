@@ -102,14 +102,17 @@ where
     // Bounds and maxmove change the point returned by the line search.
     // Acceptance uses that point's value and directional derivative. At
     // equal rounded energies, strong curvature certifies a descent step.
-    let curvature_decrease = if finite && nval == value {
-        let (_, initial_grad) = obj.value_and_gradient(pos.view());
-        let delta = &trial - pos;
-        let initial_slope = initial_grad.dot(&delta);
-        let trial_slope = grad.dot(&delta);
-        initial_slope < 0.0 && trial_slope.abs() <= 0.9 * initial_slope.abs()
-    } else {
-        false
+    let curvature_decrease = match linesearch {
+        LineSearch::Wolfe { c1, c2, .. } if finite && nval == value => {
+            let (_, initial_grad) = obj.value_and_gradient(pos.view());
+            let delta = &trial - pos;
+            let initial_slope = initial_grad.dot(&delta);
+            let trial_slope = grad.dot(&delta);
+            initial_slope < 0.0
+                && crate::linesearch::conditions::armijo(nval, value, 1.0, initial_slope, c1)
+                && crate::linesearch::conditions::strong_curvature(trial_slope, initial_slope, c2)
+        }
+        _ => false,
     };
     if finite && (nval < value || curvature_decrease) {
         (trial, nval, lsstep, true)

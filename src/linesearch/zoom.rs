@@ -168,13 +168,13 @@ where
             let zoomed = zoom_into(
                 oracle, pos, dir, alpha_prev, alpha, c1, c2, maxiter, f0, dphi0,
             );
-            return finish(oracle, pos, dir, zoomed, f0, best_x, best_f, best_a);
+            return finish(oracle, pos, dir, zoomed, f0, dphi0, c1, c2, best_x, best_f, best_a);
         }
         if dphi >= 0.0 {
             let zoomed = zoom_into(
                 oracle, pos, dir, alpha, alpha_prev, c1, c2, maxiter, f0, dphi0,
             );
-            return finish(oracle, pos, dir, zoomed, f0, best_x, best_f, best_a);
+            return finish(oracle, pos, dir, zoomed, f0, dphi0, c1, c2, best_x, best_f, best_a);
         }
         if (alpha - alpha_max).abs() < 1e-16 {
             break;
@@ -196,6 +196,9 @@ fn finish<F>(
     dir: ArrayView1<'_, f64>,
     zoomed: (f64, f64),
     f0: f64,
+    dphi0: f64,
+    c1: f64,
+    c2: f64,
     best_x: Array1<f64>,
     best_f: f64,
     best_a: f64,
@@ -208,7 +211,10 @@ where
         if !ft.is_finite() {
             ft = oracle(axpy(pos, t, dir).view()).0;
         }
-        if ft.is_finite() && ft <= f0 {
+        let tied_wolfe = ft == f0
+            && armijo(ft, f0, t, dphi0, c1)
+            && strong_curvature(phi_pair(oracle, pos, dir, t).1, dphi0, c2);
+        if ft.is_finite() && (ft < f0 || tied_wolfe) {
             return (axpy(pos, t, dir), ft, t.abs());
         }
     }
