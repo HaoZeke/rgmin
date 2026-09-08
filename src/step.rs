@@ -91,13 +91,27 @@ pub(crate) fn take_step<O>(
 where
     O: DifferentiableObjective<f64> + ?Sized,
 {
-    let (npos, nval, lsstep) =
+    let (npos, _, lsstep) =
         linesearch.search(|x| obj.value_and_gradient(x), pos.view(), dir, istep);
     let mut trial = obj.bounds().clip(npos.view());
     if let Some(cap) = control.maxmove {
         scale_step(pos, &mut trial, cap);
     }
-    if nval < value {
+    let (nval, grad) = obj.value_and_gradient(trial.view());
+    let finite = nval.is_finite() && grad.iter().all(|g| g.is_finite());
+    // Bounds and maxmove change the point returned by the line search.
+    // Acceptance uses that point's value and directional derivative. At
+    // equal rounded energies, strong curvature certifies a descent step.
+    let curvature_decrease = if finite && nval == value {
+        let (_, initial_grad) = obj.value_and_gradient(pos.view());
+        let delta = &trial - pos;
+        let initial_slope = initial_grad.dot(&delta);
+        let trial_slope = grad.dot(&delta);
+        initial_slope < 0.0 && trial_slope.abs() <= 0.9 * initial_slope.abs()
+    } else {
+        false
+    };
+    if finite && (nval < value || curvature_decrease) {
         (trial, nval, lsstep, true)
     } else {
         (pos.clone(), value, 0.0, false)

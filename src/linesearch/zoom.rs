@@ -100,12 +100,14 @@ where
             hi = alpha;
             continue;
         }
+        if armijo(phi_a, phi0, alpha, dphi0, c1)
+            && strong_curvature(dphi_a, dphi0, c2)
+        {
+            return (alpha, phi_a);
+        }
         if !armijo(phi_a, phi0, alpha, dphi0, c1) || phi_a >= phi_lo {
             hi = alpha;
         } else {
-            if strong_curvature(dphi_a, dphi0, c2) {
-                return (alpha, phi_a);
-            }
             if dphi_a * (hi - lo) >= 0.0 {
                 hi = lo;
             }
@@ -119,7 +121,7 @@ where
 /// Strong-Wolfe line search with Nocedal-Wright zoom (algorithm 3.5).
 ///
 /// Initial trial is `istep`; the outer loop doubles until `alpha_max` or a
-/// bracket is formed. Returns `(x, f, |α|)` if the trial beat `f0`.
+/// bracket is formed. Strong curvature permits equal rounded energies.
 ///
 /// Wolfe, *Convergence Conditions for Ascent Methods*,
 /// <https://doi.org/10.1137/1011036>.
@@ -161,14 +163,14 @@ where
             best_a = alpha;
         }
         let fail_armijo = !phi.is_finite() || !armijo(phi, f0, alpha, dphi0, c1);
+        if !fail_armijo && strong_curvature(dphi, dphi0, c2) {
+            return (x, phi, alpha.abs());
+        }
         if fail_armijo || (i > 0 && phi >= phi_prev) {
             let zoomed = zoom_into(
                 oracle, pos, dir, alpha_prev, alpha, c1, c2, maxiter, f0, dphi0,
             );
             return finish(oracle, pos, dir, zoomed, f0, best_x, best_f, best_a);
-        }
-        if strong_curvature(dphi, dphi0, c2) {
-            return (x, phi, alpha.abs());
         }
         if dphi >= 0.0 {
             let zoomed = zoom_into(
@@ -208,7 +210,7 @@ where
         if !ft.is_finite() {
             ft = oracle(axpy(pos, t, dir).view()).0;
         }
-        if ft.is_finite() && ft < f0 {
+        if ft.is_finite() && ft <= f0 {
             return (axpy(pos, t, dir), ft, t.abs());
         }
     }

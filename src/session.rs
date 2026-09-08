@@ -133,10 +133,19 @@ impl Solver {
     pub fn new(method: Method, control: Control, dim: usize) -> Self {
         let istep = control.istep;
         let inner = Inner::from_method(&method, dim, istep);
+        let linesearch = if matches!(&inner, Inner::Lbfgs(_)) {
+            LineSearch::Wolfe {
+                c1: 1e-4,
+                c2: 0.9,
+                maxiter: 40,
+            }
+        } else {
+            LineSearch::default()
+        };
         Self {
             dim,
             control,
-            linesearch: LineSearch::default(),
+            linesearch,
             istep,
             steps: 0,
             qn_step: QnStep::TwoLoop,
