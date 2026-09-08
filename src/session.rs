@@ -684,7 +684,9 @@ impl Solver {
         #[cfg(feature = "highs")]
         if self.highs && (self.box_lo.is_some() || self.box_hi.is_some()) {
             let bounded = crate::box_objective::BoxObjective::new(
-                obj, self.box_lo.clone(), self.box_hi.clone(),
+                obj,
+                self.box_lo.clone(),
+                self.box_hi.clone(),
             )?;
             if bounded.clip_start(x)? {
                 self.last_pos = None;
@@ -702,7 +704,9 @@ impl Solver {
         #[cfg(feature = "highs")]
         if self.highs && (self.box_lo.is_some() || self.box_hi.is_some()) {
             let bounded = crate::box_objective::BoxObjective::new(
-                obj, self.box_lo.clone(), self.box_hi.clone(),
+                obj,
+                self.box_lo.clone(),
+                self.box_hi.clone(),
             )?;
             if bounded.clip_start(x)? {
                 self.last_pos = None;

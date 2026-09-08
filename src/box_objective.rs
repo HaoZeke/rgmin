@@ -18,7 +18,10 @@ impl<'a, O: DifferentiableObjective<f64> + ?Sized> BoxObjective<'a, O> {
         let dim = Objective::dim(inner);
         for side in [&lo, &hi].into_iter().flatten() {
             if !side.is_empty() && side.len() != 1 && side.len() != dim {
-                return Err(Error::Dim { got: side.len(), dim });
+                return Err(Error::Dim {
+                    got: side.len(),
+                    dim,
+                });
             }
         }
         let bounded = Self { inner, lo, hi };
@@ -72,7 +75,11 @@ impl<O: DifferentiableObjective<f64> + ?Sized> Objective<f64> for BoxObjective<'
     }
 
     fn eval(&self, x: ArrayView1<f64>) -> f64 {
-        if self.contains(x) { self.inner.eval(x) } else { f64::INFINITY }
+        if self.contains(x) {
+            self.inner.eval(x)
+        } else {
+            f64::INFINITY
+        }
     }
 }
 
@@ -82,11 +89,17 @@ impl<O: DifferentiableObjective<f64> + ?Sized> Gradient<f64> for BoxObjective<'_
     }
 
     fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
-        if self.contains(x) { self.inner.grad(x) } else { Array1::from_elem(x.len(), f64::NAN) }
+        if self.contains(x) {
+            self.inner.grad(x)
+        } else {
+            Array1::from_elem(x.len(), f64::NAN)
+        }
     }
 }
 
-impl<O: DifferentiableObjective<f64> + ?Sized> DifferentiableObjective<f64> for BoxObjective<'_, O> {
+impl<O: DifferentiableObjective<f64> + ?Sized> DifferentiableObjective<f64>
+    for BoxObjective<'_, O>
+{
     fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
         if self.contains(x) {
             self.inner.value_and_gradient(x)
@@ -98,6 +111,10 @@ impl<O: DifferentiableObjective<f64> + ?Sized> DifferentiableObjective<f64> for 
 
 impl<O: HessianObjective + ?Sized> HessianObjective for BoxObjective<'_, O> {
     fn hessian(&self, x: ArrayView1<f64>) -> Array2<f64> {
-        if self.contains(x) { self.inner.hessian(x) } else { Array2::from_elem((x.len(), x.len()), f64::NAN) }
+        if self.contains(x) {
+            self.inner.hessian(x)
+        } else {
+            Array2::from_elem((x.len(), x.len()), f64::NAN)
+        }
     }
 }
