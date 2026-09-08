@@ -627,8 +627,15 @@ impl Lbfgs {
         // starts at the unit step so accepted steps retain superlinear
         // convergence instead of inheriting repeated line-search shrinkage.
         let trial_step = if self.memory.is_empty() { *istep } else { 1.0 };
-        let (npos, _, lsstep, moved) =
-            take_step(obj, pos, *value, dir.view(), trial_step, linesearch, control);
+        let (npos, _, lsstep, moved) = take_step(
+            obj,
+            pos,
+            *value,
+            dir.view(),
+            trial_step,
+            linesearch,
+            control,
+        );
         *pos = npos;
         let ev = obj.value_and_gradient(pos.view());
         *value = ev.0;
