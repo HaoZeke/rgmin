@@ -62,7 +62,9 @@ pub struct TcgResult {
     /// Model decrease `m(0) - m(eta) = -(<g, eta> + 1/2 <H eta, eta>)`,
     /// evaluated with one extra Hessian-vector product on the returned step.
     pub model_decrease: f64,
+    /// Condition terminating the conjugate-gradient subproblem.
     pub stop: TcgStop,
+    /// Number of conjugate-gradient iterations performed.
     pub iterations: usize,
 }
 
@@ -158,7 +160,9 @@ where
 /// Trust radius state with the reference update rule.
 #[derive(Clone, Copy, Debug)]
 pub struct RtrRadius {
+    /// Radius of the current tangent-space trust region.
     pub radius: f64,
+    /// Upper bound on the trust radius.
     pub radius_max: f64,
 }
 
