@@ -924,6 +924,18 @@ impl Solver {
             });
         }
 
+        // An external displacement has a measured gradient at both ends.
+        // Its secant updates the retained inverse Hessian at the supplied
+        // point, using the same vector transport as accepted solver steps.
+        if !cached {
+            if let Some(previous) = &self.last_pos {
+                let (s, y) = self.lbfgs_sy(previous, x, &self.last_grad, &grad);
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.push_pair(s, y, Some(gnorm));
+                }
+            }
+        }
+
         let start = x.clone();
         let gold = grad.clone();
         match &mut self.inner {
