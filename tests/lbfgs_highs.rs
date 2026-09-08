@@ -72,6 +72,35 @@ fn session_box_normal_does_not_hide_a_free_gradient() {
     assert!(report.grad_norm <= 1e-10, "{report:?}");
 }
 
+#[test]
+fn session_box_wolfe_evaluations_respect_the_domain() {
+    use ndarray::array;
+    use rgmin::{Accept, Control, Method, Oracle, Solver};
+
+    let obj = Oracle::unbounded(2, |x| {
+        assert!(x[0] >= 1.0 && x[0] <= 10.0, "lower wall: {x:?}");
+        assert!(x[1] >= -10.0 && x[1] <= 1.0, "upper wall: {x:?}");
+        let g = &x - &array![0.0, 2.0];
+        (0.5 * g.dot(&g), g)
+    });
+    let mut x = array![2.0, -1.0];
+    let mut solver = Solver::new(Method::lbfgs(), Control::default(), 2).with_gtol(1e-10);
+    solver.set_accept(Accept::Energy);
+    solver.set_highs(true);
+    assert!(solver.set_box(Some(vec![1.0, -10.0]), Some(vec![10.0, 1.0])));
+    let mut report = solver.step(&obj, &mut x).unwrap();
+    for _ in 0..100 {
+        if report.grad_norm <= 1e-10 {
+            break;
+        }
+        report = solver.step(&obj, &mut x).unwrap();
+    }
+    assert!(report.grad_norm <= 1e-10, "{report:?}");
+    assert_relative_eq!(x[0], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(x[1], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(report.value, 1.0, epsilon = 1e-10);
+}
+
 fn quad(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
     let scales = [1.0, 10.0, 100.0, 1000.0];
     let mut f = 0.0;
