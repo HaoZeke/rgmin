@@ -565,6 +565,32 @@ impl Solver {
         self.last_grad = grad.clone();
     }
 
+    fn stationarity_norm(&self, x: &Array1<f64>, grad: &Array1<f64>) -> f64 {
+        #[cfg(feature = "highs")]
+        if self.highs
+            && (self.box_lo.is_some() || self.box_hi.is_some())
+            && matches!(self.manifold, ManifoldKind::Euclidean)
+            && !self.project_rigid
+            && self.equalities.is_empty()
+        {
+            use crate::lbfgs_qp::side_at;
+            let mut norm = 0.0_f64;
+            for k in 0..x.len() {
+                let lo = side_at(self.box_lo.as_deref(), k).unwrap_or(f64::NEG_INFINITY);
+                let hi = side_at(self.box_hi.as_deref(), k).unwrap_or(f64::INFINITY);
+                if !x[k].is_finite() || !grad[k].is_finite() || !(lo <= x[k] && x[k] <= hi) {
+                    return f64::INFINITY;
+                }
+                // x - clip(x-g, lo, hi) = clip(g, x-hi, x-lo).
+                // Distance clipping preserves gradients smaller than an ulp of x.
+                norm = norm.hypot(grad[k].clamp(x[k] - hi, x[k] - lo));
+            }
+            return norm;
+        }
+        let _ = x;
+        l2(grad)
+    }
+
     /// Record `s = x+ - x`, `y = g+ - g` from the caller's previous outer.
     ///
     /// A dimer (or any one-oracle-per-outer walker) cannot answer the
@@ -690,7 +716,7 @@ impl Solver {
             obj.value_and_gradient(x.view())
         };
         grad = self.horizontal_grad(x, &grad);
-        let gnorm = l2(&grad);
+        let gnorm = self.stationarity_norm(x, &grad);
         if gnorm < self.control.gtol {
             return Ok(Report {
                 value,
@@ -771,7 +797,7 @@ impl Solver {
                 value,
                 coords: x.clone(),
                 steps: self.steps,
-                grad_norm: l2(&grad),
+                grad_norm: self.stationarity_norm(x, &grad),
             });
         }
         let mut dir = if let Some(kind) = newton_kind {
@@ -823,7 +849,7 @@ impl Solver {
             value,
             coords: x.clone(),
             steps: self.steps,
-            grad_norm: l2(&grad),
+            grad_norm: self.stationarity_norm(x, &grad),
         })
     }
 
@@ -874,7 +900,7 @@ impl Solver {
                 value: ft,
                 coords: x.clone(),
                 steps: self.steps,
-                grad_norm: l2(&gt),
+                grad_norm: self.stationarity_norm(x, &gt),
             })
         } else {
             self.remember(x, value, &grad);
@@ -883,7 +909,7 @@ impl Solver {
                 value,
                 coords: x.clone(),
                 steps: self.steps,
-                grad_norm: l2(&grad),
+                grad_norm: self.stationarity_norm(x, &grad),
             })
         }
     }
@@ -914,7 +940,7 @@ impl Solver {
             obj.value_and_gradient(x.view())
         };
         grad = self.horizontal_grad(x, &grad);
-        let gnorm = l2(&grad);
+        let gnorm = self.stationarity_norm(x, &grad);
         if gnorm < self.control.gtol {
             return Ok(Report {
                 value,
@@ -931,7 +957,7 @@ impl Solver {
             if let Some(previous) = &self.last_pos {
                 let (s, y) = self.lbfgs_sy(previous, x, &self.last_grad, &grad);
                 if let Inner::Lbfgs(solver) = &mut self.inner {
-                    solver.push_pair(s, y, Some(gnorm));
+                    solver.push_pair(s, y, Some(l2(&grad)));
                 }
             }
         }
@@ -1219,7 +1245,7 @@ impl Solver {
             value,
             coords: x.clone(),
             steps: self.steps,
-            grad_norm: l2(&grad),
+            grad_norm: self.stationarity_norm(x, &grad),
         })
     }
 
@@ -1303,7 +1329,7 @@ impl Solver {
                 value,
                 coords: x.clone(),
                 steps: self.steps,
-                grad_norm: l2(&grad),
+                grad_norm: self.stationarity_norm(x, &grad),
             });
         }
         unreachable!("PSO slot populated above")

@@ -280,7 +280,7 @@ fn project_qp(d: &Array1<f64>, x: ArrayView1<f64>, opts: &HighsStep) -> Result<A
 }
 
 /// One side of a box. Length 1 is uniform; otherwise the `k`-th entry.
-fn side_at(side: Option<&[f64]>, k: usize) -> Option<f64> {
+pub(crate) fn side_at(side: Option<&[f64]>, k: usize) -> Option<f64> {
     let b = side?;
     if b.len() == 1 {
         Some(b[0])

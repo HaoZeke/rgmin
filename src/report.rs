@@ -11,6 +11,8 @@ pub struct Report {
     pub coords: Array1<f64>,
     /// Outer iterations performed.
     pub steps: usize,
-    /// `||∇f||_2` at the accepted point.
+    /// Gradient norm at the accepted point. A Euclidean session with a box
+    /// and no additional constraints reports `||x - clip(x-∇f, lo, hi)||_2`.
+    /// Other sessions report the norm of their projected or raw gradient.
     pub grad_norm: f64,
 }
