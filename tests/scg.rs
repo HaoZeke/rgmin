@@ -73,6 +73,23 @@ fn quadratic_bowl_converges_fast() {
 }
 
 #[test]
+fn zero_iteration_limit_runs_to_convergence() {
+    let mut ctrl = control();
+    ctrl.maxiter = 0;
+    let report = minimize_scg(
+        &Bowl,
+        array![1.0, -2.0, 3.0, -4.0],
+        &ctrl,
+        &ScgParams::default(),
+        Conjugacy::PolakRibiere,
+        Restart::Never,
+    )
+    .unwrap();
+    assert!(report.value < 1e-10, "value {}", report.value);
+    assert!(report.steps > 1, "steps {}", report.steps);
+}
+
+#[test]
 fn rosenbrock_finds_the_banana_minimum() {
     let obj = Rosenbrock::<2>::new();
     let report = minimize_scg(
