@@ -206,6 +206,15 @@ impl Lbfgs {
         let mut p = d;
         if let Some((n_atoms, dim)) = opts.center_axes {
             project_center_scale(&mut p, x, opts, n_atoms, dim);
+        } else if opts.lo.is_some() || opts.hi.is_some() {
+            project_coordinate_box(&mut p, x, opts);
+            if g.dot(&p) >= 0.0 {
+                // Projection can remove the descent component of a
+                // quasi-Newton direction. Projected steepest descent
+                // preserves g.p <= -||p||^2 at a feasible point.
+                p = g.mapv(|value| -value);
+                project_coordinate_box(&mut p, x, opts);
+            }
         } else if opts.has_box() {
             scale_to_bounds(&mut p, x, opts);
         }
@@ -360,6 +369,15 @@ fn center_axes(d: &mut Array1<f64>, n_atoms: usize, dim: usize) {
         for i in 0..n_atoms {
             d[i * dim + h] -= mean;
         }
+    }
+}
+
+fn project_coordinate_box(d: &mut Array1<f64>, x: ArrayView1<f64>, opts: &HighsStep) {
+    // The Q=I box projection is component-wise. A coordinate near its
+    // bound must not shrink a feasible step along another coordinate.
+    for k in 0..d.len() {
+        let (lo, hi) = column_bounds(k, x, opts);
+        d[k] = d[k].clamp(lo, hi);
     }
 }
 
