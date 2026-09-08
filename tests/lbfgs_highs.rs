@@ -31,13 +31,11 @@ fn session_box_recognizes_boundary_stationarity() {
 fn box_projection_keeps_free_components_near_a_wall() {
     use ndarray::array;
 
-    let opt = Lbfgs {
-        highs: Some(HighsStep {
-            lo: Some(vec![f64::NEG_INFINITY, 0.0]),
-            ..HighsStep::default()
-        }),
-        ..Lbfgs::default()
-    };
+    let mut opt = Lbfgs::default();
+    opt.highs = Some(HighsStep {
+        lo: Some(vec![f64::NEG_INFINITY, 0.0]),
+        ..HighsStep::default()
+    });
     for distance in [1e-8, 1e-12] {
         let x = array![3.0, distance];
         let gradient = array![3.0, 1.0 + distance];
