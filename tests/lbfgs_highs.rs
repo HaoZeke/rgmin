@@ -28,6 +28,48 @@ fn session_box_recognizes_boundary_stationarity() {
 }
 
 #[test]
+fn box_projection_keeps_free_components_near_a_wall() {
+    use ndarray::array;
+
+    let opt = Lbfgs {
+        highs: Some(HighsStep {
+            lo: Some(vec![f64::NEG_INFINITY, 0.0]),
+            ..HighsStep::default()
+        }),
+        ..Lbfgs::default()
+    };
+    for distance in [1e-8, 1e-12] {
+        let x = array![3.0, distance];
+        let gradient = array![3.0, 1.0 + distance];
+        let step = opt.highs_step(x.view(), gradient.view()).unwrap();
+        assert_relative_eq!(step[0], -3.0, epsilon = 1e-14);
+        assert_relative_eq!(step[1], -distance, epsilon = 1e-16);
+        assert!(gradient.dot(&step) < 0.0);
+    }
+}
+
+#[test]
+fn session_box_reaches_the_constrained_quadratic_minimum() {
+    use ndarray::array;
+    use rgmin::{Control, Method, Oracle, Solver};
+
+    let obj = Oracle::unbounded(2, |x| {
+        assert!(x[1] >= 0.0, "line search left the box: {x:?}");
+        let gradient = array![x[0], x[1] + 1.0];
+        (0.5 * gradient.dot(&gradient), gradient)
+    });
+    let mut solver = Solver::new(Method::lbfgs(), Control::default(), 2).with_gtol(1e-10);
+    solver.set_highs(true);
+    assert!(solver.set_box(Some(vec![f64::NEG_INFINITY, 0.0]), None));
+    let mut x = array![3.0, 1e-8];
+    let report = solver.step(&obj, &mut x).unwrap();
+    assert_relative_eq!(x[0], 0.0, epsilon = 1e-10);
+    assert_relative_eq!(x[1], 0.0, epsilon = 1e-10);
+    assert_relative_eq!(report.value, 0.5, epsilon = 1e-12);
+    assert!(report.grad_norm <= 1e-10, "{report:?}");
+}
+
+#[test]
 fn session_box_keeps_every_line_search_evaluation_feasible() {
     use ndarray::array;
     use rgmin::{Control, Method, Oracle, Solver};
