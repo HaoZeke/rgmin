@@ -94,6 +94,8 @@ const MAX_PROBE_RETRIES: usize = 2000;
 /// objective is finite, and a non-finite trial raises the damping and
 /// retries, both within fixed budgets. An objective wrapped with
 /// interior-point barriers therefore composes with no optimizer hook.
+/// A zero `control.maxiter` leaves termination to convergence and the
+/// numerical failure checks.
 pub fn minimize_scg<O>(
     obj: &O,
     init: impl Into<Array1<f64>>,
@@ -181,7 +183,8 @@ where
     let mut kappa = 0.0;
     let mut gamma = 0.0;
 
-    for step in 0..control.maxiter {
+    let mut step = 0;
+    while control.maxiter == 0 || step < control.maxiter {
         let gnorm = l2(&grad);
         if gnorm < control.gtol {
             return Ok(Report {
@@ -325,6 +328,7 @@ where
                 dir = beta * &dir - &grad;
             }
         }
+        step += 1;
     }
 
     Ok(Report {
