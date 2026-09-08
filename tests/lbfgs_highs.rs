@@ -7,6 +7,71 @@ use ndarray::Array2;
 use ndarray::{Array1, ArrayView1};
 use rgmin::{HighsStep, Lbfgs};
 
+#[test]
+fn session_box_recognizes_boundary_stationarity() {
+    use ndarray::array;
+    use rgmin::{Control, Method, Oracle, Solver};
+
+    let obj = Oracle::unbounded(3, |x| {
+        let g = &x - &array![0.0, 2.0, -4.0];
+        (0.5 * g.dot(&g), g)
+    });
+    let mut x = array![1.0, 1.0, 3.0];
+    let mut solver = Solver::new(Method::lbfgs(), Control::default(), 3).with_gtol(1e-10);
+    solver.set_highs(true);
+    assert!(solver.set_box(Some(vec![1.0, -10.0, 3.0]), Some(vec![10.0, 1.0, 3.0])));
+    let report = solver.step(&obj, &mut x).unwrap();
+    assert_eq!(x, array![1.0, 1.0, 3.0]);
+    assert_eq!(report.steps, 0);
+    assert_eq!(report.grad_norm, 0.0);
+    assert_relative_eq!(report.value, 25.5, epsilon = 1e-14);
+}
+
+#[test]
+fn session_box_keeps_every_line_search_evaluation_feasible() {
+    use ndarray::array;
+    use rgmin::{Control, Method, Oracle, Solver};
+
+    let obj = Oracle::unbounded(2, |x| {
+        assert!(x[0] >= 1.0 && x[0] <= 10.0, "lower wall: {x:?}");
+        assert!(x[1] >= -10.0 && x[1] <= 1.0, "upper wall: {x:?}");
+        let g = &x - &array![0.0, 2.0];
+        (0.5 * g.dot(&g), g)
+    });
+    let mut x = array![2.0, -1.0];
+    let mut solver = Solver::new(Method::lbfgs(), Control::default(), 2).with_gtol(1e-10);
+    solver.set_highs(true);
+    assert!(solver.set_box(Some(vec![1.0, -10.0]), Some(vec![10.0, 1.0])));
+    let mut report = solver.step(&obj, &mut x).unwrap();
+    for _ in 0..100 {
+        if report.grad_norm <= 1e-10 {
+            break;
+        }
+        report = solver.step(&obj, &mut x).unwrap();
+    }
+    assert!(report.grad_norm <= 1e-10, "{report:?}");
+    assert_relative_eq!(x[0], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(x[1], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(report.value, 1.0, epsilon = 1e-10);
+}
+
+#[test]
+fn session_box_normal_does_not_hide_a_free_gradient() {
+    use ndarray::array;
+    use rgmin::{Control, Method, Oracle, Solver};
+
+    let obj = Oracle::unbounded(2, |x| (0.5 * x.dot(&x), x.to_owned()));
+    let mut x = array![1.0, 2.0];
+    let mut solver = Solver::new(Method::lbfgs(), Control::default(), 2).with_gtol(1e-10);
+    solver.set_highs(true);
+    assert!(solver.set_box(Some(vec![1.0, -10.0]), Some(vec![10.0, 10.0])));
+    let report = solver.step(&obj, &mut x).unwrap();
+    assert!(report.steps > 0);
+    assert_relative_eq!(x[0], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(x[1], 0.0, epsilon = 1e-10);
+    assert!(report.grad_norm <= 1e-10, "{report:?}");
+}
+
 fn quad(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
     let scales = [1.0, 10.0, 100.0, 1000.0];
     let mut f = 0.0;
