@@ -53,6 +53,8 @@ pub mod hvp;
 pub mod lowest_mode;
 /// Shifted Newton and Banerjee RFO on a dense Hessian.
 pub mod newton;
+/// Tangent-space truncated conjugate gradients and trust-radius updates.
+pub mod rtr;
 mod oracle;
 mod pso;
 mod qn;
