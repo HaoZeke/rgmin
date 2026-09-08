@@ -168,13 +168,17 @@ where
             let zoomed = zoom_into(
                 oracle, pos, dir, alpha_prev, alpha, c1, c2, maxiter, f0, dphi0,
             );
-            return finish(oracle, pos, dir, zoomed, f0, dphi0, c1, c2, best_x, best_f, best_a);
+            return finish(
+                oracle, pos, dir, zoomed, f0, dphi0, c1, c2, best_x, best_f, best_a,
+            );
         }
         if dphi >= 0.0 {
             let zoomed = zoom_into(
                 oracle, pos, dir, alpha, alpha_prev, c1, c2, maxiter, f0, dphi0,
             );
-            return finish(oracle, pos, dir, zoomed, f0, dphi0, c1, c2, best_x, best_f, best_a);
+            return finish(
+                oracle, pos, dir, zoomed, f0, dphi0, c1, c2, best_x, best_f, best_a,
+            );
         }
         if (alpha - alpha_max).abs() < 1e-16 {
             break;
