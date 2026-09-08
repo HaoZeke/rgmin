@@ -620,7 +620,7 @@ impl Lbfgs {
     ) where
         O: DifferentiableObjective<f64> + ?Sized,
     {
-        let dir = self.direction(grad.view());
+        let dir = self.search_direction(pos.view(), grad.view());
         let old = pos.clone();
         let gold = grad.clone();
         // Curvature history supplies the quasi-Newton step length. Wolfe

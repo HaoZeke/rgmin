@@ -681,11 +681,38 @@ impl Solver {
         if matches!(self.inner, Inner::Newton { .. } | Inner::Dogleg { .. }) {
             return Err(Error::NeedHessian);
         }
+        #[cfg(feature = "highs")]
+        if self.highs && (self.box_lo.is_some() || self.box_hi.is_some()) {
+            let bounded = crate::box_objective::BoxObjective::new(
+                obj, self.box_lo.clone(), self.box_hi.clone(),
+            )?;
+            if bounded.clip_start(x)? {
+                self.last_pos = None;
+            }
+            return self.step_first_order(&bounded, x);
+        }
         self.step_first_order(obj, x)
     }
 
     /// One Newton / RFO iteration. Hessian is rebuilt at the current `x`.
     pub fn step_hess<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: HessianObjective + ?Sized,
+    {
+        #[cfg(feature = "highs")]
+        if self.highs && (self.box_lo.is_some() || self.box_hi.is_some()) {
+            let bounded = crate::box_objective::BoxObjective::new(
+                obj, self.box_lo.clone(), self.box_hi.clone(),
+            )?;
+            if bounded.clip_start(x)? {
+                self.last_pos = None;
+            }
+            return self.step_hess_inner(&bounded, x);
+        }
+        self.step_hess_inner(obj, x)
+    }
+
+    fn step_hess_inner<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: HessianObjective + ?Sized,
     {
