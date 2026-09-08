@@ -627,7 +627,7 @@ impl Lbfgs {
         // starts at the unit step so accepted steps retain superlinear
         // convergence instead of inheriting repeated line-search shrinkage.
         let trial_step = if self.memory.is_empty() { *istep } else { 1.0 };
-        let (npos, _, lsstep, moved) = take_step(
+        let (mut npos, _, mut lsstep, mut moved) = take_step(
             obj,
             pos,
             *value,
@@ -636,6 +636,24 @@ impl Lbfgs {
             linesearch,
             control,
         );
+        if !moved && !self.memory.is_empty() {
+            // Retained curvature can describe a different objective scale.
+            // Retry with an empty history before reporting a stalled step.
+            self.forget();
+            let restart_direction = self.search_direction(pos.view(), grad.view());
+            let restart = take_step(
+                obj,
+                pos,
+                *value,
+                restart_direction.view(),
+                control.istep,
+                linesearch,
+                control,
+            );
+            npos = restart.0;
+            lsstep = restart.2;
+            moved = restart.3;
+        }
         *pos = npos;
         let ev = obj.value_and_gradient(pos.view());
         *value = ev.0;
