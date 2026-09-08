@@ -68,6 +68,24 @@ fn session_box_reaches_the_constrained_quadratic_minimum() {
 }
 
 #[test]
+fn box_projection_restarts_a_non_descent_curvature_direction() {
+    use ndarray::array;
+
+    let mut opt = Lbfgs::default();
+    opt.record(array![1.0, 2.0], array![1.0, 0.0]);
+    opt.highs = Some(HighsStep {
+        hi: Some(vec![f64::INFINITY, 0.0]),
+        ..HighsStep::default()
+    });
+    let x = array![0.0, 0.0];
+    let gradient = array![1.0, -1.0];
+    let step = opt.highs_step(x.view(), gradient.view()).unwrap();
+    assert!(gradient.dot(&step) < 0.0, "non-descent step: {step:?}");
+    assert_relative_eq!(step[0], -1.0, epsilon = 1e-14);
+    assert_eq!(step[1], 0.0);
+}
+
+#[test]
 fn session_box_keeps_every_line_search_evaluation_feasible() {
     use ndarray::array;
     use rgmin::{Control, Method, Oracle, Solver};
