@@ -65,3 +65,32 @@ fn lbfgs_energy_acceptance_converges_below_energy_resolution() {
         assert!(x[0].abs() <= 1e-12 && (x[1] - 1.0).abs() <= 1e-12);
     }
 }
+
+#[test]
+fn stateful_step_discards_curvature_when_its_line_search_cannot_move() {
+    use rgmin::{Lbfgs, LineSearch};
+
+    let obj = OffsetBowl;
+    let mut opt = Lbfgs::default();
+    opt.record(array![1.0, 0.0], array![1e-12, 0.0]);
+    assert_eq!(opt.len(), 1);
+    let mut x = array![3.0, -4.0];
+    let (mut value, mut gradient) = obj.value_and_gradient(x.view());
+    let mut step = 1.0;
+    opt.step_objective(
+        &obj,
+        &mut x,
+        &mut value,
+        &mut gradient,
+        &mut step,
+        LineSearch::Backtracking {
+            c: 1e-4,
+            beta: 0.5,
+            maxiter: 20,
+        },
+        &Control::default(),
+    );
+    assert_eq!(x, array![0.0, 1.0]);
+    assert_eq!(value, 24.5);
+    assert_eq!(gradient, array![0.0, 0.0]);
+}
