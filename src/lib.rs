@@ -50,6 +50,9 @@ pub mod lbfgs;
 pub mod lbfgs_qp;
 /// Matrix-free lowest Hessian eigenpair (IRC kick / lambda_min).
 pub mod lowest_mode;
+/// Feature-gated libkrylov (`ckrylov` real_multiply).
+#[cfg(feature = "libkrylov")]
+mod libkrylov_eps;
 /// Embedded Riemannian manifolds (manopt_cpp proj / retr / transp).
 pub mod manifold;
 mod minimize;
@@ -92,7 +95,7 @@ pub use lbfgs_qp::HighsStep;
 pub use linesearch::LineSearch;
 pub use lowest_mode::{
     ApplyHessian, DENSE_EIGEN_CUTOFF, EigenParams, EigensolverKind, LowestMode, lowest_eigenpair,
-    lowest_mode,
+    lowest_mode, lowest_mode_libkrylov,
 };
 pub use manifold::{Manifold, ManifoldKind};
 pub use method::Method;

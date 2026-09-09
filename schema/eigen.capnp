@@ -25,6 +25,8 @@ enum EigensolverKind {
   eigenExa @13;
   # Jónsson dimer with Heyden plane rotations.
   dimer @14;
+  # libkrylov Davidson / Jacobi-Davidson. Matrix-free.
+  libkrylov @15;
 }
 
 struct EigenParams {

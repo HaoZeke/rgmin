@@ -55,6 +55,12 @@ pub enum Error {
         /// Closed-enum name (`elpa`, `primme`, ...).
         kind: &'static str,
     },
+    /// Linked libkrylov `ckrylov_solve_real_equation` rejected the pair.
+    #[error("libkrylov: {what}")]
+    Libkrylov {
+        /// What the typed ckrylov call failed to produce.
+        what: &'static str,
+    },
 }
 
 /// Result alias for this crate.

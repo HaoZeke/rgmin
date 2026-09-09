@@ -423,7 +423,8 @@ typedef enum rgmin_eigen_kind_t {
     RGMIN_EIGEN_CUSOLVER = 11,
     RGMIN_EIGEN_DLA_FUTURE = 12,
     RGMIN_EIGEN_EIGENEXA = 13,
-    RGMIN_EIGEN_DIMER = 14
+    RGMIN_EIGEN_DIMER = 14,
+    RGMIN_EIGEN_LIBKRYLOV = 15
 } rgmin_eigen_kind_t;
 
 typedef struct rgmin_eigen_params_t {
