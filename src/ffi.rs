@@ -262,6 +262,7 @@ pub enum rgmin_eigen_kind_t {
     RGMIN_EIGEN_DLA_FUTURE = 12,
     RGMIN_EIGEN_EIGENEXA = 13,
     RGMIN_EIGEN_DIMER = 14,
+    RGMIN_EIGEN_LIBKRYLOV = 15,
 }
 
 /// Typed lowest-mode parameters. No string fields. Null at the C
@@ -2347,6 +2348,7 @@ mod conjugacy_abi_tests {
         assert_eq!(rgmin_eigen_kind_t::RGMIN_EIGEN_LANCZOS as i32, 0);
         assert_eq!(rgmin_eigen_kind_t::RGMIN_EIGEN_EIGENEXA as i32, 13);
         assert_eq!(rgmin_eigen_kind_t::RGMIN_EIGEN_DIMER as i32, 14);
+        assert_eq!(rgmin_eigen_kind_t::RGMIN_EIGEN_LIBKRYLOV as i32, 15);
     }
 
     #[test]

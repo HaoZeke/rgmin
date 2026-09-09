@@ -57,6 +57,9 @@ pub enum EigensolverKind {
     EigenExa = 13,
     /// Jónsson dimer with Heyden plane rotations. Linked. Matrix-free.
     Dimer = 14,
+    /// libkrylov Davidson / JD. Linked with the `libkrylov` feature when
+    /// libkrylov is present. Matrix-free Hessian-vector only.
+    Libkrylov = 15,
 }
 
 impl EigensolverKind {
@@ -78,6 +81,7 @@ impl EigensolverKind {
             Self::DlaFuture => "dlaFuture",
             Self::EigenExa => "eigenExa",
             Self::Dimer => "dimer",
+            Self::Libkrylov => "libkrylov",
         }
     }
 
@@ -89,6 +93,7 @@ impl EigensolverKind {
         ) || (cfg!(rgmin_has_primme) && matches!(self, Self::Primme))
             || (cfg!(rgmin_has_slepc) && matches!(self, Self::Slepc))
             || (cfg!(rgmin_has_chase) && matches!(self, Self::Chase))
+            || (cfg!(rgmin_has_libkrylov) && matches!(self, Self::Libkrylov))
     }
 
     /// Works from Hessian actions, no assembled matrix.
@@ -102,6 +107,7 @@ impl EigensolverKind {
                 | Self::Primme
                 | Self::Slepc
                 | Self::Dimer
+                | Self::Libkrylov
         )
     }
 
@@ -123,6 +129,7 @@ impl EigensolverKind {
             12 => Some(Self::DlaFuture),
             13 => Some(Self::EigenExa),
             14 => Some(Self::Dimer),
+            15 => Some(Self::Libkrylov),
             _ => None,
         }
     }
@@ -495,6 +502,47 @@ where
     }
 }
 
+/// libkrylov arm of [`lowest_mode`]. `params.kind` is ignored.
+///
+/// Unbuilt `libkrylov` (or the feature on without the library) returns
+/// [`Error::EigenUnavailable`]. ApplyHessian is `ckrylov` `real_multiply`.
+/// String keys stay inside the C shim.
+pub fn lowest_mode_libkrylov<H: ApplyHessian + ?Sized>(
+    h: &H,
+    x: ArrayView1<f64>,
+    seed: ArrayView1<f64>,
+    params: &EigenParams,
+) -> Result<LowestMode> {
+    if seed.is_empty() {
+        return Err(Error::Dim { got: 0, dim: 0 });
+    }
+    #[cfg(feature = "libkrylov")]
+    {
+        let n = seed.len();
+        let seed_owned = seed.to_owned();
+        let (vector, value, actions) = crate::libkrylov_eps::solve(
+            seed_owned.as_slice().unwrap(),
+            params.nev.max(1),
+            params.iterations(n),
+            params.krylov_dim(n),
+            params.tolerance(),
+            |v| h.apply_hessian(x, ArrayView1::from(v)),
+        )?;
+        Ok(LowestMode {
+            vector,
+            value,
+            actions,
+        })
+    }
+    #[cfg(not(feature = "libkrylov"))]
+    {
+        let _ = (h, x, params);
+        Err(Error::EigenUnavailable {
+            kind: EigensolverKind::Libkrylov.name(),
+        })
+    }
+}
+
 /// EigenExa arm of [`lowest_mode`]. `params.kind` is ignored.
 ///
 /// EigenExa has no supported partial `nvec`. `nev < n` is
@@ -675,6 +723,7 @@ where
         EigensolverKind::Lobpcg => Ok(lobpcg(h, x, seed, params, t)),
         EigensolverKind::Dimer => Ok(dimer(h, x, seed, params)),
         EigensolverKind::Primme => lowest_mode_primme(h, x, seed, params, t),
+        EigensolverKind::Libkrylov => lowest_mode_libkrylov(h, x, seed, params),
         EigensolverKind::Slepc => lowest_mode_slepc(h, x, seed, params, &SlepcParams::default()),
         EigensolverKind::EigenExa => {
             lowest_mode_eigenexa(h, x, seed, params, &EigenExaParams::default())
@@ -1321,11 +1370,11 @@ mod tests {
 
     #[test]
     fn schema_ordinals_are_the_closed_enum() {
-        for raw in 0u8..=14 {
+        for raw in 0u8..=15 {
             let kind = EigensolverKind::from_ordinal(raw).expect("ordinal in range");
             assert_eq!(kind as u8, raw);
         }
-        assert!(EigensolverKind::from_ordinal(15).is_none());
+        assert!(EigensolverKind::from_ordinal(16).is_none());
         assert_eq!(EigensolverKind::Lanczos.name(), "lanczos");
         assert_eq!(EigensolverKind::Dimer.name(), "dimer");
         assert_eq!(EigensolverKind::EigenExa.name(), "eigenExa");
@@ -1756,7 +1805,7 @@ mod tests {
         let h = gapped_diag(4);
         let x = Array1::zeros(4);
         let seed = array![1.0, 0.0, 0.0, 0.0];
-        for raw in 4u8..=13 {
+        for raw in 4u8..=15 {
             let kind = EigensolverKind::from_ordinal(raw).unwrap();
             if kind.is_linked() {
                 continue;
@@ -1903,6 +1952,105 @@ mod tests {
         }
         assert_eq!(EigensolverKind::Primme as u8, 4);
         assert_eq!(EigensolverKind::Primme.name(), "primme");
+    }
+
+    #[test]
+    fn libkrylov_unbuilt_is_unavailable() {
+        if EigensolverKind::Libkrylov.is_linked() {
+            return;
+        }
+        let h = gapped_diag(4);
+        let x = Array1::zeros(4);
+        let seed = array![1.0, 0.0, 0.0, 0.0];
+        let err = lowest_mode_libkrylov(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Libkrylov,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap_err();
+        match err {
+            Error::EigenUnavailable { kind } => assert_eq!(kind, "libkrylov"),
+            other => panic!("expected unavailable, got {other}"),
+        }
+        assert_eq!(EigensolverKind::Libkrylov as u8, 15);
+        assert_eq!(EigensolverKind::Libkrylov.name(), "libkrylov");
+        assert!(EigensolverKind::Libkrylov.is_matrix_free());
+    }
+
+    #[test]
+    fn libkrylov_shim_keeps_string_keys_private() {
+        let shim = include_str!("libkrylov_shim.c");
+        assert!(shim.contains("ckrylov_solve_real_equation"));
+        assert!(shim.contains("real_multiply") || shim.contains("rgmin_ckrylov_multiply"));
+        assert!(shim.contains("CKRYLOV_REAL_KIND"));
+        let public = include_str!("ffi.rs");
+        assert!(!public.contains("CKRYLOV_"));
+        assert!(!public.contains("ckrylov_set_enum_option"));
+        let schema = include_str!("../schema/eigen.capnp");
+        assert!(schema.contains("libkrylov @15"));
+        assert!(!schema.contains("ckrylov"));
+    }
+
+    #[cfg(rgmin_has_libkrylov)]
+    #[test]
+    fn libkrylov_recovers_the_double_well_vs_jacobi_davidson() {
+        let h = gapped_diag(6);
+        let x = Array1::zeros(6);
+        let seed = array![0.2, 0.7, 0.1, 0.0, 0.0, 0.0];
+        let jd = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::JacobiDavidson,
+                krylov: 8,
+                max_iter: 32,
+                tol: 1e-10,
+                nev: 1,
+                ..EigenParams::default()
+            },
+        )
+        .unwrap();
+        let mode = lowest_mode(
+            &h,
+            x.view(),
+            seed.view(),
+            &EigenParams {
+                kind: EigensolverKind::Libkrylov,
+                krylov: 8,
+                max_iter: 64,
+                tol: 1e-10,
+                nev: 1,
+                ..EigenParams::default()
+            },
+        );
+        let mode = match mode {
+            Ok(m) => m,
+            Err(Error::EigenUnavailable { kind }) => {
+                assert_eq!(kind, "libkrylov");
+                return;
+            }
+            Err(other) => panic!("expected pair or unavailable, got {other}"),
+        };
+        assert!(
+            (mode.value - jd.value).abs() < 1e-8,
+            "libkrylov {} vs JD {}",
+            mode.value,
+            jd.value
+        );
+        let cos = mode
+            .vector
+            .iter()
+            .zip(jd.vector.iter())
+            .map(|(a, b)| a * b)
+            .sum::<f64>()
+            .abs();
+        assert!(cos > 1.0 - 1e-6, "libkrylov |cos| = {cos}");
+        assert!(EigensolverKind::Libkrylov.is_linked());
     }
 
     #[test]

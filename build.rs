@@ -4,12 +4,15 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(rgmin_has_slepc)");
     println!("cargo:rustc-check-cfg=cfg(rgmin_has_primme)");
     println!("cargo:rustc-check-cfg=cfg(rgmin_has_chase)");
+    println!("cargo:rustc-check-cfg=cfg(rgmin_has_libkrylov)");
     #[cfg(feature = "slepc")]
     probe_slepc();
     #[cfg(feature = "primme")]
     probe_primme();
     #[cfg(feature = "chase")]
     probe_chase();
+    #[cfg(feature = "libkrylov")]
+    probe_libkrylov();
 }
 
 #[cfg(feature = "slepc")]
@@ -312,5 +315,103 @@ fn probe_chase_prefix(prefix: &std::path::Path) -> Option<ChaseProbe> {
         includes: vec![include],
         link_paths: vec![lib],
         link_libs: vec!["chase".into()],
+    })
+}
+
+#[cfg(feature = "libkrylov")]
+struct LibkrylovProbe {
+    includes: Vec<std::path::PathBuf>,
+    link_paths: Vec<std::path::PathBuf>,
+    link_libs: Vec<String>,
+}
+
+#[cfg(feature = "libkrylov")]
+fn probe_libkrylov() {
+    println!("cargo:rerun-if-changed=src/libkrylov_shim.c");
+    println!("cargo:rerun-if-env-changed=LIBKRYLOV_DIR");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    println!("cargo:rerun-if-env-changed=CONDA_PREFIX");
+
+    let Some(cfg) = discover_libkrylov() else {
+        println!(
+            "cargo:warning=libkrylov feature on, libkrylov not found; EigensolverKind::Libkrylov stays EigenUnavailable"
+        );
+        return;
+    };
+    let mut build = cc::Build::new();
+    build.file("src/libkrylov_shim.c");
+    build.warnings(false);
+    for inc in &cfg.includes {
+        build.include(inc);
+    }
+    match build.try_compile("rgmin_libkrylov_shim") {
+        Ok(()) => {
+            for path in &cfg.link_paths {
+                println!("cargo:rustc-link-search=native={}", path.display());
+            }
+            for lib in &cfg.link_libs {
+                println!("cargo:rustc-link-lib={lib}");
+            }
+            println!("cargo:rustc-cfg=rgmin_has_libkrylov");
+        }
+        Err(err) => {
+            println!(
+                "cargo:warning=libkrylov shim did not compile ({err}); EigensolverKind::Libkrylov stays EigenUnavailable"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "libkrylov")]
+fn discover_libkrylov() -> Option<LibkrylovProbe> {
+    for name in ["krylov", "libkrylov"] {
+        if let Ok(lib) = pkg_config::Config::new()
+            .cargo_metadata(false)
+            .probe(name)
+        {
+            return Some(LibkrylovProbe {
+                includes: lib.include_paths,
+                link_paths: lib.link_paths,
+                link_libs: lib.libs,
+            });
+        }
+    }
+    if let Ok(dir) = std::env::var("LIBKRYLOV_DIR") {
+        if let Some(probe) = probe_libkrylov_prefix(std::path::Path::new(&dir)) {
+            return Some(probe);
+        }
+    }
+    if let Ok(prefix) = std::env::var("CONDA_PREFIX") {
+        if let Some(probe) = probe_libkrylov_prefix(std::path::Path::new(&prefix)) {
+            return Some(probe);
+        }
+    }
+    probe_libkrylov_prefix(std::path::Path::new("/usr"))
+}
+
+#[cfg(feature = "libkrylov")]
+fn libkrylov_header_in(dir: &std::path::Path) -> bool {
+    dir.join("ckrylov.h").is_file() || dir.join("krylov").join("ckrylov.h").is_file()
+}
+
+#[cfg(feature = "libkrylov")]
+fn probe_libkrylov_prefix(prefix: &std::path::Path) -> Option<LibkrylovProbe> {
+    let include = prefix.join("include");
+    let lib = prefix.join("lib");
+    let has_lib = lib.join("libkrylov.a").is_file()
+        || lib.join("libkrylov.so").is_file()
+        || lib.join("libkrylov.dylib").is_file();
+    if !has_lib || !libkrylov_header_in(&include) {
+        return None;
+    }
+    Some(LibkrylovProbe {
+        includes: vec![include],
+        link_paths: vec![lib],
+        link_libs: vec![
+            "krylov".into(),
+            "gfortran".into(),
+            "lapack".into(),
+            "blas".into(),
+        ],
     })
 }

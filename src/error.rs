@@ -73,6 +73,12 @@ pub enum Error {
         /// What the typed `dchase_init_` / `dchase_` call failed to produce.
         what: &'static str,
     },
+    /// Linked libkrylov `ckrylov_solve_real_equation` rejected the pair.
+    #[error("libkrylov: {what}")]
+    Libkrylov {
+        /// What the typed ckrylov call failed to produce.
+        what: &'static str,
+    },
     /// Partial-spectrum window must start at the lowest pair.
     #[error("eigensolver {kind} begin must be 0, got {begin}")]
     EigenBegin {

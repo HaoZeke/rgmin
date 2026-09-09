@@ -130,7 +130,7 @@ mod tests {
         assert_eq!(ElpaParams::default().nblk_or_default(), 16);
         assert_eq!(EigensolverKind::from_ordinal(7), Some(EigensolverKind::Elpa));
         assert_eq!(EigensolverKind::from_ordinal(8), Some(EigensolverKind::Elpa2));
-        assert!(EigensolverKind::from_ordinal(15).is_none());
+        assert!(EigensolverKind::from_ordinal(16).is_none());
         assert!(!EigensolverKind::Elpa.is_linked());
         assert!(!EigensolverKind::Elpa2.is_linked());
     }

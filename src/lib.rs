@@ -65,6 +65,9 @@ mod slepc_eps;
 /// Feature-gated PRIMME (`dprimme` + typed `primme_params`).
 #[cfg(feature = "primme")]
 mod primme_eps;
+/// Feature-gated libkrylov (`ckrylov` real_multiply).
+#[cfg(feature = "libkrylov")]
+mod libkrylov_eps;
 /// Feature-gated ChASE (`dchase` on assembled dense H).
 mod chase_eps;
 /// Shifted Newton and Banerjee RFO on a dense Hessian.
@@ -101,7 +104,7 @@ pub use qn_irc::{
 pub use sella_step::{prfo_restricted, ras_clip, rfo_get_s, rfo_restricted, ts_bfgs_update};
 pub use lowest_mode::{
     lowest_eigenpair, lowest_mode, lowest_mode_chase, lowest_mode_dense, lowest_mode_precond,
-    lowest_mode_primme, lowest_mode_slepc, lowest_mode_dlaf, lowest_mode_eigenexa, ApplyHessian,
+    lowest_mode_primme, lowest_mode_libkrylov, lowest_mode_slepc, lowest_mode_dlaf, lowest_mode_eigenexa, ApplyHessian,
     ApplyPreconditioner, Block3Jacobi, DiagonalJacobi, EigenParams, EigensolverKind, LowestMode,
     PreconditionerKind, DENSE_EIGEN_CUTOFF,
 };
