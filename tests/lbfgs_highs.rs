@@ -159,6 +159,49 @@ fn session_box_wolfe_evaluations_respect_the_domain() {
     assert_relative_eq!(report.value, 1.0, epsilon = 1e-10);
 }
 
+fn check_fire_session_box(kind: rgmin::FireKind) {
+    use ndarray::array;
+    use rgmin::{Control, Method, Oracle, Solver};
+
+    let objective = Oracle::unbounded(2, |x| {
+        assert!(x[1] >= 0.0, "callback outside the coordinate box: {x:?}");
+        let gradient = array![x[0], x[1] + 1.0];
+        (0.5 * gradient.dot(&gradient), gradient)
+    });
+    let control = Control {
+        istep: 0.1,
+        gtol: 1e-8,
+        ..Control::default()
+    };
+    let mut solver = Solver::new(Method::Fire { kind }, control, 2);
+    solver.set_highs(true);
+    assert!(solver.set_box(Some(vec![f64::NEG_INFINITY, 0.0]), None));
+    let mut x = array![3.0, 1e-8];
+    let mut report = solver.step(&objective, &mut x).unwrap();
+    for _ in 0..1000 {
+        assert!(x[1] >= 0.0, "FIRE iterate outside the box: {x:?}");
+        assert!(report.value.is_finite() && report.grad_norm.is_finite());
+        if report.grad_norm <= 1e-8 {
+            break;
+        }
+        report = solver.step(&objective, &mut x).unwrap();
+    }
+    assert!(report.grad_norm <= 1e-8, "{report:?}");
+    assert_relative_eq!(x[0], 0.0, epsilon = 1e-8);
+    assert_relative_eq!(x[1], 0.0, epsilon = 1e-12);
+    assert_relative_eq!(report.value, 0.5, epsilon = 1e-12);
+}
+
+#[test]
+fn fire_session_box_keeps_a_free_coordinate_convergent() {
+    check_fire_session_box(rgmin::FireKind::V1);
+}
+
+#[test]
+fn fire2_session_box_keeps_a_free_coordinate_convergent() {
+    check_fire_session_box(rgmin::FireKind::V2);
+}
+
 fn quad(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
     let scales = [1.0, 10.0, 100.0, 1000.0];
     let mut f = 0.0;
