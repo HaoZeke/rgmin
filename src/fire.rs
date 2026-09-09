@@ -18,8 +18,7 @@ pub(crate) fn project_box_tangent(
     vector: &mut Array1<f64>,
 ) {
     for k in 0..x.len() {
-        if (x[k] <= bounds.low[k] && vector[k] < 0.0)
-            || (x[k] >= bounds.high[k] && vector[k] > 0.0)
+        if (x[k] <= bounds.low[k] && vector[k] < 0.0) || (x[k] >= bounds.high[k] && vector[k] > 0.0)
         {
             vector[k] = 0.0;
         }
