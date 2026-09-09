@@ -26,7 +26,10 @@ impl<'a, O: DifferentiableObjective<f64> + ?Sized> BoxObjective<'a, O> {
         let mut low = inner.bounds().low.clone();
         let mut high = inner.bounds().high.clone();
         if low.len() != dim || high.len() != dim {
-            return Err(Error::Dim { got: low.len(), dim });
+            return Err(Error::Dim {
+                got: low.len(),
+                dim,
+            });
         }
         for k in 0..dim {
             let requested_low = side_at(lo.as_deref(), k).unwrap_or(f64::NEG_INFINITY);
@@ -40,7 +43,10 @@ impl<'a, O: DifferentiableObjective<f64> + ?Sized> BoxObjective<'a, O> {
                 return Err(Error::Highs("invalid coordinate box".into()));
             }
         }
-        Ok(Self { inner, bounds: Bounds::new(low, high, 0.0) })
+        Ok(Self {
+            inner,
+            bounds: Bounds::new(low, high, 0.0),
+        })
     }
 
     fn limits(&self, k: usize) -> (f64, f64) {
