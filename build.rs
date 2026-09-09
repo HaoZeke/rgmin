@@ -369,10 +369,23 @@ fn discover_libkrylov() -> Option<LibkrylovProbe> {
             .cargo_metadata(false)
             .probe(name)
         {
+            let mut link_paths = lib.link_paths;
+            let mut link_libs = lib.libs;
+            if !link_libs.iter().any(|n| n == "openblas" || n == "blas") {
+                if let Some((path, name)) = discover_openblas() {
+                    if !link_paths.iter().any(|p| p == &path) {
+                        link_paths.push(path);
+                    }
+                    link_libs.push(name);
+                }
+            }
+            if !link_libs.iter().any(|n| n == "gfortran") {
+                link_libs.push("gfortran".into());
+            }
             return Some(LibkrylovProbe {
                 includes: lib.include_paths,
-                link_paths: lib.link_paths,
-                link_libs: lib.libs,
+                link_paths,
+                link_libs,
             });
         }
     }
@@ -404,14 +417,41 @@ fn probe_libkrylov_prefix(prefix: &std::path::Path) -> Option<LibkrylovProbe> {
     if !has_lib || !libkrylov_header_in(&include) {
         return None;
     }
+    let mut link_paths = vec![lib];
+    let mut link_libs = vec!["krylov".into(), "gfortran".into()];
+    if let Some((path, name)) = discover_openblas() {
+        if !link_paths.iter().any(|p| p == &path) {
+            link_paths.push(path);
+        }
+        link_libs.push(name);
+    } else {
+        link_libs.push("lapack".into());
+        link_libs.push("blas".into());
+    }
     Some(LibkrylovProbe {
         includes: vec![include],
-        link_paths: vec![lib],
-        link_libs: vec![
-            "krylov".into(),
-            "gfortran".into(),
-            "lapack".into(),
-            "blas".into(),
-        ],
+        link_paths,
+        link_libs,
     })
+}
+
+#[cfg(feature = "libkrylov")]
+fn discover_openblas() -> Option<(std::path::PathBuf, String)> {
+    for root in [
+        std::env::var_os("OPENBLAS_DIR").map(std::path::PathBuf::from),
+        std::env::var_os("CONDA_PREFIX").map(std::path::PathBuf::from),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let lib = root.join("lib");
+        if lib.join("libopenblas.so").is_file() || lib.join("libopenblas.a").is_file() {
+            return Some((lib, "openblas".into()));
+        }
+    }
+    let usr = std::path::Path::new("/usr/lib");
+    if usr.join("libopenblas.so").is_file() {
+        return Some((usr.to_path_buf(), "openblas".into()));
+    }
+    None
 }
