@@ -14,7 +14,7 @@ use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::Control;
 use crate::error::{Error, Result};
-use crate::fire::{FireState, fire_after_v1, fire_displacement};
+use crate::fire::{FireState, fire_after_v1, fire_displacement, project_box_tangent};
 use crate::lbfgs::{GradNorm, Lbfgs};
 use crate::linesearch::LineSearch;
 use crate::manifold::{Manifold, ManifoldKind};
@@ -1205,7 +1205,9 @@ impl Solver {
                 *b2p *= *beta2;
             }
             Inner::Fire(state) => {
-                let force = grad.mapv(|g| -g);
+                let mut force = grad.mapv(|g| -g);
+                project_box_tangent(obj.bounds(), x, &mut force);
+                project_box_tangent(obj.bounds(), x, &mut state.vel);
                 let dx = fire_displacement(state, &force);
                 let mut trial = &*x + &dx;
                 if let Some(cap) = self.atom_maxmove {
@@ -1218,7 +1220,9 @@ impl Solver {
                 let ev = obj.value_and_gradient(x.view());
                 value = ev.0;
                 grad = ev.1;
-                let force_new = grad.mapv(|g| -g);
+                let mut force_new = grad.mapv(|g| -g);
+                project_box_tangent(obj.bounds(), x, &mut force_new);
+                project_box_tangent(obj.bounds(), x, &mut state.vel);
                 fire_after_v1(state, &force_new);
             }
             Inner::Bb { prev_s, prev_y } => {

@@ -10,6 +10,22 @@ use ndarray::Array1;
 
 use crate::step::l2;
 
+/// Remove outward components at active coordinate bounds.
+/// Wall reactions contribute neither velocity nor inertial power.
+pub(crate) fn project_box_tangent(
+    bounds: &eindir_core::Bounds<f64>,
+    x: &Array1<f64>,
+    vector: &mut Array1<f64>,
+) {
+    for k in 0..x.len() {
+        if (x[k] <= bounds.low[k] && vector[k] < 0.0)
+            || (x[k] >= bounds.high[k] && vector[k] > 0.0)
+        {
+            vector[k] = 0.0;
+        }
+    }
+}
+
 /// Which FIRE integrator to run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FireKind {
