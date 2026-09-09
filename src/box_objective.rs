@@ -9,8 +9,7 @@ use crate::newton::HessianObjective;
 
 pub(crate) struct BoxObjective<'a, O: ?Sized> {
     inner: &'a O,
-    lo: Option<Vec<f64>>,
-    hi: Option<Vec<f64>>,
+    bounds: Bounds<f64>,
 }
 
 impl<'a, O: DifferentiableObjective<f64> + ?Sized> BoxObjective<'a, O> {
@@ -24,21 +23,28 @@ impl<'a, O: DifferentiableObjective<f64> + ?Sized> BoxObjective<'a, O> {
                 });
             }
         }
-        let bounded = Self { inner, lo, hi };
+        let mut low = inner.bounds().low.clone();
+        let mut high = inner.bounds().high.clone();
+        if low.len() != dim || high.len() != dim {
+            return Err(Error::Dim { got: low.len(), dim });
+        }
         for k in 0..dim {
-            let (lo, hi) = bounded.limits(k);
-            if !(lo <= hi) {
+            let requested_low = side_at(lo.as_deref(), k).unwrap_or(f64::NEG_INFINITY);
+            let requested_high = side_at(hi.as_deref(), k).unwrap_or(f64::INFINITY);
+            if !(requested_low <= requested_high) || !(low[k] <= high[k]) {
+                return Err(Error::Highs("invalid coordinate box".into()));
+            }
+            low[k] = low[k].max(requested_low);
+            high[k] = high[k].min(requested_high);
+            if !(low[k] <= high[k]) {
                 return Err(Error::Highs("invalid coordinate box".into()));
             }
         }
-        Ok(bounded)
+        Ok(Self { inner, bounds: Bounds::new(low, high, 0.0) })
     }
 
     fn limits(&self, k: usize) -> (f64, f64) {
-        (
-            side_at(self.lo.as_deref(), k).unwrap_or(f64::NEG_INFINITY),
-            side_at(self.hi.as_deref(), k).unwrap_or(f64::INFINITY),
-        )
+        (self.bounds.low[k], self.bounds.high[k])
     }
 
     fn contains(&self, x: ArrayView1<f64>) -> bool {
@@ -71,7 +77,7 @@ impl<O: DifferentiableObjective<f64> + ?Sized> Objective<f64> for BoxObjective<'
     }
 
     fn bounds(&self) -> &Bounds<f64> {
-        self.inner.bounds()
+        &self.bounds
     }
 
     fn eval(&self, x: ArrayView1<f64>) -> f64 {
