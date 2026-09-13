@@ -7,6 +7,8 @@
 Rust rewrite. `main` is this tree (current tag `v0.2.0`). The C++
 xtensor history is `0.0.1` on the previous `main`.
 
+Saddle, band, and IRC sessions live in [rgsaddle](https://github.com/OmniPotentRPC/rgsaddle) (GitHub; not yet on crates.io).
+
 Algorithms live only in Rust, over
 [`eindir`](https://github.com/HaoZeke/eindir) `DifferentiableObjective`s.
 
