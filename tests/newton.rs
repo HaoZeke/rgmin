@@ -1,10 +1,8 @@
 //! Shifted Newton finishes a quadratic in one accepted step.
 
 use approx::assert_relative_eq;
-use ndarray::{array, Array1, Array2, ArrayView1};
-use rgmin::{
-    minimize_newton, Control, HessianOracle, NewtonKind,
-};
+use ndarray::{Array1, Array2, ArrayView1, array};
+use rgmin::{Control, HessianOracle, NewtonKind, minimize_newton};
 
 fn sphere_hess(_x: ArrayView1<f64>) -> Array2<f64> {
     Array2::<f64>::eye(2) * 2.0

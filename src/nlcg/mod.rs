@@ -166,11 +166,7 @@ impl Conjugacy {
             Self::Hybrid { a, b, take_max } => {
                 let ba = a.beta(ctx);
                 let bb = b.beta(ctx);
-                if *take_max {
-                    ba.max(bb)
-                } else {
-                    ba.min(bb)
-                }
+                if *take_max { ba.max(bb) } else { ba.min(bb) }
             }
         }
     }

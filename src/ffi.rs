@@ -18,8 +18,8 @@ use eindir_core::ffi::{
 use ndarray::{Array1, Array2};
 
 use crate::{
-    minimize_method, minimize_method_hess, Accept, Control, HessianOracle, LineSearch,
-    ManifoldKind, Method, NewtonKind, Oracle, QnStep, Solver,
+    Accept, Control, HessianOracle, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep,
+    Solver, minimize_method, minimize_method_hess,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
@@ -787,7 +787,10 @@ pub unsafe extern "C" fn rgmin_solver_create(
         set_last_error("rgmin_solver_create: null ctrl or dim=0");
         return std::ptr::null_mut();
     }
-    if matches!(method, rgmin_method_t::RGMIN_NEWTON | rgmin_method_t::RGMIN_RFO) {
+    if matches!(
+        method,
+        rgmin_method_t::RGMIN_NEWTON | rgmin_method_t::RGMIN_RFO
+    ) {
         // Allowed: step_hess is the verb. Create still succeeds.
     }
     let c = unsafe { &*ctrl };
@@ -845,7 +848,10 @@ pub enum rgmin_qn_step_t {
 
 /// eOn `lbfgs_step`. Legal on an `RGMIN_LBFGS` session with [`rgmin_solver_step_hess`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_qn_step(solver: *mut rgmin_solver_t, step: rgmin_qn_step_t) {
+pub unsafe extern "C" fn rgmin_solver_set_qn_step(
+    solver: *mut rgmin_solver_t,
+    step: rgmin_qn_step_t,
+) {
     if solver.is_null() {
         return;
     }
@@ -871,7 +877,10 @@ pub enum rgmin_accept_t {
 
 /// eOn `lbfgs_accept`. Legal on any session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_accept(solver: *mut rgmin_solver_t, accept: rgmin_accept_t) {
+pub unsafe extern "C" fn rgmin_solver_set_accept(
+    solver: *mut rgmin_solver_t,
+    accept: rgmin_accept_t,
+) {
     if solver.is_null() {
         return;
     }
@@ -912,7 +921,11 @@ pub unsafe extern "C" fn rgmin_solver_set_extra_updates(solver: *mut rgmin_solve
 
 /// Li-Fukushima cautious pair filter. `eps <= 0` disables it.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_cautious(solver: *mut rgmin_solver_t, eps: f64, alpha: f64) {
+pub unsafe extern "C" fn rgmin_solver_set_cautious(
+    solver: *mut rgmin_solver_t,
+    eps: f64,
+    alpha: f64,
+) {
     if solver.is_null() {
         return;
     }
@@ -1299,10 +1312,9 @@ fn c_oracle_hess(
             let mut s = hscratch.lock().expect("ffi scratch");
             let xt = s.x_tensor(xv);
             let mut h = Array2::zeros((n, n));
-            let ht = s.out.point_at(
-                h.as_slice_mut().expect("contiguous").as_mut_ptr(),
-                n * n,
-            );
+            let ht = s
+                .out
+                .point_at(h.as_slice_mut().expect("contiguous").as_mut_ptr(), n * n);
             let st = unsafe { hess_fn(user, xt, ht) };
             if st != rgmin_status_t::RGMIN_SUCCESS {
                 // A failed Hessian is no Hessian: NaN poisons the
@@ -1377,10 +1389,9 @@ fn c_oracle_hess_fg(
             let mut s = hscratch.lock().expect("ffi scratch");
             let xt = s.x_tensor(xv);
             let mut h = Array2::zeros((n, n));
-            let ht = s.out.point_at(
-                h.as_slice_mut().expect("contiguous").as_mut_ptr(),
-                n * n,
-            );
+            let ht = s
+                .out
+                .point_at(h.as_slice_mut().expect("contiguous").as_mut_ptr(), n * n);
             let st = unsafe { hess_fn(user, xt, ht) };
             if st != rgmin_status_t::RGMIN_SUCCESS {
                 return Array2::from_elem((n, n), f64::NAN);

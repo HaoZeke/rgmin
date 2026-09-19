@@ -158,11 +158,7 @@ fn nystrom_flattens_a_decaying_spectrum() {
         {
             let lam = lam.clone();
             move |x| {
-                let f = x
-                    .iter()
-                    .zip(&lam)
-                    .map(|(v, l)| l * v * v / 2.0)
-                    .sum();
+                let f = x.iter().zip(&lam).map(|(v, l)| l * v * v / 2.0).sum();
                 let g = Array1::from_iter(x.iter().zip(&lam).map(|(v, l)| l * v));
                 (f, g)
             }
@@ -193,7 +189,11 @@ fn nystrom_flattens_a_decaying_spectrum() {
 
     // Same subproblem, same answer: CG is exact under any SPD
     // preconditioner.
-    let diff = (&p_plain - &p_pcg).iter().map(|v| v * v).sum::<f64>().sqrt();
+    let diff = (&p_plain - &p_pcg)
+        .iter()
+        .map(|v| v * v)
+        .sum::<f64>()
+        .sqrt();
     let scale = p_plain.iter().map(|v| v * v).sum::<f64>().sqrt();
     assert!(diff < 1e-5 * scale.max(1.0), "steps differ by {diff}");
     // The sketch (rank actions) plus the preconditioned solve beats

@@ -7,14 +7,15 @@ use std::os::raw::c_void;
 use dlpk::sys::{DLDeviceType, DLManagedTensorVersioned};
 use eindir_core::ffi::eindir_core_abi_stamp;
 use eindir_core::ffi::{eindir_objective_t, eindir_status_t};
+use rgmin::ffi::{
+    rgmin_abi_compatible, rgmin_abi_stamp, rgmin_accept_t, rgmin_control_t, rgmin_method_t,
+    rgmin_minimize, rgmin_minimize_eindir, rgmin_report_t, rgmin_solver_create, rgmin_solver_free,
+    rgmin_solver_set_accept, rgmin_solver_step, rgmin_solver_step_fg, rgmin_status_t,
+    rgmin_tensor_borrow_cpu_f64, rgmin_tensor_free,
+};
 use rgpot_core::eindir::{rgpot_potential_free_eindir, rgpot_potential_new_eindir};
 use rgpot_core::status::rgpot_status_t;
 use rgpot_core::types::{rgpot_force_input_t, rgpot_force_out_t};
-use rgmin::ffi::{
-    rgmin_abi_compatible, rgmin_abi_stamp, rgmin_accept_t, rgmin_control_t, rgmin_method_t, rgmin_minimize,
-    rgmin_minimize_eindir, rgmin_report_t, rgmin_solver_create, rgmin_solver_free, rgmin_solver_set_accept,
-    rgmin_solver_step, rgmin_solver_step_fg, rgmin_status_t, rgmin_tensor_borrow_cpu_f64, rgmin_tensor_free,
-};
 
 unsafe extern "C" fn quadratic_eval(
     _user: *mut c_void,

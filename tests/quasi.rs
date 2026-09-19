@@ -49,11 +49,7 @@ fn bfgs_and_sr1_reach_the_minimum() {
     for method in [Method::Bfgs, Method::Sr1] {
         let report =
             minimize_method(&obj, array![-1.2, 1.0], &control(), method.clone(), brent()).unwrap();
-        assert!(
-            report.value < 1e-8,
-            "{method:?} value {}",
-            report.value
-        );
+        assert!(report.value < 1e-8, "{method:?} value {}", report.value);
     }
 }
 
@@ -61,14 +57,8 @@ fn bfgs_and_sr1_reach_the_minimum() {
 fn sr2_descends_from_the_classic_start() {
     let obj = Rosenbrock::<2>::new();
     let start_f = f0();
-    let report = minimize_method(
-        &obj,
-        array![-1.2, 1.0],
-        &control(),
-        Method::Sr2,
-        brent(),
-    )
-    .unwrap();
+    let report =
+        minimize_method(&obj, array![-1.2, 1.0], &control(), Method::Sr2, brent()).unwrap();
     assert!(
         report.value < start_f,
         "SR2 {} -> {}",
@@ -81,14 +71,8 @@ fn sr2_descends_from_the_classic_start() {
 fn adam_and_steepest_descend() {
     let obj = Rosenbrock::<2>::new();
     let start_f = f0();
-    let adam = minimize_method(
-        &obj,
-        array![-1.2, 1.0],
-        &control(),
-        Method::adam(),
-        brent(),
-    )
-    .unwrap();
+    let adam =
+        minimize_method(&obj, array![-1.2, 1.0], &control(), Method::adam(), brent()).unwrap();
     assert!(adam.value < start_f, "Adam {} -> {}", start_f, adam.value);
     let sd = minimize_method(
         &obj,
@@ -99,4 +83,54 @@ fn adam_and_steepest_descend() {
     )
     .unwrap();
     assert!(sd.value < start_f, "SD {} -> {}", start_f, sd.value);
+}
+
+fn backtracking() -> LineSearch {
+    LineSearch::Backtracking {
+        c: 1e-4,
+        beta: 0.5,
+        maxiter: 40,
+    }
+}
+
+/// A line search that only shrinks must not shrink the opening step of a
+/// quasi-Newton method: each iteration starts at `istep`, and L-BFGS
+/// reaches the minimum of Rosenbrock instead of stalling.
+#[test]
+fn lbfgs_under_backtracking_opens_every_search_at_istep() {
+    let obj = Rosenbrock::<2>::new();
+    let mut c = control();
+    c.maxiter = 2000;
+    c.gtol = 1e-6;
+    let report = minimize_method(
+        &obj,
+        array![-1.2, 1.0],
+        &c,
+        Method::Lbfgs { memory: 10 },
+        backtracking(),
+    )
+    .unwrap();
+    assert!(
+        report.grad_norm < c.gtol,
+        "stalled at ||g|| = {} after {} steps",
+        report.grad_norm,
+        report.steps
+    );
+    assert!(report.steps < c.maxiter, "ran to maxiter");
+    assert_relative_eq!(report.coords[0], 1.0, epsilon = 1e-3);
+    assert_relative_eq!(report.coords[1], 1.0, epsilon = 1e-3);
+}
+
+/// BFGS under the same search reaches the same point.
+#[test]
+fn bfgs_under_backtracking_opens_every_search_at_istep() {
+    let obj = Rosenbrock::<2>::new();
+    let mut c = control();
+    c.maxiter = 2000;
+    c.gtol = 1e-6;
+    let report =
+        minimize_method(&obj, array![-1.2, 1.0], &c, Method::Bfgs, backtracking()).unwrap();
+    assert!(report.grad_norm < c.gtol, "||g|| = {}", report.grad_norm);
+    assert_relative_eq!(report.coords[0], 1.0, epsilon = 1e-3);
+    assert_relative_eq!(report.coords[1], 1.0, epsilon = 1e-3);
 }

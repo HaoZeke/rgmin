@@ -5,7 +5,7 @@
 
 use ndarray::Array1;
 
-use super::{sphere::Sphere, Manifold};
+use super::{Manifold, sphere::Sphere};
 
 /// Stiefel with \(p=1\), packed as a length-\(n\) unit vector.
 #[derive(Clone, Copy, Debug, Default)]

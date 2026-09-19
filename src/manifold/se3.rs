@@ -5,7 +5,7 @@
 
 use ndarray::Array1;
 
-use super::{so3::So3, Manifold};
+use super::{Manifold, so3::So3};
 
 /// Rigid motions. Rotation block uses [`So3`]; translation is Euclidean.
 #[derive(Clone, Copy, Debug, Default)]
@@ -13,11 +13,7 @@ pub struct Se3;
 
 impl Manifold for Se3 {
     fn required_dim(&self, n: usize) -> Result<(), usize> {
-        if n == 12 {
-            Ok(())
-        } else {
-            Err(12)
-        }
+        if n == 12 { Ok(()) } else { Err(12) }
     }
 
     fn project(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {

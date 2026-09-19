@@ -242,8 +242,25 @@ dependencies = [
 
 [[package]]
 name = "eindir-core"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6fb7523dd5458e184ceb87773846ff91659efe891a91411c57eea029e31afbe"
+dependencies = [
+ "cbindgen",
+ "dlpk",
+ "ndarray",
+ "num-traits",
+ "rand",
+ "rand_distr",
+ "rayon",
+ "thiserror",
+]
+
+[[package]]
+name = "eindir-core"
 version = "0.6.0"
-source = "git+https://github.com/HaoZeke/eindir.git?rev=f3c42130bb389ba6cd6e4cfdc8b2e182f4a764e9#f3c42130bb389ba6cd6e4cfdc8b2e182f4a764e9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e330e3abad9c1a597b144d40eb4b07ab3511d79f7d2cdbbcb37a44662f974db0"
 dependencies = [
  "cbindgen",
  "dlpk",
@@ -672,12 +689,12 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rgmin"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "approx",
  "cbindgen",
  "dlpk",
- "eindir-core",
+ "eindir-core 0.6.0",
  "highs",
  "highs-sys",
  "ndarray",
@@ -689,11 +706,12 @@ dependencies = [
 
 [[package]]
 name = "rgpot-core"
-version = "3.0.2"
-source = "git+https://github.com/OmniPotentRPC/rgpot.git?rev=b19227f9197a4c927633f1225f1e7546794a6f1e#b19227f9197a4c927633f1225f1e7546794a6f1e"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d1ea4b000a0b138dabf4efaa78c8fc05ee92fda6084d76bd932fe45fcf3f477"
 dependencies = [
  "dlpk",
- "eindir-core",
+ "eindir-core 0.5.2",
 ]
 
 [[package]]

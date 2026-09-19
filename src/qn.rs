@@ -7,7 +7,7 @@ use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
 use crate::report::Report;
-use crate::step::{l2, next_istep, take_step};
+use crate::step::{l2, next_istep, qn_istep, take_step};
 
 const CURVATURE: f64 = 1e-12;
 const SR1_SKIP: f64 = 1e-8;
@@ -57,7 +57,7 @@ where
             let y = &grad - &gold;
             bfgs_inverse_update(&mut h, &s, &y);
         }
-        istep = next_istep(lsstep, control);
+        istep = qn_istep(control);
     }
     Ok(done(value, pos, control.maxiter, l2(&grad)))
 }
@@ -130,7 +130,7 @@ where
             let y = &grad - &gold;
             sr1_inverse_update(&mut h, &s, &y);
         }
-        istep = next_istep(lsstep, control);
+        istep = qn_istep(control);
     }
     Ok(done(value, pos, control.maxiter, l2(&grad)))
 }
@@ -176,7 +176,7 @@ where
             let y = &grad - &gold;
             sr2_hessian_update(&mut b, &s, &y);
         }
-        istep = next_istep(lsstep, control);
+        istep = qn_istep(control);
     }
     Ok(done(value, pos, control.maxiter, l2(&grad)))
 }

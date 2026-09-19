@@ -22,7 +22,7 @@ use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
 use crate::qn::solve_dense;
 use crate::report::Report;
-use crate::step::{l2, next_istep, take_step};
+use crate::step::{l2, qn_istep, take_step};
 use eindir_core::{DifferentiableObjective, Objective};
 
 /// How [`Lbfgs`] compares the gradient to [`Lbfgs::gtol`].
@@ -292,11 +292,7 @@ impl Lbfgs {
         // the direction is the raw negative gradient and needs a length.
         let mut a = if self.memory.is_empty() {
             let dnorm = d.iter().fold(0.0_f64, |acc, v| acc + v * v).sqrt();
-            if dnorm > 1.0 {
-                1.0 / dnorm
-            } else {
-                1.0
-            }
+            if dnorm > 1.0 { 1.0 / dnorm } else { 1.0 }
         } else {
             1.0
         };
@@ -627,7 +623,7 @@ impl Lbfgs {
         let dir = self.direction(grad.view());
         let old = pos.clone();
         let gold = grad.clone();
-        let (npos, _, lsstep, moved) =
+        let (npos, _, _lsstep, moved) =
             take_step(obj, pos, *value, dir.view(), *istep, linesearch, control);
         *pos = npos;
         let ev = obj.value_and_gradient(pos.view());
@@ -636,6 +632,6 @@ impl Lbfgs {
         if moved {
             self.push(&*pos - &old, &*grad - &gold);
         }
-        *istep = next_istep(lsstep, control);
+        *istep = qn_istep(control);
     }
 }

@@ -104,6 +104,21 @@ where
     }
 }
 
+/// The opening step of the next line search for a quasi-Newton method.
+///
+/// The direction `-H g` already carries the step's scale, so the first
+/// trial is `control.istep` every iteration (Nocedal-Wright 3.5, with
+/// `istep = 1`). Opening at half the last accepted step, as
+/// [`next_istep`] does for a gradient direction, made the step collapse
+/// geometrically under a line search that only shrinks, and L-BFGS then
+/// stalled far from `gtol`.
+pub(crate) fn qn_istep(control: &Control) -> f64 {
+    control.istep
+}
+
+/// The opening step of the next line search when the direction is the
+/// gradient (steepest descent, NLCG, Adam): half the step last accepted,
+/// or `control.istep` again after a step that did not move.
 pub(crate) fn next_istep(lsstep: f64, control: &Control) -> f64 {
     if lsstep <= 0.0 {
         control.istep

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-19
+
+### Fixed
+
+- Quasi-Newton methods (BFGS, L-BFGS, SR1, SR2, and their session
+  variants) open every line search at `Control::istep` instead of half
+  the last accepted step. The halving is the steepest-descent heuristic;
+  under a backtracking search, which only shrinks, it made the step
+  collapse geometrically and L-BFGS stalled far from `gtol` on a smooth
+  convex energy. Steepest descent, NLCG and Adam keep the halving.
+  `Control::istep` is documented as the opening step.
+
 ### Changed
 
 - The crate is `rgmin`, at `OmniPotentRPC/rgmin`; it was

@@ -35,6 +35,8 @@ mod error;
 pub mod ffi;
 /// FIRE / FIRE 2.0 inertial first-order steps.
 pub mod fire;
+/// Matrix-free Newton: Hessian actions and Steihaug-Toint CG.
+pub mod hvp;
 /// Persistent L-BFGS (Nocedal-Wright 7.4) with strong Wolfe.
 pub mod lbfgs;
 /// L-BFGS quadratic model solved by HiGHS.
@@ -42,11 +44,7 @@ pub mod lbfgs;
 pub mod lbfgs_qp;
 /// Embedded Riemannian manifolds (manopt_cpp proj / retr / transp).
 pub mod manifold;
-/// The vector seam: solver algebra behind one interface.
-pub mod vecops;
 mod minimize;
-/// Matrix-free Newton: Hessian actions and Steihaug-Toint CG.
-pub mod hvp;
 /// Shifted Newton and Banerjee RFO on a dense Hessian.
 pub mod newton;
 mod oracle;
@@ -60,6 +58,8 @@ pub mod scg;
 mod session;
 mod step;
 mod trust;
+/// The vector seam: solver algebra behind one interface.
+pub mod vecops;
 
 pub use accept::Accept;
 pub use adam::minimize_adam;

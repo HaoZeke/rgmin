@@ -7,7 +7,11 @@ pub struct Control {
     pub maxiter: usize,
     /// Stop when `||g||_2 < gtol`.
     pub gtol: f64,
-    /// Initial line-search step guess.
+    /// The opening step of a line search. Quasi-Newton methods (BFGS,
+    /// L-BFGS, SR1, SR2) open every line search here, since their direction
+    /// carries the scale and 1.0 is the natural trial; steepest descent,
+    /// NLCG and Adam open here once and then at half the step last
+    /// accepted.
     pub istep: f64,
     /// Optional Euclidean cap on a proposed step (xtsci `maxmove`).
     pub maxmove: Option<f64>,
