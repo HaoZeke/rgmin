@@ -121,13 +121,15 @@ fn lbfgs_under_backtracking_opens_every_search_at_istep() {
     assert_relative_eq!(report.coords[1], 1.0, epsilon = 1e-3);
 }
 
-/// BFGS under the same search reaches the same point.
+/// BFGS under the same search, opening at the unit step a quasi-Newton
+/// direction is scaled for, reaches the same point.
 #[test]
 fn bfgs_under_backtracking_opens_every_search_at_istep() {
     let obj = Rosenbrock::<2>::new();
     let mut c = control();
     c.maxiter = 2000;
     c.gtol = 1e-6;
+    c.istep = 1.0;
     let report =
         minimize_method(&obj, array![-1.2, 1.0], &c, Method::Bfgs, backtracking()).unwrap();
     assert!(report.grad_norm < c.gtol, "||g|| = {}", report.grad_norm);
