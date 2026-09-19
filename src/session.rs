@@ -626,7 +626,7 @@ impl Solver {
             }
             Inner::Steepest => {
                 let dir = grad.mapv(|g| -g);
-                let (npos, _, lsstep, _) = take_step(
+                let (npos, _, _lsstep, _) = take_step(
                     obj,
                     x,
                     value,
@@ -655,7 +655,7 @@ impl Solver {
                     *d_old = dir.clone();
                     *initialized = true;
                 }
-                let (npos, _, lsstep, _) = take_step(
+                let (npos, _, _lsstep, _) = take_step(
                     obj,
                     x,
                     value,
@@ -686,7 +686,7 @@ impl Solver {
                 let direction = -h.dot(&grad);
                 let old = x.clone();
                 let gold = grad.clone();
-                let (npos, _, lsstep, moved) = take_step(
+                let (npos, _, _lsstep, moved) = take_step(
                     obj,
                     x,
                     value,

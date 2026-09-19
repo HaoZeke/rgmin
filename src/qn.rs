@@ -46,7 +46,7 @@ where
         let dir = -h.dot(&grad);
         let old = pos.clone();
         let gold = grad.clone();
-        let (npos, _, lsstep, moved) =
+        let (npos, _, _lsstep, moved) =
             take_step(obj, &pos, value, dir.view(), istep, linesearch, control);
         pos = npos;
         let ev = obj.value_and_gradient(pos.view());
@@ -119,7 +119,7 @@ where
         let dir = -h.dot(&grad);
         let old = pos.clone();
         let gold = grad.clone();
-        let (npos, _, lsstep, moved) =
+        let (npos, _, _lsstep, moved) =
             take_step(obj, &pos, value, dir.view(), istep, linesearch, control);
         pos = npos;
         let ev = obj.value_and_gradient(pos.view());
@@ -165,7 +165,7 @@ where
         let dir = solve_dense(&b, &rhs).unwrap_or_else(|| rhs);
         let old = pos.clone();
         let gold = grad.clone();
-        let (npos, _, lsstep, moved) =
+        let (npos, _, _lsstep, moved) =
             take_step(obj, &pos, value, dir.view(), istep, linesearch, control);
         pos = npos;
         let ev = obj.value_and_gradient(pos.view());
