@@ -97,6 +97,8 @@ pub use error::{Error, Result};
 pub use highs_kind::{HighsCCallback, HighsCallbackKind, HighsCrossover, HighsSolverKind};
 pub use fire::FireKind;
 pub use irc_trust::{sqrt_masses_3n, IrcTrust};
+pub mod rtr;
+
 pub use qn_irc::{
     bfgs_hessian_update, mw_pair, qn_get_s, qn_irc_get_s, qn_irc_restricted,
     qn_irc_restricted_identity, qn_restricted, to_mw, BfgsModel,
