@@ -921,15 +921,23 @@ impl Solver {
             Inner::Dogleg { radius } => *radius,
             _ => self.control.istep.max(1e-8),
         };
-        let rmax = self
-            .atom_maxmove
-            .or(self.control.maxmove)
-            .unwrap_or(radius * 8.0)
-            .max(radius);
+        // Nocedal and Wright, algorithm 4.1: grow Δ only when the trust
+        // step meets the boundary, and only up to a Euclidean Δ_max.
+        // A per-atom cap is a different norm. Using it as Δ_max (the
+        // 0.4.1 default of 0.2, and every tuned Morse row) lets Δ climb
+        // from the initial radius to that cap and then stop, so a
+        // 768-coordinate step stays inside a Euclidean ball of radius
+        // 0.2. Feeding the clipped length to the boundary test does the
+        // same once the cap binds: the trust step is on the sphere, but
+        // the shorter trial looks interior, so Δ does not grow.
+        // Δ_max is the Euclidean `maxmove` when one is set, otherwise
+        // eight times the current radius. The cap still limits the trial.
+        let rmax = self.control.maxmove.unwrap_or(radius * 8.0).max(radius);
         let mut dir = dogleg_direction(hess, &grad, radius);
         if self.project_rigid {
             project_out_rot_trans(&mut dir, x.view());
         }
+        let trust_norm = l2(&dir);
         let mut trial = &*x + &dir;
         if let Some(cap) = self.atom_maxmove {
             scale_step_atom(x, &mut trial, cap);
@@ -938,12 +946,20 @@ impl Solver {
         }
         trial = obj.bounds().clip(trial.view());
         let p = &trial - &*x;
-        let pnorm = l2(&p);
+        let taken = l2(&p);
         let (ft, gt) = obj.value_and_gradient(trial.view());
         let pred = predicted_reduction(hess, &grad, &p);
         let rho = reduction_ratio(value - ft, pred);
+        // No displacement cap: the boundary length is the step after the
+        // box clip, as before. With a cap, the dogleg length is the one
+        // algorithm 4.1 tests against Δ.
+        let boundary_norm = if self.atom_maxmove.is_some() || self.control.maxmove.is_some() {
+            trust_norm
+        } else {
+            taken
+        };
         if let Inner::Dogleg { radius } = &mut self.inner {
-            *radius = update_radius(*radius, rho, pnorm, rmax);
+            *radius = update_radius(*radius, rho, boundary_norm, rmax);
         }
         if accept_ratio(rho) {
             *x = trial;

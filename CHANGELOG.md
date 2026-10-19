@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dogleg updates its trust radius from the dogleg step, and the
+  Euclidean ceiling is `maxmove` rather than a per-atom displacement
+  cap. A cap still limits the accepted trial. Nocedal and Wright,
+  algorithm 4.1. The 0.2 per-atom default added in 0.4.1 used that
+  cap as the ceiling and fed the clipped length to the boundary
+  test, so the radius stayed near its initial value on Morse bulk.
 - The crate is `rgmin`, at `OmniPotentRPC/rgmin`; it was
   `xtsci-optimize` under `HaoZeke`. The C ABI renames with it
   (`rgmin_*` symbols, `rgmin.h`) in one pre-publication sweep; the
