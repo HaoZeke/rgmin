@@ -6,6 +6,18 @@
 
 ** Unreleased
 
+Steihaug-Toint Newton-CG is a session method: tokens ~newton-cg~
+and ~newton-pcg~ (~RGMIN_NEWTON_CG~ = 21, ~RGMIN_NEWTON_PCG~ = 22).
+Hessian access is a product, analytic from ~rgmin_solver_step_hvp~
+/ ~rgmin_minimize_hvp~ and a one-gradient forward difference from
+~rgmin_solver_step~. ~maxmove~ caps the Euclidean trust radius; a
+per-atom cap clips the trial and the boundary test sees the
+pre-clip length. ~rgmin_solver_gradient_calls~ and
+~rgmin_solver_hvp_calls~ count the two. ~rgmin_method_from_name~
+parses the token. ~abi_minor~ 27. Steihaug 1983
+([[https://doi.org/10.1137/0720042][10.1137/0720042]]);
+Nocedal and Wright, chapter 7.
+
 ~rgmin_solver_set_box~: per-coordinate HiGHS box on ~x + p~.
 A NULL side is unbounded. Same status as ~set_highs~ (0, or 1
 without the ~highs~ feature). ~rgmin_solver_set_trust~ is the

@@ -36,7 +36,8 @@ Conjugacy: Fletcher-Reeves, Polak-Ribiere, Hestenes-Stiefel, Dai-Yuan,
 conjugate descent, Hager-Zhang, Liu-Storey, FR-PR, HybridizedConj.
 Line search: Brent, Armijo, Goldstein, strong Wolfe with zoom.
 Methods: NLCG, BFGS, L-BFGS, SR1, SR2, Newton, RFO, Adam, steepest
-descent, PSO, FIRE, FIRE 2.0, Barzilai-Borwein, Powell dogleg.
+descent, PSO, FIRE, FIRE 2.0, Barzilai-Borwein, Powell dogleg,
+Steihaug-Toint Newton-CG (`newton-cg`, `newton-pcg`).
 
 Narrative docs live in [`docs/orgmode/`](docs/orgmode/index.org)
 (Diataxis); the explanation quadrant derives the math behind each

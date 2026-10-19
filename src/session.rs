@@ -15,6 +15,9 @@ use crate::bb::bb_direction;
 use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::fire::{FireState, fire_after_v1, fire_displacement, project_box_tangent};
+use crate::hvp::{
+    FiniteDifference, HessianVector, NewtonCgRequest, OptionalAction, newton_cg_step,
+};
 use crate::lbfgs::{GradNorm, Lbfgs};
 use crate::linesearch::LineSearch;
 use crate::manifold::{Manifold, ManifoldKind};
@@ -69,6 +72,11 @@ pub struct Solver {
     last_pos: Option<Array1<f64>>,
     last_value: f64,
     last_grad: Array1<f64>,
+    /// Objective gradients. A finite-difference product is an
+    /// [`Self::hvp_calls`] entry, not a gradient.
+    gradient_calls: usize,
+    /// Analytic or finite-difference Hessian-vector products.
+    hvp_calls: usize,
     inner: Inner,
 }
 
@@ -117,6 +125,12 @@ enum Inner {
         prev_y: Option<Array1<f64>>,
     },
     Dogleg {
+        radius: f64,
+    },
+    NewtonCg {
+        radius: f64,
+    },
+    NewtonPcg {
         radius: f64,
     },
 }
@@ -177,6 +191,8 @@ impl Solver {
             last_pos: None,
             last_value: 0.0,
             last_grad: Array1::zeros(dim),
+            gradient_calls: 0,
+            hvp_calls: 0,
             inner,
         }
     }
@@ -206,6 +222,26 @@ impl Solver {
     /// Packed length of `x` this session was created with.
     pub fn dim(&self) -> usize {
         self.dim
+    }
+
+    /// Gradient evaluations charged to this session.
+    ///
+    /// A forward-difference Hessian-vector product costs one gradient
+    /// inside the product and is counted by [`Self::hvp_calls`], not
+    /// here. Both counters accumulate for the life of the session.
+    /// [`Self::forget`] does not clear them.
+    pub fn gradient_calls(&self) -> usize {
+        self.gradient_calls
+    }
+
+    /// Hessian-vector products charged to this session.
+    ///
+    /// An analytic product is one call. A finite-difference product is
+    /// one extra gradient and is still one product here, so a harness
+    /// can charge `gradient_calls + hvp_calls` force evaluations on
+    /// this path and `n` force evaluations per dense Hessian elsewhere.
+    pub fn hvp_calls(&self) -> usize {
+        self.hvp_calls
     }
 
     /// Euclidean cap applied on the next [`Self::step`].
@@ -689,7 +725,7 @@ impl Solver {
                 *prev_s = None;
                 *prev_y = None;
             }
-            Inner::Dogleg { radius } => {
+            Inner::Dogleg { radius } | Inner::NewtonCg { radius } | Inner::NewtonPcg { radius } => {
                 *radius = self.control.istep.max(1e-8);
             }
         }
@@ -700,6 +736,9 @@ impl Solver {
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
+        if matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. }) {
+            return self.step_newton_cg(obj, x, &FiniteDifference);
+        }
         if matches!(self.inner, Inner::Newton { .. } | Inner::Dogleg { .. }) {
             return Err(Error::NeedHessian);
         }
@@ -723,6 +762,12 @@ impl Solver {
     where
         O: HessianObjective + ?Sized,
     {
+        // Newton-CG never forms `obj.hessian`, even when the caller
+        // handed a dense oracle to this verb. The product is a forward
+        // difference of gradients.
+        if matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. }) {
+            return self.step_newton_cg(obj, x, &FiniteDifference);
+        }
         #[cfg(feature = "highs")]
         if self.highs && (self.box_lo.is_some() || self.box_hi.is_some()) {
             let bounded = crate::box_objective::BoxObjective::new(
@@ -736,6 +781,115 @@ impl Solver {
             return self.step_hess_inner(&bounded, x);
         }
         self.step_hess_inner(obj, x)
+    }
+
+    /// One Steihaug-Toint iteration. `obj` supplies analytic products;
+    /// this verb does not build a dense Hessian.
+    ///
+    /// [`Self::step`] and [`Self::step_hess`] on the same methods use a
+    /// forward difference (one gradient per product) instead.
+    pub fn step_hvp<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: HessianVector + ?Sized,
+    {
+        if !matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. }) {
+            return Err(Error::NeedHvp);
+        }
+        let action = |xv: ArrayView1<f64>, v: ArrayView1<f64>| obj.hessian_vector(xv, v);
+        self.step_newton_cg(obj, x, &action)
+    }
+
+    fn step_newton_cg<O, A>(&mut self, obj: &O, x: &mut Array1<f64>, action: &A) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+        A: OptionalAction + Send + Sync,
+    {
+        if x.len() != self.dim || self.dim != Objective::dim(obj) {
+            return Err(Error::Dim {
+                got: x.len(),
+                dim: self.dim,
+            });
+        }
+        self.check_manifold(x.len())?;
+        let cached = self.same_last_x(x);
+        if !cached {
+            *x = obj.bounds().clip(x.view());
+        }
+        let (value, raw_grad) = if cached {
+            (self.last_value, self.last_grad.clone())
+        } else {
+            self.gradient_calls += 1;
+            obj.value_and_gradient(x.view())
+        };
+        // CG sees the horizontal gradient. The forward difference
+        // needs the raw gradient, which is what `remember` stores on
+        // this path.
+        let grad = self.horizontal_grad(x, &raw_grad);
+        let gnorm = self.stationarity_norm(x, &grad);
+        if !gnorm.is_finite() {
+            return Err(Error::TrustCollapsed { steps: self.steps });
+        }
+        if gnorm < self.control.gtol {
+            self.remember(x, value, &raw_grad);
+            return Ok(Report {
+                value,
+                coords: x.clone(),
+                steps: self.steps,
+                grad_norm: gnorm,
+            });
+        }
+        let (radius, precondition) = match &self.inner {
+            Inner::NewtonCg { radius } => (*radius, false),
+            Inner::NewtonPcg { radius } => (*radius, true),
+            _ => return Err(Error::NeedHvp),
+        };
+        // Same ceiling as dogleg: Euclidean `maxmove` when one is set,
+        // otherwise eight times the current radius, and never below it.
+        let rmax = self.control.maxmove.unwrap_or(radius * 8.0).max(radius);
+        let taken = newton_cg_step(
+            obj,
+            x,
+            value,
+            &grad,
+            &raw_grad,
+            &NewtonCgRequest {
+                radius,
+                rmax,
+                atom_cap: self.atom_maxmove,
+                euclid_cap: self.control.maxmove,
+                project_rigid: self.project_rigid,
+                precondition,
+                seed: self.steps as u64,
+            },
+            action,
+        );
+        self.hvp_calls += taken.hvps;
+        self.gradient_calls += taken.trial_gradients;
+        if let Inner::NewtonCg { radius } | Inner::NewtonPcg { radius } = &mut self.inner {
+            *radius = taken.radius;
+        }
+        if taken.collapsed {
+            // The free-function loop reports the attempt and keeps the
+            // previous point when the radius hits the floor.
+            self.remember(x, value, &raw_grad);
+            self.steps += 1;
+            return Err(Error::TrustCollapsed { steps: self.steps });
+        }
+        let (raw_out, report_grad) = if taken.moved {
+            *x = taken.pos;
+            let horizontal = self.horizontal_grad(x, &taken.grad);
+            (taken.grad, horizontal)
+        } else {
+            (raw_grad, grad)
+        };
+        self.remember(x, taken.value, &raw_out);
+        self.steps += 1;
+        Ok(Report {
+            value: taken.value,
+            coords: x.clone(),
+            steps: self.steps,
+            grad_norm: self.stationarity_norm(x, &report_grad),
+        })
     }
 
     fn step_hess_inner<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
@@ -757,6 +911,10 @@ impl Solver {
                 QnStep::TwoLoop => None,
             },
             Inner::Dogleg { .. } => None,
+            // A missed early return must not fall through to `obj.hessian`.
+            Inner::NewtonCg { .. } | Inner::NewtonPcg { .. } => {
+                return self.step_newton_cg(obj, x, &FiniteDifference);
+            }
             _ => return self.step_first_order(obj, x),
         };
         let cached = self.same_last_x(x);
@@ -1324,7 +1482,11 @@ impl Solver {
                     *prev_y = Some(&grad - &gold);
                 }
             }
-            Inner::Pso { .. } | Inner::Newton { .. } | Inner::Dogleg { .. } => unreachable!(),
+            Inner::Pso { .. }
+            | Inner::Newton { .. }
+            | Inner::Dogleg { .. }
+            | Inner::NewtonCg { .. }
+            | Inner::NewtonPcg { .. } => unreachable!(),
         }
 
         let delta = &*x - &start;
@@ -1500,6 +1662,12 @@ impl Inner {
                 prev_y: None,
             },
             Method::Dogleg => Inner::Dogleg {
+                radius: istep.max(1e-8),
+            },
+            Method::NewtonCg => Inner::NewtonCg {
+                radius: istep.max(1e-8),
+            },
+            Method::NewtonPcg => Inner::NewtonPcg {
                 radius: istep.max(1e-8),
             },
         }

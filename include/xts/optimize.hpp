@@ -13,6 +13,7 @@ namespace optimize {
 
 using rgmin::version;
 using rgmin::Method;
+using rgmin::method_from_name;
 using rgmin::Control;
 using rgmin::Report;
 using rgmin::ScalarType;

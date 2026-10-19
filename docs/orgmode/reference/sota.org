@@ -173,12 +173,18 @@ These four tokens share ~rgmin_solver_t~ and a fused =(f, g)=.
   ([[https://doi.org/10.1137/S1052623494266365][10.1137/S1052623494266365]]) is a two-point spectral step.
 - Powell dogleg (Nocedal–Wright algorithm 4.1) consumes the host
   pair Hessian already passed to ~rgmin_solver_step_hess~.
+- Steihaug–Toint Newton-CG (~newton-cg~, and ~newton-pcg~ with a
+  rank-16 Nyström preconditioner) is a session method. Hessian
+  access is a product: analytic through ~step_hvp~, otherwise one
+  forward difference of the gradient. ~maxmove~ is the Euclidean
+  trust ceiling; a per-atom cap clips the trial only.
+  Steihaug 1983
+  ([[https://doi.org/10.1137/0720042][10.1137/0720042]]),
+  Nocedal–Wright chapter 7.
 
-Steihaug–Toint, ARC, DFP, SPSA, CMA-ES, Nelder–Mead, and BOBYQA
-were surveyed and not added: DFP is dominated by BFGS already
-in the crate, the derivative-free methods waste force calls on
-an analytic PES, and Steihaug lost the fourth token slot to
-FIRE 2.0.
+ARC, DFP, SPSA, CMA-ES, Nelder–Mead, and BOBYQA were surveyed and
+not added: DFP is dominated by BFGS already in the crate, and the
+derivative-free methods waste force calls on an analytic PES.
 
 ** Nonlinear CG
 

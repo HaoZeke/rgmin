@@ -6,6 +6,7 @@ use ndarray::Array1;
 use crate::adam::minimize_adam;
 use crate::control::Control;
 use crate::error::{Error, Result};
+use crate::hvp::HessianVector;
 use crate::linesearch::LineSearch;
 use crate::method::Method;
 use crate::newton::{HessianObjective, minimize_newton};
@@ -67,7 +68,9 @@ where
             c2,
         } => minimize_pso(obj, init, control, n_particles, inertia, c1, c2),
         Method::Newton { kind: _ } | Method::Dogleg => Err(Error::NeedHessian),
-        Method::Fire { .. } | Method::Bb => run_session(obj, init, control, method),
+        Method::Fire { .. } | Method::Bb | Method::NewtonCg | Method::NewtonPcg => {
+            run_session(obj, init, control, method)
+        }
     }
 }
 
@@ -134,6 +137,51 @@ where
     };
     for _ in 0..control.maxiter {
         last = solver.step_hess(obj, &mut pos)?;
+        if last.grad_norm < control.gtol {
+            break;
+        }
+    }
+    Ok(last)
+}
+
+/// Minimize with any [`Method`]. Newton-CG and Newton-PCG use analytic
+/// Hessian-vector products and never form a dense Hessian. Every other
+/// method is [`minimize_method`].
+pub fn minimize_method_hvp<O>(
+    obj: &O,
+    init: impl Into<Array1<f64>>,
+    control: &Control,
+    method: Method,
+    linesearch: LineSearch,
+) -> Result<Report>
+where
+    O: HessianVector + ?Sized,
+{
+    match method {
+        Method::NewtonCg | Method::NewtonPcg => run_session_hvp(obj, init, control, method),
+        other => minimize_method(obj, init, control, other, linesearch),
+    }
+}
+
+fn run_session_hvp<O>(
+    obj: &O,
+    init: impl Into<Array1<f64>>,
+    control: &Control,
+    method: Method,
+) -> Result<Report>
+where
+    O: HessianVector + ?Sized,
+{
+    let mut pos = init.into();
+    let mut solver = Solver::new(method, control.clone(), pos.len());
+    let mut last = Report {
+        value: 0.0,
+        coords: pos.clone(),
+        steps: 0,
+        grad_norm: f64::INFINITY,
+    };
+    for _ in 0..control.maxiter {
+        last = solver.step_hvp(obj, &mut pos)?;
         if last.grad_norm < control.gtol {
             break;
         }

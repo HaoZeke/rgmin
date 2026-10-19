@@ -20,6 +20,12 @@ Two published surfaces, one implementation.
 | ~lowest_eigenpair~ / ~lowest_mode~ | Matrix-free lowest Hessian pair. |
 | ~EigensolverKind~ / ~EigenParams~ | Closed eigen waist. |
 | ~HessianVector~ / ~FdHvp~ | ~H v~ without forming ~H~. |
+| ~Solver::step_hvp~ | Analytic product for ~newton-cg~ / ~newton-pcg~. |
+
+~newton-cg~ and ~newton-pcg~ are ~Method::from_name~ tokens. The
+session counts ~gradient_calls~ and ~hvp_calls~ separately. A
+forward-difference product on ~step~ costs one gradient and is
+charged as a product.
 
 The generated Sphinx pages under ~crates/rgmin/~ (when the docs
 environment is built with ~sphinxcontrib-rust~) are the same

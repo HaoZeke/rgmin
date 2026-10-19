@@ -60,6 +60,8 @@ typedef rgmin_hvp_fn xts_hvp_fn;
 #define XTS_BB RGMIN_BB
 #define XTS_DOGLEG RGMIN_DOGLEG
 #define XTS_FIRE2 RGMIN_FIRE2
+#define XTS_NEWTON_CG RGMIN_NEWTON_CG
+#define XTS_NEWTON_PCG RGMIN_NEWTON_PCG
 
 #define XTS_CONJUGACY_FLETCHER_REEVES RGMIN_CONJUGACY_FLETCHER_REEVES
 #define XTS_CONJUGACY_POLAK_RIBIERE RGMIN_CONJUGACY_POLAK_RIBIERE
@@ -86,6 +88,7 @@ typedef rgmin_hvp_fn xts_hvp_fn;
 #define xts_tensor_free rgmin_tensor_free
 #define xts_minimize rgmin_minimize
 #define xts_minimize_hess rgmin_minimize_hess
+#define xts_minimize_hvp rgmin_minimize_hvp
 #define xts_minimize_eindir rgmin_minimize_eindir
 #define xts_minimize_scg rgmin_minimize_scg
 #define xts_solver_create rgmin_solver_create
@@ -97,6 +100,9 @@ typedef rgmin_hvp_fn xts_hvp_fn;
 #define xts_solver_set_accept rgmin_solver_set_accept
 #define xts_solver_push_pair rgmin_solver_push_pair
 #define xts_solver_search_direction rgmin_solver_search_direction
+#define xts_method_from_name rgmin_method_from_name
+#define xts_solver_gradient_calls rgmin_solver_gradient_calls
+#define xts_solver_hvp_calls rgmin_solver_hvp_calls
 #define xts_solver_set_atom_maxmove rgmin_solver_set_atom_maxmove
 #define xts_solver_set_project_rigid rgmin_solver_set_project_rigid
 #define xts_solver_set_extra_updates rgmin_solver_set_extra_updates
@@ -135,6 +141,7 @@ typedef rgmin_hvp_fn xts_hvp_fn;
 #define xts_solver_set_periodic rgmin_solver_set_periodic
 #define xts_solver_step rgmin_solver_step
 #define xts_solver_step_hess rgmin_solver_step_hess
+#define xts_solver_step_hvp rgmin_solver_step_hvp
 #define xts_solver_step_fg rgmin_solver_step_fg
 #define xts_solver_step_hess_fg rgmin_solver_step_hess_fg
 #define xts_lowest_eigenpair rgmin_lowest_eigenpair

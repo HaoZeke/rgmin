@@ -41,7 +41,19 @@ enum class Method {
     Bb = RGMIN_BB,
     Dogleg = RGMIN_DOGLEG,
     Fire2 = RGMIN_FIRE2,
+    NewtonCg = RGMIN_NEWTON_CG,
+    NewtonPcg = RGMIN_NEWTON_PCG,
 };
+
+/** Parse a method token. \c newton-cg and \c newton_cg are the same method. */
+inline Method method_from_name(std::string const& name) {
+    rgmin_method_t tag{};
+    if (rgmin_method_from_name(name.c_str(), &tag) != RGMIN_SUCCESS) {
+        char const* msg = rgmin_last_error();
+        throw std::invalid_argument(msg ? msg : "unknown method");
+    }
+    return static_cast<Method>(static_cast<int>(tag));
+}
 
 struct Control {
     std::size_t maxiter = 100;
@@ -199,6 +211,12 @@ public:
     /// Keep the method memory, drop the point (see rgmin_solver_rebase).
     void rebase() { rgmin_solver_rebase(ptr_); }
     std::size_t pair_count() const noexcept { return rgmin_solver_pair_count(ptr_); }
+    /** Gradient evaluations. Finite-difference products are hvp_calls(). */
+    std::size_t gradient_calls() const noexcept {
+        return rgmin_solver_gradient_calls(ptr_);
+    }
+    /** Hessian-vector products, analytic or forward-difference. */
+    std::size_t hvp_calls() const noexcept { return rgmin_solver_hvp_calls(ptr_); }
     void set_maxmove(double m) { rgmin_solver_set_maxmove(ptr_, m); }
     void set_qn_step(rgmin_qn_step_t step) { rgmin_solver_set_qn_step(ptr_, step); }
     void set_accept(rgmin_accept_t accept) { rgmin_solver_set_accept(ptr_, accept); }
@@ -284,6 +302,18 @@ public:
         if (st != RGMIN_SUCCESS) {
             char const* msg = rgmin_last_error();
             throw std::runtime_error(msg ? msg : "rgmin_solver_step_fg failed");
+        }
+        return Report{out.value, out.steps, out.grad_norm};
+    }
+
+    Report step_hvp(rgmin_eval_fn eval, rgmin_grad_fn grad, rgmin_hvp_fn hvp,
+                    void* user, DLManagedTensorVersioned* x) {
+        rgmin_report_t out{};
+        rgmin_status_t st =
+            rgmin_solver_step_hvp(ptr_, eval, grad, hvp, user, x, &out);
+        if (st != RGMIN_SUCCESS) {
+            char const* msg = rgmin_last_error();
+            throw std::runtime_error(msg ? msg : "rgmin_solver_step_hvp failed");
         }
         return Report{out.value, out.steps, out.grad_norm};
     }
