@@ -34,15 +34,26 @@ Nocedal-Wright equation numbers are the contract:
 
 Narrative docs live in ~docs/orgmode/~ (Diataxis: tutorials, howto,
 reference). Export to RST with ~emacs --script docs/export.el~ from
-~docs/~. Sphinx (Shibuya) reads ~docs/source/~; logos live in
-~branding/logo/~ and are copied into ~docs/source/_static/~.
+~docs/~. The export needs Org 9.7 or newer from GNU ELPA: ox-rst
+calls ~org-element-type-p~, which that release added, and the Emacs
+on the docs runner ships Org 9.6. ~docs/export.el~ installs the ELPA
+release and puts it ahead of the built-in Org. Sphinx (Shibuya)
+reads ~docs/source/~; logos live in ~branding/logo/~ and are copied
+into ~docs/source/_static/~.
 The C ABI HTML is Doxygen plus doxyYoda; see
 [[file:../howto/doxygen.org][howto/doxygen]].
 
+Pull requests run the Org export and the Sphinx build. The Pages
+deploy runs on a push to ~main~ whose paths touch ~docs/~ or the
+workflow, and on ~workflow_dispatch~. A pull request has its own
+concurrency group, so it does not cancel a deploy.
+
 * Building the docs
 
-Export the orgmode tree to rst with =emacs --batch -l docs/export.el=,
-then build =docs/source= with Sphinx. The build needs =shibuya=,
+Export the orgmode tree to rst with =emacs --batch -l docs/export.el=.
+That script installs Org 9.7 or newer from GNU ELPA before ox-rst.
+Then build =docs/source= with Sphinx. Pull requests run the export
+and the Sphinx build; the Pages deploy does not. The build needs =shibuya=,
 =myst-parser=, and =sphinxcontrib-bibtex=; the bibliography comes from
 =docs/source/references.bib=, which is generated from the
 =rgmin-docs= ookcite collection (=export_collection=), never edited by
