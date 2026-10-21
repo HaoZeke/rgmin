@@ -1815,7 +1815,10 @@ fn rebase_keeps_curvature_and_drops_the_point() {
     // The first step after the rebase is taken on the second objective at
     // the retained point: its report carries that objective's value.
     let rep = warm.step(&second, &mut x).unwrap();
-    assert!(rep.value < second.eval(start.view()), "rebased step descends the second objective");
+    assert!(
+        rep.value < second.eval(start.view()),
+        "rebased step descends the second objective"
+    );
     let mut warm_steps = 1usize;
     for _ in 0..80 {
         if rep.grad_norm < 1e-10 {
@@ -1844,4 +1847,3 @@ fn rebase_keeps_curvature_and_drops_the_point() {
         "rebased {warm_steps} should not exceed cold {cold_steps}"
     );
 }
-
