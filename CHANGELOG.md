@@ -59,7 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ordinary starts use a `0.1 I` inverse scale and five-value
   nonmonotone acceptance.
 - FIRE 2.0 now follows Guénolé et al.'s semi-implicit update order,
-  half-step-back uphill correction, and initial time-step delay.
+  half-step-back uphill correction with a fresh corrected-point force,
+  initial time-step delay, and cap-consistent velocity.
 - Dogleg updates its trust radius from the dogleg step, and the
   Euclidean ceiling is `maxmove` rather than a per-atom displacement
   cap. A cap still limits the accepted trial. Nocedal and Wright,

@@ -14,7 +14,9 @@ use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::Control;
 use crate::error::{Error, Result};
-use crate::fire::{FireState, fire_after_v1, fire_displacement, project_box_tangent};
+use crate::fire::{
+    FireKind, FireState, fire_after_v1, fire_displacement, fire_prepare_v2, project_box_tangent,
+};
 use crate::hvp::{
     FiniteDifference, HessianVector, NewtonCgRequest, OptionalAction, newton_cg_step,
     sym_eig_jacobi,
@@ -1765,6 +1767,14 @@ impl Solver {
                 let mut force = grad.mapv(|g| -g);
                 project_box_tangent(obj.bounds(), x, &mut force);
                 project_box_tangent(obj.bounds(), x, &mut state.vel);
+                if let Some(correction) = fire_prepare_v2(state, &force) {
+                    *x = obj.bounds().clip((&*x + &correction).view());
+                    let ev = obj.value_and_gradient(x.view());
+                    grad = ev.1;
+                    force = grad.mapv(|g| -g);
+                    project_box_tangent(obj.bounds(), x, &mut force);
+                }
+                let forward_start = x.clone();
                 let dx = fire_displacement(state, &force);
                 let mut trial = &*x + &dx;
                 if let Some(cap) = self.atom_maxmove {
@@ -1773,6 +1783,9 @@ impl Solver {
                     scale_step(x, &mut trial, cap);
                 }
                 trial = obj.bounds().clip(trial.view());
+                if matches!(state.kind, FireKind::V2) && state.dt > 0.0 {
+                    state.vel = (&trial - &forward_start) / state.dt;
+                }
                 *x = trial;
                 let ev = obj.value_and_gradient(x.view());
                 value = ev.0;

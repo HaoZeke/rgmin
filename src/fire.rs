@@ -133,39 +133,50 @@ fn adapt(state: &mut FireState, power: f64) {
     }
 }
 
-/// Displacement `dx` from the current force `f = -g`.
+/// Prepare a FIRE 2.0 step and return its half-step-back correction.
 ///
-/// FIRE 2.0 adapts on the current power, corrects an uphill step by half
-/// a time step, then applies the semi-implicit Euler update before mixing.
-/// FIRE 1.0 takes the Verlet step first; the caller mixes on the force at
-/// the new point via [`fire_after_v1`].
+/// The caller must evaluate a fresh force after applying a nonzero
+/// correction, before passing that force to [`fire_displacement`].
+pub fn fire_prepare_v2(state: &mut FireState, force: &Array1<f64>) -> Option<Array1<f64>> {
+    if !matches!(state.kind, FireKind::V2) {
+        return None;
+    }
+    let power = crate::vecops::dot(force.view(), state.vel.view());
+    if power > 0.0 {
+        state.n_pos += 1;
+        if state.n_pos > state.n_min {
+            state.dt = (state.dt * state.f_inc).min(state.dt_max);
+            state.alpha *= state.f_alpha;
+        }
+        None
+    } else {
+        state.n_pos = 0;
+        if state.steps + 1 >= state.n_min {
+            state.dt = (state.dt * state.f_dec).max(state.dt_min);
+        }
+        let correction = -0.5 * state.dt * &state.vel;
+        let moved = correction.iter().any(|v| *v != 0.0);
+        state.vel.fill(0.0);
+        state.alpha = state.alpha_start;
+        moved.then_some(correction)
+    }
+}
+
+/// Forward displacement `dx` from the current force `f = -g`.
+///
+/// FIRE 2.0 applies the semi-implicit Euler update before mixing. The
+/// caller first applies [`fire_prepare_v2`]. FIRE 1.0 takes the Verlet
+/// step first; the caller mixes on the force at the new point via
+/// [`fire_after_v1`].
 pub fn fire_displacement(state: &mut FireState, force: &Array1<f64>) -> Array1<f64> {
     match state.kind {
         FireKind::V2 => {
-            let power = crate::vecops::dot(force.view(), state.vel.view());
-            let mut displacement = Array1::zeros(force.len());
-            if power > 0.0 {
-                state.n_pos += 1;
-                if state.n_pos > state.n_min {
-                    state.dt = (state.dt * state.f_inc).min(state.dt_max);
-                    state.alpha *= state.f_alpha;
-                }
-            } else {
-                state.n_pos = 0;
-                if state.steps + 1 >= state.n_min {
-                    state.dt = (state.dt * state.f_dec).max(state.dt_min);
-                }
-                displacement.scaled_add(-0.5 * state.dt, &state.vel);
-                state.vel.fill(0.0);
-                state.alpha = state.alpha_start;
-            }
             for i in 0..state.vel.len() {
                 state.vel[i] += force[i] * state.dt;
             }
             mix_velocity(state, force);
-            displacement.scaled_add(state.dt, &state.vel);
             state.steps += 1;
-            displacement
+            &state.vel * state.dt
         }
         FireKind::V1 => {
             for i in 0..state.vel.len() {
@@ -205,11 +216,13 @@ mod tests {
         let mut state = FireState::new(FireKind::V2, 2, 0.2);
         state.vel = array![1.0, 0.0];
         let force = array![-1.0, 0.0];
+        let correction = fire_prepare_v2(&mut state, &force).expect("rollback");
         let dx = fire_displacement(&mut state, &force);
         assert_eq!(state.n_pos, 0);
         assert!((state.alpha - state.alpha_start).abs() < 1e-15);
         assert!((state.dt - 0.2).abs() < 1e-15);
-        assert!((dx[0] + 0.14).abs() < 1e-15);
+        assert!((correction[0] + 0.1).abs() < 1e-15);
+        assert!((dx[0] + 0.04).abs() < 1e-15);
     }
 
     #[test]
@@ -217,7 +230,7 @@ mod tests {
         let mut state = FireState::new(FireKind::V2, 1, 0.1);
         state.steps = 4;
         state.vel[0] = 1.0;
-        let _ = fire_displacement(&mut state, &array![-1.0]);
+        let _ = fire_prepare_v2(&mut state, &array![-1.0]);
         assert!((state.dt - 0.05).abs() < 1e-15);
     }
 }

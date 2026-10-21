@@ -29,7 +29,8 @@ nominal step at least 64 times larger than the cap.  Ordinary starts
 use ~H0 = 0.1 I~ and five-value nonmonotone acceptance.
 
 FIRE 2.0 follows Guénolé et al.'s semi-implicit update order,
-half-step-back uphill correction, and initial time-step delay.
+half-step-back uphill correction with a fresh corrected-point force,
+initial time-step delay, and cap-consistent velocity.
 
 Steihaug-Toint Newton-CG is a session method: tokens ~newton-cg~
 and ~newton-pcg~ (~RGMIN_NEWTON_CG~ = 21, ~RGMIN_NEWTON_PCG~ = 22).
