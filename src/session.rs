@@ -15,8 +15,8 @@ use crate::bb::bb_direction;
 use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::fire::{
-    FireMix, FireState, fire_after_v1, fire_after_v1_metric, fire_displacement,
-    fire_displacement_metric, project_box_tangent,
+    FireKind, FireMix, FirePreparation, FireState, fire_after_v1, fire_after_v1_metric,
+    fire_displacement, fire_displacement_metric, fire_prepare_v2, project_box_tangent,
 };
 use crate::hvp::{
     FiniteDifference, HessianVector, NewtonCgRequest, OptionalAction, newton_cg_step,
@@ -79,6 +79,8 @@ pub struct Solver {
     accept: Accept,
     e_hist: VecDeque<f64>,
     atom_maxmove: Option<f64>,
+    /// Whether geometry L-BFGS needs a finite-difference stiffness probe.
+    geometry_lbfgs_stiff: Option<bool>,
     project_rigid: bool,
     /// Sella `proj_rot`: false under PBC. Rotation is not a symmetry of the cell.
     periodic: bool,
@@ -207,6 +209,7 @@ impl Solver {
             accept: Accept::None,
             e_hist: VecDeque::new(),
             atom_maxmove: None,
+            geometry_lbfgs_stiff: None,
             project_rigid: false,
             periodic: false,
             manifold: ManifoldKind::Euclidean,
@@ -805,6 +808,7 @@ impl Solver {
         self.istep = self.control.istep;
         self.e_hist.clear();
         self.last_pos = None;
+        self.geometry_lbfgs_stiff = None;
     }
 
     /// Drop method memory. The next step is a cold start from the current `x`.
@@ -812,6 +816,7 @@ impl Solver {
         self.istep = self.control.istep;
         self.e_hist.clear();
         self.last_pos = None;
+        self.geometry_lbfgs_stiff = None;
         self.saddle_kicks = 0;
         match &mut self.inner {
             Inner::Lbfgs(solver) => solver.forget(),
@@ -1073,17 +1078,20 @@ impl Solver {
         }
     }
 
-    /// eOn L-BFGS step: finite-difference inverse curvature on the first
-    /// iteration, `sy/yy` after that, reset when curvature is negative, the
-    /// uncapped step exceeds the per-atom cap, or the step opposes the force.
-    /// The finite-difference probe is clipped to the objective bounds, and
-    /// the quotient uses the displacement that remains inside the box.
-    /// An installed exponential preconditioner replaces the scalar seed:
+    /// Capped Cartesian L-BFGS step: severely clipped starts estimate inverse
+    /// curvature by finite difference; ordinary starts use `0.1 I`. Later
+    /// iterations use `sy/yy`. The finite-difference probe is clipped to the
+    /// objective bounds, and the quotient uses the displacement that remains
+    /// inside the box. Curvature pairs are reset when curvature is negative,
+    /// the uncapped step exceeds the per-atom cap, or the step opposes the
+    /// force. Trials use monotone acceptance after a stiffness probe and a
+    /// five-value nonmonotone window otherwise, with at most ten halvings
+    /// before a short steepest step.
+    /// An installed exponential preconditioner replaces that scalar seed:
     /// the two-loop applies `P^{-1}`, and a reset that would have stepped
     /// along `h0` times the force steps along `P^{-1}` times the force.
-    /// The trial is accepted when the energy rise is at most 1e-8, with at
-    /// most ten halvings, otherwise a short steepest step. Those force
-    /// steps use `P^{-1}` as well when the preconditioner is installed.
+    /// Those steepest fallbacks use `P^{-1}` as well. A failed solve falls
+    /// back to the scalar seed. The cap still limits the displacement.
     fn geometry_lbfgs_step<O>(
         &mut self,
         obj: &O,
@@ -1095,7 +1103,11 @@ impl Solver {
         O: DifferentiableObjective<f64> + ?Sized,
     {
         let cap = self.atom_maxmove.unwrap_or(0.2);
-        let mut h0 = 0.01_f64;
+        let nominal_motion = max_atom_displacement(&(self.istep * grad.mapv(|g| -g)));
+        let stiff = *self
+            .geometry_lbfgs_stiff
+            .get_or_insert(nominal_motion >= 64.0 * cap);
+        let mut h0 = if stiff { 0.01 } else { 0.1 };
         let mut forced: Option<Array1<f64>> = None;
         let force = grad.mapv(|g| -g);
         let cached = self.same_last_x(x);
@@ -1121,7 +1133,7 @@ impl Solver {
                 self.apply_geometry_curvature(sy, yy, &mut h0, &force, cap, &mut forced);
             }
         }
-        if forced.is_none() && self.steps == 0 {
+        if stiff && forced.is_none() && self.steps == 0 {
             let fnorm = l2(&force);
             if fnorm > 0.0 {
                 let unit = &force / fnorm;
@@ -1181,6 +1193,14 @@ impl Solver {
                 cap_displacement_atom(&direction, cap)
             }
         };
+        let reference = if stiff {
+            value
+        } else {
+            self.e_hist
+                .iter()
+                .copied()
+                .fold(value, |largest, candidate| largest.max(candidate))
+        };
         let mut alpha = 1.0;
         let mut accepted = false;
         let mut trial = x.clone();
@@ -1191,7 +1211,7 @@ impl Solver {
             let ev = obj.value_and_gradient(trial.view());
             tval = ev.0;
             tgrad = ev.1;
-            if tval.is_finite() && tval - value <= 1.0e-8 {
+            if tval.is_finite() && tval - reference <= 1.0e-8 {
                 accepted = true;
                 break;
             }
@@ -1206,6 +1226,12 @@ impl Solver {
             let ev = obj.value_and_gradient(trial.view());
             tval = ev.0;
             tgrad = ev.1;
+        }
+        if !stiff {
+            self.e_hist.push_back(tval);
+            if self.e_hist.len() > 5 {
+                self.e_hist.pop_front();
+            }
         }
         let old = x.clone();
         let gold = grad.clone();
@@ -1919,11 +1945,26 @@ impl Solver {
                 let mut raw = grad.mapv(|g| -g);
                 project_box_tangent(obj.bounds(), x, &mut raw);
                 project_box_tangent(obj.bounds(), x, &mut state.vel);
+                match fire_prepare_v2(state, &raw) {
+                    FirePreparation::Ready => {}
+                    FirePreparation::Rollback(correction) => {
+                        *x = obj.bounds().clip((&*x + &correction).view());
+                        let ev = obj.value_and_gradient(x.view());
+                        grad = ev.1;
+                        raw = grad.mapv(|g| -g);
+                        project_box_tangent(obj.bounds(), x, &mut raw);
+                    }
+                    FirePreparation::Stalled => {
+                        return Err(Error::FireStalled { steps: self.steps });
+                    }
+                }
+                let forward_start = x.clone();
                 let dx = if self.exp.is_some() {
                     let mut steepest = metric_vector(&self.exp, &raw);
                     project_box_tangent(obj.bounds(), x, &mut steepest);
-                    let mix = fire_mix(&self.exp, &state.vel, &raw, &steepest);
-                    fire_displacement_metric(state, &raw, &steepest, mix)
+                    fire_displacement_metric(state, &raw, &steepest, |vel| {
+                        fire_mix(&self.exp, vel, &raw, &steepest)
+                    })
                 } else {
                     fire_displacement(state, &raw)
                 };
@@ -1934,6 +1975,9 @@ impl Solver {
                     scale_step(x, &mut trial, cap);
                 }
                 trial = obj.bounds().clip(trial.view());
+                if matches!(state.kind, FireKind::V2) && state.dt > 0.0 {
+                    state.vel = (&trial - &forward_start) / state.dt;
+                }
                 *x = trial;
                 let ev = obj.value_and_gradient(x.view());
                 value = ev.0;

@@ -236,9 +236,12 @@ public:
     double exp_mu() const noexcept { return rgmin_solver_exp_mu(ptr_); }
     void set_accept(rgmin_accept_t accept) { rgmin_solver_set_accept(ptr_, accept); }
     /// Per-atom cap. Euclidean L-BFGS selects the geometry step and
-    /// ignores set_accept. The geometry probe is clipped to the
-    /// objective bounds. An installed exponential preconditioner is
-    /// that step's initial inverse Hessian. Non-positive clears it.
+    /// ignores set_accept. A nominal steepest trial at least 64 times
+    /// the cap takes one finite-difference curvature probe, clipped to
+    /// the objective bounds. Ordinary starts use 0.1 I and a five-value
+    /// nonmonotone window. An installed exponential preconditioner
+    /// replaces that scalar seed, including the steepest fallbacks.
+    /// Non-positive clears it.
     void set_atom_maxmove(double m) { rgmin_solver_set_atom_maxmove(ptr_, m); }
     void set_project_rigid(bool on) {
         rgmin_solver_set_project_rigid(ptr_, on ? 1 : 0);

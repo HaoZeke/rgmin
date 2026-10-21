@@ -30,7 +30,7 @@ pub(crate) fn project_box_tangent(
 pub enum FireKind {
     /// Bitzek 2006 / eOn native: velocity-Verlet, mix after the MD step.
     V1,
-    /// Guénolé 2020 FIRE 2.0: mix first, then semi-implicit Euler.
+    /// Guénolé 2020 FIRE 2.0: semi-implicit Euler, then velocity mixing.
     V2,
 }
 
@@ -42,6 +42,10 @@ pub struct FireState {
     pub vel: Array1<f64>,
     /// Time step.
     pub dt: f64,
+    /// Initial time step.
+    dt_start: f64,
+    /// Time-step floor.
+    dt_min: f64,
     /// Time-step cap.
     pub dt_max: f64,
     /// Mixing parameter.
@@ -50,6 +54,12 @@ pub struct FireState {
     pub alpha_start: f64,
     /// Consecutive downhill steps.
     pub n_pos: usize,
+    /// Consecutive non-positive-power steps.
+    n_neg: usize,
+    /// Divergence limit for consecutive non-positive-power steps.
+    n_neg_max: usize,
+    /// Integration steps since the last cold start.
+    steps: usize,
     /// Delay before growing `dt`.
     pub n_min: usize,
     /// `dt` growth factor.
@@ -64,15 +74,23 @@ impl FireState {
     /// Bitzek / Guénolé defaults. `dt` is [`crate::Control::istep`].
     pub fn new(kind: FireKind, dim: usize, dt: f64) -> Self {
         let dt = if dt > 0.0 { dt } else { 0.1 };
+        let (dt_max, dt_min, alpha_start, n_min) = match kind {
+            FireKind::V1 | FireKind::V2 => ((dt * 2.5).max(dt), 1.0e-12, 0.1, 5),
+        };
         Self {
             kind,
             vel: Array1::zeros(dim),
             dt,
-            dt_max: (dt * 2.5).max(dt),
-            alpha: 0.1,
-            alpha_start: 0.1,
+            dt_start: dt,
+            dt_min,
+            dt_max,
+            alpha: alpha_start,
+            alpha_start,
             n_pos: 0,
-            n_min: 5,
+            n_neg: 0,
+            n_neg_max: 2_000,
+            steps: 0,
+            n_min,
             f_inc: 1.1,
             f_dec: 0.5,
             f_alpha: 0.99,
@@ -84,6 +102,11 @@ impl FireState {
         self.vel.fill(0.0);
         self.alpha = self.alpha_start;
         self.n_pos = 0;
+        self.n_neg = 0;
+        if matches!(self.kind, FireKind::V2) {
+            self.dt = self.dt_start;
+            self.steps = 0;
+        }
     }
 }
 
@@ -140,8 +163,8 @@ fn adapt(state: &mut FireState, power: f64) {
         }
     } else {
         state.dt *= state.f_dec;
-        if state.dt < 1e-12 {
-            state.dt = 1e-12;
+        if state.dt < state.dt_min {
+            state.dt = state.dt_min;
         }
         state.vel.fill(0.0);
         state.alpha = state.alpha_start;
@@ -149,22 +172,68 @@ fn adapt(state: &mut FireState, power: f64) {
     }
 }
 
-/// Displacement `dx` from the current force `f = -g`.
+/// FIRE 2.0 preparation before the forward integrator.
+pub(crate) enum FirePreparation {
+    /// Continue from the current point.
+    Ready,
+    /// Apply the half-step-back correction and refresh the force.
+    Rollback(Array1<f64>),
+    /// Consecutive uphill steps exceeded Guénolé's limit.
+    Stalled,
+}
+
+/// Prepare a FIRE 2.0 step.
 ///
-/// FIRE 2.0 mixes and adapts on this force, then takes a semi-implicit
-/// Euler step. FIRE 1.0 takes the Verlet step first; the caller mixes
-/// on the force at the new point via [`fire_after_v1`].
+/// The caller must evaluate a fresh force after applying a nonzero
+/// correction, before passing that force to [`fire_displacement`].
+pub(crate) fn fire_prepare_v2(state: &mut FireState, force: &Array1<f64>) -> FirePreparation {
+    if !matches!(state.kind, FireKind::V2) {
+        return FirePreparation::Ready;
+    }
+    let power = crate::vecops::dot(force.view(), state.vel.view());
+    if power > 0.0 {
+        state.n_pos += 1;
+        state.n_neg = 0;
+        if state.n_pos > state.n_min {
+            state.dt = (state.dt * state.f_inc).min(state.dt_max);
+            state.alpha *= state.f_alpha;
+        }
+        FirePreparation::Ready
+    } else {
+        state.n_pos = 0;
+        state.n_neg += 1;
+        if state.n_neg > state.n_neg_max {
+            return FirePreparation::Stalled;
+        }
+        if state.steps + 1 >= state.n_min {
+            state.dt = (state.dt * state.f_dec).max(state.dt_min);
+        }
+        let correction = -0.5 * state.dt * &state.vel;
+        let moved = correction.iter().any(|v| *v != 0.0);
+        state.vel.fill(0.0);
+        state.alpha = state.alpha_start;
+        if moved {
+            FirePreparation::Rollback(correction)
+        } else {
+            FirePreparation::Ready
+        }
+    }
+}
+
+/// Forward displacement `dx` from the current force `f = -g`.
+///
+/// FIRE 2.0 applies the semi-implicit Euler update before mixing. The
+/// caller first applies [`fire_prepare_v2`]. FIRE 1.0 takes the Verlet
+/// step first; the caller mixes on the force at the new point via
+/// [`fire_after_v1`].
 pub fn fire_displacement(state: &mut FireState, force: &Array1<f64>) -> Array1<f64> {
     match state.kind {
         FireKind::V2 => {
-            let power = crate::vecops::dot(force.view(), state.vel.view());
-            if power > 0.0 {
-                mix_velocity(state, force);
-            }
-            adapt(state, power);
             for i in 0..state.vel.len() {
                 state.vel[i] += force[i] * state.dt;
             }
+            mix_velocity(state, force);
+            state.steps += 1;
             &state.vel * state.dt
         }
         FireKind::V1 => {
@@ -188,27 +257,31 @@ pub fn fire_after_v1(state: &mut FireState, force: &Array1<f64>) {
 
 /// Displacement when the physical force and the steepest direction differ.
 ///
-/// `power_force` is `F = -∇E`. The power is `F · v`. `steepest` is the
-/// kick and the mix direction (`P^{-1} F` when a metric is installed).
-/// `mix` supplies the metric norms. With `power_force == steepest` and
-/// `mix == None` this is [`fire_displacement`], except that the mix
-/// clamps `alpha` into `[0, 1]`.
-pub fn fire_displacement_metric(
+/// `power_force` is `F = -∇E`. FIRE 2.0 power, rollback, and the time-step
+/// delay are [`fire_prepare_v2`] on that force, which the caller runs first.
+/// `steepest` is the kick and the mix direction (`P^{-1} F` when a metric
+/// is installed). `mix_at` is called with the post-kick velocity on FIRE 2.0
+/// and is not called on FIRE 1.0. FIRE 2.0 then mixes and advances the
+/// integration counter. FIRE 1.0 only takes the Verlet kick; the caller
+/// mixes on the new force via [`fire_after_v1_metric`].
+pub fn fire_displacement_metric<F>(
     state: &mut FireState,
     power_force: &Array1<f64>,
     steepest: &Array1<f64>,
-    mix: Option<FireMix>,
-) -> Array1<f64> {
+    mut mix_at: F,
+) -> Array1<f64>
+where
+    F: FnMut(&Array1<f64>) -> Option<FireMix>,
+{
+    debug_assert_eq!(power_force.len(), steepest.len());
     match state.kind {
         FireKind::V2 => {
-            let power = crate::vecops::dot(power_force.view(), state.vel.view());
-            if power > 0.0 {
-                mix_toward(state, steepest, mix);
-            }
-            adapt(state, power);
             for i in 0..state.vel.len() {
                 state.vel[i] += steepest[i] * state.dt;
             }
+            let mix = mix_at(&state.vel);
+            mix_toward(state, steepest, mix);
+            state.steps += 1;
             &state.vel * state.dt
         }
         FireKind::V1 => {
@@ -273,8 +346,58 @@ mod tests {
         let mut state = FireState::new(FireKind::V2, 2, 0.2);
         state.vel = array![1.0, 0.0];
         let force = array![-1.0, 0.0];
-        let _ = fire_displacement(&mut state, &force);
+        let FirePreparation::Rollback(correction) = fire_prepare_v2(&mut state, &force) else {
+            panic!("expected rollback");
+        };
+        let dx = fire_displacement(&mut state, &force);
         assert_eq!(state.n_pos, 0);
         assert!((state.alpha - state.alpha_start).abs() < 1e-15);
+        assert!((state.dt - 0.2).abs() < 1e-15);
+        assert!((correction[0] + 0.1).abs() < 1e-15);
+        assert!((dx[0] + 0.04).abs() < 1e-15);
+    }
+
+    #[test]
+    fn v2_delays_the_first_shrink() {
+        let mut state = FireState::new(FireKind::V2, 1, 0.1);
+        state.steps = 4;
+        state.vel[0] = 1.0;
+        let _ = fire_prepare_v2(&mut state, &array![-1.0]);
+        assert!((state.dt - 0.05).abs() < 1e-15);
+    }
+
+    #[test]
+    fn v2_metric_mixes_after_the_steepest_kick() {
+        let mut state = FireState::new(FireKind::V2, 2, 0.2);
+        state.vel = array![1.0, 0.0];
+        let raw = array![1.0, 0.0];
+        assert!(matches!(
+            fire_prepare_v2(&mut state, &raw),
+            FirePreparation::Ready
+        ));
+        let steepest = array![0.0, 2.0];
+        let mut seen = array![0.0, 0.0];
+        let dx = fire_displacement_metric(&mut state, &raw, &steepest, |vel| {
+            seen.assign(vel);
+            Some(FireMix {
+                vel: 1.0,
+                direction: 2.0,
+            })
+        });
+        assert!((seen[0] - 1.0).abs() < 1e-15 && (seen[1] - 0.4).abs() < 1e-15);
+        assert!((dx[0] - 0.18).abs() < 1e-15, "dx={dx:?}");
+        assert!((dx[1] - 0.092).abs() < 1e-15, "dx={dx:?}");
+        assert_eq!(state.steps, 1);
+    }
+
+    #[test]
+    fn v2_stops_after_the_negative_power_limit() {
+        let mut state = FireState::new(FireKind::V2, 1, 0.1);
+        state.n_neg = state.n_neg_max;
+        state.vel[0] = 1.0;
+        assert!(matches!(
+            fire_prepare_v2(&mut state, &array![-1.0]),
+            FirePreparation::Stalled
+        ));
     }
 }
