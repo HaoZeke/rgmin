@@ -39,6 +39,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Newton and dogleg leave a first-order saddle. When the force is
+  already under `gtol`, the report reads the analytic Hessian. The
+  floor is `max(|gtol|, 1e-6, 1e-8 ||H||_F)`. A lowest eigenvalue
+  below minus that floor steps along the mode, scaled to the
+  per-atom cap, at most four times. The dogleg radius restarts from
+  the initial step. A converged report costs one extra Hessian.
+- With a per-atom cap, Euclidean L-BFGS takes a geometry step and
+  ignores `set_accept`. The first iteration estimates the inverse
+  curvature by a finite difference along the force. That probe is
+  clipped to the objective bounds, and the quotient uses the
+  displacement that remains. Later iterations use `s·y / y·y`.
+  Memory resets when the curvature is negative, the uncapped step
+  exceeds the cap, or the step opposes the force. A trial is kept
+  when the energy rises by at most 1e-8, with at most ten halvings,
+  otherwise a short steepest-descent step. Uncapped L-BFGS keeps
+  the two-loop step and the Wolfe search. A HiGHS feasible set and
+  a non-Euclidean manifold stay on that path.
 - CI runs on pushes and pull requests to `develop` as well as `main`,
   and installs numpy and scipy for the HiGHS reference tests.
 - Dogleg updates its trust radius from the dogleg step, and the
