@@ -88,6 +88,114 @@ fn dogleg_and_newton_leave_a_saddle() {
 }
 
 #[test]
+fn geometry_lbfgs_clips_the_finite_difference_probe() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use std::sync::{Mutex, OnceLock};
+
+    struct Tight {
+        seen: Mutex<Vec<f64>>,
+    }
+    impl Objective<f64> for Tight {
+        fn dim(&self) -> usize {
+            1
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![0.0], array![0.004], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            self.value_and_gradient(x).0
+        }
+    }
+    impl Gradient<f64> for Tight {
+        fn dim(&self) -> usize {
+            1
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            self.value_and_gradient(x).1
+        }
+    }
+    impl DifferentiableObjective<f64> for Tight {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            let x0 = x[0];
+            assert!(
+                (0.0..=0.004).contains(&x0),
+                "finite-difference probe left the box at {x0}"
+            );
+            self.seen.lock().expect("seen").push(x0);
+            (0.5 * (x0 - 1.0) * (x0 - 1.0), array![x0 - 1.0])
+        }
+    }
+
+    let obj = Tight {
+        seen: Mutex::new(Vec::new()),
+    };
+    let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 1);
+    solver.set_atom_maxmove(0.2);
+    let mut x = array![0.0];
+    solver.step(&obj, &mut x).expect("step");
+    let seen = obj.seen.lock().expect("seen").clone();
+    assert!(
+        seen.iter().any(|v| (*v - 0.004).abs() < 1e-15),
+        "clipped probe 0.004 was not evaluated: {seen:?}"
+    );
+    assert!(
+        seen.iter().all(|v| *v <= 0.004 + 1e-15),
+        "probe outside the box: {seen:?}"
+    );
+}
+
+#[test]
+fn geometry_lbfgs_resets_on_negative_curvature() {
+    let obj = rgmin::Oracle::unbounded(1, |x| {
+        let y = x[0];
+        (-0.5 * y * y, array![-y])
+    });
+    let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 1);
+    assert!(solver.push_pair(array![0.1].view(), array![0.1].view()));
+    assert_eq!(solver.pair_count(), 1);
+    solver.set_atom_maxmove(0.2);
+    let mut x = array![1.0];
+    solver.step(&obj, &mut x).expect("step");
+    assert_eq!(
+        solver.pair_count(),
+        0,
+        "negative curvature left a pair in memory"
+    );
+    assert!(
+        (x[0] - 1.2).abs() < 1e-12,
+        "reset step was not the per-atom cap, x={x:?}"
+    );
+}
+
+#[test]
+fn geometry_lbfgs_falls_back_after_ten_halvings() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let calls = AtomicU32::new(0);
+    let obj = rgmin::Oracle::unbounded(1, |x| {
+        calls.fetch_add(1, Ordering::Relaxed);
+        let y = x[0];
+        let value = if (y - 1.0).abs() < 1e-12 { 0.0 } else { 1.0 };
+        (value, array![y])
+    });
+    let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 1);
+    solver.set_atom_maxmove(0.5);
+    let mut x = array![1.0];
+    solver.step(&obj, &mut x).expect("step");
+    assert!(
+        (x[0] - 0.9).abs() < 1e-12,
+        "fallback was not the short steepest step, x={x:?}"
+    );
+    assert!(
+        calls.load(Ordering::Relaxed) > 10,
+        "halving did not run, calls={}",
+        calls.load(Ordering::Relaxed)
+    );
+}
+
+#[test]
 fn uncapped_lbfgs_still_takes_the_unit_newton_step() {
     let obj = rgmin::Oracle::unbounded(2, bowl);
     let mut solver = Solver::new(Method::lbfgs(), control(1e-12), 2);

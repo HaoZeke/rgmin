@@ -945,6 +945,8 @@ impl Solver {
     /// eOn L-BFGS step: finite-difference inverse curvature on the first
     /// iteration, `sy/yy` after that, reset when curvature is negative, the
     /// uncapped step exceeds the per-atom cap, or the step opposes the force.
+    /// The finite-difference probe is clipped to the objective bounds, and
+    /// the quotient uses the displacement that remains inside the box.
     /// The trial is accepted when the energy rise is at most 1e-8, with at
     /// most ten halvings, otherwise a short steepest step.
     fn geometry_lbfgs_step<O>(
@@ -988,10 +990,18 @@ impl Solver {
             let fnorm = l2(&force);
             if fnorm > 0.0 {
                 let unit = &force / fnorm;
-                let probe = &*x + &(0.01 * &unit);
-                let (_efd, gfd) = obj.value_and_gradient(probe.view());
-                let delta = &gfd - &grad;
-                let curvature = delta.dot(&unit) / 0.01;
+                // 0.01 is the eOn probe length. Clip before the evaluation:
+                // the raw point can lie outside the objective box.
+                let raw = &*x + &(0.01 * &unit);
+                let probe = obj.bounds().clip(raw.view());
+                let along = (&probe - &*x).dot(&unit);
+                let curvature = if along > 0.0 && along.is_finite() {
+                    let (_efd, gfd) = obj.value_and_gradient(probe.view());
+                    let delta = &gfd - &grad;
+                    delta.dot(&unit) / along
+                } else {
+                    -1.0
+                };
                 if curvature > 0.0 && curvature.is_finite() {
                     h0 = 1.0 / curvature;
                 } else if let Inner::Lbfgs(solver) = &mut self.inner {
