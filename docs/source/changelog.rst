@@ -6,6 +6,11 @@ Changelog
 Unreleased
 ~~~~~~~~~~
 
+``cargo cinstall`` installs the hand-written ``include/rgmin.h`` and
+``dlpack/dlpack.h``. The header compiles as C and as C++. Version
+macros are ``RGMIN_H_MAJOR``, ``RGMIN_H_MINOR``, and ``RGMIN_H_PATCH``.
+``HighsInt`` stays out of the public header.
+
 ``rgmin_solver_set_box``: per-coordinate HiGHS box on ``x + p``.
 A NULL side is unbounded. Same status as ``set_highs`` (0, or 1
 without the ``highs`` feature). ``rgmin_solver_set_trust`` is the

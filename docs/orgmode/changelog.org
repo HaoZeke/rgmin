@@ -6,6 +6,11 @@
 
 ** Unreleased
 
+~cargo cinstall~ installs the hand-written ~include/rgmin.h~ and
+~dlpack/dlpack.h~. The header compiles as C and as C++. Version
+macros are ~RGMIN_H_MAJOR~, ~RGMIN_H_MINOR~, and ~RGMIN_H_PATCH~.
+~HighsInt~ stays out of the public header.
+
 Newton and dogleg leave a first-order saddle. When the force is
 already under ~gtol~, the report reads the analytic Hessian. The
 floor is max(abs(gtol), 1e-6, 1e-8 times the Frobenius norm of H).

@@ -16,7 +16,7 @@ Layer diagram
     |  include/xts/optimize.hpp                     |
     |  include/xts/xtensor.hpp                      |
     +-----------------------------------------------+
-    |  C ABI (cbindgen + hand headers)              |
+    |  C ABI (hand-written include/rgmin.h)         |
     |  include/xts.h                                |
     |  rgmin_solver_t create/step/free                |
     |  rgmin_minimize over dlpk tensors               |

@@ -18,6 +18,11 @@ C and C++ reach the Rust solvers through `include/rgmin.h`
 `include/xts.h` and `include/xts/optimize.hpp` are compatibility
 aliases for old hosts. There is no second solver implementation in C++.
 
+`cargo cinstall --prefix=/usr/local --features capi` installs that
+header, the C++ wrappers, and `dlpack/dlpack.h`. The pkg-config name
+is `rgmin`. Version macros are `RGMIN_H_MAJOR`, `RGMIN_H_MINOR`, and
+`RGMIN_H_PATCH`.
+
 CPU f64 is wired now. A non-CPU tensor returns `RGMIN_UNSUPPORTED_DEVICE`
 so a CUDA path does not change the ABI.
 

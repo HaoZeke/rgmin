@@ -38,9 +38,10 @@ rustdoc, exported.
 C
 ~
 
-``include/xts.h`` (and the ``rgmin.h`` cbindgen name). The hourglass
-is ``rgmin_solver_create`` / ``rgmin_solver_step`` /
-``rgmin_solver_free``, plus ``rgmin_minimize``. Tensors are dlpk
+``include/rgmin.h`` is the C ABI. ``cargo cinstall`` installs that
+header and ``dlpack/dlpack.h``. ``include/xts.h`` is the compatibility
+alias. The hourglass is ``rgmin_solver_create`` / ``rgmin_solver_step``
+/ ``rgmin_solver_free``, plus ``rgmin_minimize``. Tensors are dlpk
 ``DLManagedTensorVersioned``. HTML for this waist is Doxygen plus
 doxyYoda; see `howto/doxygen <../howto/doxygen.rst>`_.
 

@@ -8,6 +8,24 @@ a time hold an opaque ``rgmin_solver_t``; scripts that want a one-shot
 solve still call ``rgmin_minimize``. Every vector is a dlpk
 ``DLManagedTensorVersioned`` tensor.
 
+Install
+~~~~~~~
+
+.. code:: bash
+
+    cargo cinstall --prefix=/usr/local --features capi
+
+That installs the hand-written ``include/rgmin.h``, the C++ wrappers
+under ``include/rgmin/`` and ``include/xts/``, and ``dlpack/dlpack.h``.
+The pkg-config file is ``rgmin``. A C or C++ file includes ``rgmin.h``
+and links with ``pkg-config --cflags --libs rgmin``. The crate version
+macros are ``RGMIN_H_MAJOR``, ``RGMIN_H_MINOR``, and ``RGMIN_H_PATCH``.
+HiGHS ``HighsInt`` is not a type in this header. The constrained
+setters take ``int32_t`` and the closed ``rgmin_highs_*`` enums.
+
+Pass ``--features capi``. The C symbols are compiled only with that
+feature. ``cbindgen`` output is not installed.
+
 Session (eOn / ASE ``step``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
