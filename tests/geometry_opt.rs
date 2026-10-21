@@ -1,5 +1,10 @@
 //! Geometry L-BFGS and the Newton / dogleg saddle kick.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
 use ndarray::{Array1, Array2, ArrayView1, array};
 use rgmin::{Control, HessianOracle, Method, NewtonKind, Solver};
 
@@ -45,6 +50,23 @@ fn geometry_lbfgs_reaches_the_bowl_with_a_per_atom_cap() {
     }
     assert!(last <= 1e-8, "geometry L-BFGS |g|={last} x={x:?}");
     assert!(x.iter().all(|v| v.abs() < 1e-6), "x={x:?}");
+}
+
+#[test]
+fn geometry_lbfgs_probes_only_severely_clipped_starts() {
+    for (start, expected_calls) in [(1.0, 2), (10_000.0, 3)] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&calls);
+        let obj = rgmin::Oracle::unbounded(3, move |x: ArrayView1<f64>| {
+            seen.fetch_add(1, Ordering::Relaxed);
+            bowl(x)
+        });
+        let mut solver = Solver::new(Method::lbfgs(), control(1e-12), 3);
+        solver.set_atom_maxmove(0.2);
+        let mut x = array![start, 0.0, 0.0];
+        solver.step(&obj, &mut x).expect("step");
+        assert_eq!(calls.load(Ordering::Relaxed), expected_calls);
+    }
 }
 
 #[test]
@@ -164,8 +186,8 @@ fn geometry_lbfgs_resets_on_negative_curvature() {
         "negative curvature left a pair in memory"
     );
     assert!(
-        (x[0] - 1.2).abs() < 1e-12,
-        "reset step was not the per-atom cap, x={x:?}"
+        (x[0] - 1.1).abs() < 1e-12,
+        "reset step did not use the ordinary-start scale, x={x:?}"
     );
 }
 
