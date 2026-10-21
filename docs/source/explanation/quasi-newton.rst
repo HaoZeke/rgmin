@@ -49,12 +49,61 @@ direction = -r
 with the standard scalar seed H0 = (s . y) / (y . y) I from the most
 recent pair, a one-parameter fit of the average curvature along the
 last step; positivity of that scalar is again the pair condition.
+An installed exponential preconditioner replaces that scalar.
+The middle product of the two-loop solves with the preconditioner,
+so the initial inverse Hessian is taken from it: ``H0 = P^{-1}``.
+Packwood, Kermode, Mones, Bernstein, Woolley, Gould, Ortner, and
+Csányi, *A universal preconditioner for simulating condensed phase
+materials*, J. Chem. Phys. 144, 164109 (2016)
+(`10.1063/1.4947024 <https://doi.org/10.1063/1.4947024>`_;
+:cite:`packwoodUniversalPreconditionerSimulating2016`).
+A dense pair or Lindh matrix passed into the two-loop still wins.
+With no preconditioner the scalar seed above is unchanged.
 Every dot and axpy in the crate's two-loop routes through the
 ``vecops`` seam, so the recursion is written once and the storage
 backend (serial, ``par``, and by design a later device backend) is a
 detail behind four functions.
 
-3 Stale pairs and the cautious update
+3 The geometry step
+-------------------
+
+A per-atom cap (``set_atom_maxmove``) on a Euclidean L-BFGS session
+selects this step and ignores ``set_accept``. A HiGHS feasible set
+and a non-Euclidean manifold stay on the two-loop path above.
+Uncapped L-BFGS is unchanged: the scalar seed, and the strong Wolfe
+search unless acceptance is ``none``.
+
+The initial scale is selected from the size of the nominal steepest
+trial. A trial that exceeds the per-atom cap by at least 64 times
+receives one directional-curvature probe; ordinary trials start from
+``H0 = 0.1 I`` without spending that force call. The probe is
+``x + 0.01 u``, with ``u`` the unit force, clipped to the objective
+bounds before it is evaluated. The quotient divides by the
+displacement that remains along ``u``. A probe the box reduces to
+nothing, or a non-positive result, clears the memory and the step
+is steepest descent scaled to the cap. Later iterations set
+``H0 = (s . y) / (y . y)`` when both dots are positive. Negative
+curvature clears the stored pairs and uses that same steepest step.
+The stiffness probe uses monotone energy acceptance. An ordinary
+start admits an energy below the largest of the last five accepted
+values.
+
+An installed exponential preconditioner replaces that scalar seed.
+The two-loop applies ``P^{-1}`` in its place, and a reset that would
+have stepped along ``h0`` times the force steps along ``P^{-1}`` times
+the force. The negative-curvature step and the short fallback after
+ten halvings keep the coefficients 1000 and one tenth, applied to
+``P^{-1}`` times the force. A failed solve with ``P`` falls back to the
+scalar seed. The per-atom cap still limits the displacement.
+
+An uncapped direction longer than the cap, or one that opposes the
+force, also clears the memory and replaces the direction with that
+capped seed. The trial is kept when the energy rises by at most
+1e-8. The step is halved at most ten times. If none of those trials
+pass, the memory is cleared and a short steepest step, one tenth of
+the preconditioned force and then the cap, is taken.
+
+4 Stale pairs and the cautious update
 -------------------------------------
 
 A pair with y . s <= 0 would corrupt the inverse model, so the update
@@ -64,7 +113,7 @@ keeps far-from-quadratic steps from polluting the memory. Skipping is
 always sound: the two-loop over any subset of valid pairs is the BFGS
 inverse built from exactly those pairs.
 
-4 Session hooks: forget, watched, recognized
+5 Session hooks: forget, watched, recognized
 --------------------------------------------
 
 ``Solver`` (and anneal's ``WarmLbfgs`` face over it) exposes three
@@ -85,7 +134,7 @@ lifecycle hooks whose safety arguments are one sentence each:
   the knowledge is. The identity and refund tests in
   ``tests/lbfgs_state.rs`` pin both behaviors.
 
-5 Non-finite input is not convergence
+6 Non-finite input is not convergence
 -------------------------------------
 
 A gradient with a NaN component has no norm worth trusting; the crate

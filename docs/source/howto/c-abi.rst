@@ -8,6 +8,24 @@ a time hold an opaque ``rgmin_solver_t``; scripts that want a one-shot
 solve still call ``rgmin_minimize``. Every vector is a dlpk
 ``DLManagedTensorVersioned`` tensor.
 
+Install
+~~~~~~~
+
+.. code:: bash
+
+    cargo cinstall --prefix=/usr/local --features capi
+
+That installs the hand-written ``include/rgmin.h``, the C++ wrappers
+under ``include/rgmin/`` and ``include/xts/``, and ``dlpack/dlpack.h``.
+The pkg-config file is ``rgmin``. A C or C++ file includes ``rgmin.h``
+and links with ``pkg-config --cflags --libs rgmin``. The crate version
+macros are ``RGMIN_H_MAJOR``, ``RGMIN_H_MINOR``, and ``RGMIN_H_PATCH``.
+HiGHS ``HighsInt`` is not a type in this header. The constrained
+setters take ``int32_t`` and the closed ``rgmin_highs_*`` enums.
+
+Pass ``--features capi``. The C symbols are compiled only with that
+feature. ``cbindgen`` output is not installed.
+
 Session (eOn / ASE ``step``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -31,6 +49,13 @@ use ``rgmin_solver_step_hess_fg`` (fused energy and gradient, one host
 potential call). Split ``eval`` / ``grad`` callbacks remain. ``accept``
 is ``none`` (take the clipped step), ``energy``, or ``nonmonotone``.
 Callbacks are arguments of each step, not stored on the handle.
+
+``rgmin_solver_set_exp`` installs the exponential preconditioner.
+``mu`` NaN estimates the energy scale on the next step.
+``rgmin_solver_exp_mu`` returns that scale, or NaN when none is
+installed. L-BFGS uses the factor as ``H0``. FIRE and nonlinear CG
+use it as the metric. ``rgmin_solver_clear_exp`` drops it.
+``abi_minor`` 28.
 
 A HiGHS feasible set is ``rgmin_solver_set_highs`` plus
 ``rgmin_solver_set_box`` (NULL side unbounded), optional

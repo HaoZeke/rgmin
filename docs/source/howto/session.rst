@@ -27,7 +27,18 @@ Rust
 
 ``step`` is one outer iteration. ``step_hess`` / ``step_hess_fg`` take a
 host Hessian. ``forget`` drops pair history, conjugacy, and moments.
-``set_atom_maxmove`` is the eOn per-atom clip.
+``set_atom_maxmove`` is the eOn per-atom cap. On a Euclidean L-BFGS
+session it selects the geometry step and ignores ``set_accept``.
+A nominal steepest trial at least 64 times the cap takes one
+finite-difference curvature probe, clipped to the objective bounds.
+Ordinary starts use ``H0 = 0.1 I`` and a five-value nonmonotone window.
+Later iterations use ``s.y / y.y``. Negative curvature clears the
+stored pairs. A trial is kept when the energy rises by at most
+1e-8, with at most ten halvings; otherwise a short steepest step
+is taken. When ``set_exp`` is installed, that preconditioner replaces
+the scalar seed, including those steepest fallbacks, and the cap
+still limits the displacement. A HiGHS feasible set and a
+non-Euclidean manifold keep the two-loop step.
 ``set_project_rigid`` projects translations and rotations on isolated
 clusters.
 
@@ -59,33 +70,41 @@ Setters
 
 .. table::
 
-    +-----------------------+---------------------------------------------------------+
-    | Setter                | Role                                                    |
-    +=======================+=========================================================+
-    | ``set_qn_step``       | Two-loop, Newton, or RFO when a host Hessian is present |
-    +-----------------------+---------------------------------------------------------+
-    | ``set_accept``        | ``none`` / ``energy`` / ``nonmonotone``                 |
-    +-----------------------+---------------------------------------------------------+
-    | ``set_atom_maxmove``  | Per-atom clip (preferred over a Euclidean cap)          |
-    +-----------------------+---------------------------------------------------------+
-    | ``set_project_rigid`` | Drop rigid modes on isolated clusters                   |
-    +-----------------------+---------------------------------------------------------+
-    | ``set_extra_updates`` | Al-Baali extra L-BFGS pairs                             |
-    +-----------------------+---------------------------------------------------------+
-    | ``set_cautious``      | Li--Fukushima pair filter                               |
-    +-----------------------+---------------------------------------------------------+
-    | ``set_highs``         | Feasible-set QP; returns 1 without ``--features highs`` |
-    +-----------------------+---------------------------------------------------------+
-    | ``set_box``           | Per-coordinate box on ``x + p``; NULL side unbounded    |
-    +-----------------------+---------------------------------------------------------+
-    | ``set_trust``         | L_inf HiGHS trust radius; non-positive clears           |
-    +-----------------------+---------------------------------------------------------+
-    | ``add_equality``      | Sparse ``a · p = rhs`` on the HiGHS set                 |
-    +-----------------------+---------------------------------------------------------+
-    | ``set_manifold``      | Embedded geometry; ``rigid_quotient`` for 3N clusters   |
-    +-----------------------+---------------------------------------------------------+
-    | ``set_masses``        | Per-atom masses for ``mw_rigid`` (Page–McIver)          |
-    +-----------------------+---------------------------------------------------------+
+    +-----------------------+--------------------------------------------------------------------------+
+    | Setter                | Role                                                                     |
+    +=======================+==========================================================================+
+    | ``set_qn_step``       | Two-loop, Newton, or RFO when a host Hessian is present                  |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_exp``           | Packwood preconditioner from a caller neighbour list.                    |
+    |                       | L-BFGS takes ``H0 = P^{-1}``, including the geometry step.               |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``clear_exp``         | Drop that preconditioner                                                 |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``exp_mu``            | Its energy scale after estimation, or none when it is not installed      |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_accept``        | ``none`` / ``energy`` / ``nonmonotone``                                  |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_atom_maxmove``  | Per-atom cap. Euclidean L-BFGS takes the geometry step and ignores       |
+    |                       | ``set_accept``. ``set_exp`` supplies its initial inverse Hessian.        |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_project_rigid`` | Drop rigid modes on isolated clusters                                    |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_extra_updates`` | Al-Baali extra L-BFGS pairs                                              |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_cautious``      | Li--Fukushima pair filter                                                |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_highs``         | Feasible-set QP; returns 1 without ``--features highs``                  |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_box``           | Per-coordinate box on ``x + p``; NULL side unbounded                     |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_trust``         | L_inf HiGHS trust radius; non-positive clears                            |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``add_equality``      | Sparse ``a · p = rhs`` on the HiGHS set                                  |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_manifold``      | Embedded geometry; ``rigid_quotient`` for 3N clusters                    |
+    +-----------------------+--------------------------------------------------------------------------+
+    | ``set_masses``        | Per-atom masses for ``mw_rigid`` (Page–McIver)                           |
+    +-----------------------+--------------------------------------------------------------------------+
 
 When to use ``rgmin_minimize`` instead
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

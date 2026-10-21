@@ -6,6 +6,11 @@
 
 ** Unreleased
 
+~cargo cinstall~ installs the hand-written ~include/rgmin.h~ and
+~dlpack/dlpack.h~. The header compiles as C and as C++. Version
+macros are ~RGMIN_H_MAJOR~, ~RGMIN_H_MINOR~, and ~RGMIN_H_PATCH~.
+~HighsInt~ stays out of the public header.
+
 The exponential preconditioner of Packwood et al., J. Chem. Phys.
 144, 164109 (2016)
 ([[https://doi.org/10.1063/1.4947024][10.1063/1.4947024]])

@@ -1,6 +1,11 @@
 #ifndef RGMIN_H
 #define RGMIN_H
 
+/* Crate version. cargo cinstall ships this header. */
+#define RGMIN_H_MAJOR 0
+#define RGMIN_H_MINOR 2
+#define RGMIN_H_PATCH 0
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -8,6 +13,10 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 #include <dlpack/dlpack.h>
+
+/* dlpack names the struct and does not typedef it. C requires the alias.
+ * C++ already accepts the struct name as a type. */
+typedef struct DLManagedTensorVersioned DLManagedTensorVersioned;
 
 /* The direct eindir entry point only needs opaque handles here. Consumers
  * that use eindir_core's constructors can include its full header first. */
