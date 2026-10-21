@@ -36,6 +36,7 @@ typedef rgmin_curv_fn xts_curv_fn;
 typedef rgmin_scg_params_t xts_scg_params_t;
 typedef rgmin_eigen_kind_t xts_eigen_kind_t;
 typedef rgmin_eigen_params_t xts_eigen_params_t;
+typedef rgmin_exp_t xts_exp_t;
 typedef rgmin_lowest_mode_t xts_lowest_mode_t;
 typedef rgmin_hvp_fn xts_hvp_fn;
 
@@ -97,6 +98,9 @@ typedef rgmin_hvp_fn xts_hvp_fn;
 #define xts_solver_rebase rgmin_solver_rebase
 #define xts_solver_set_maxmove rgmin_solver_set_maxmove
 #define xts_solver_set_qn_step rgmin_solver_set_qn_step
+#define xts_solver_set_exp rgmin_solver_set_exp
+#define xts_solver_clear_exp rgmin_solver_clear_exp
+#define xts_solver_exp_mu rgmin_solver_exp_mu
 #define xts_solver_set_accept rgmin_solver_set_accept
 #define xts_solver_push_pair rgmin_solver_push_pair
 #define xts_solver_search_direction rgmin_solver_search_direction

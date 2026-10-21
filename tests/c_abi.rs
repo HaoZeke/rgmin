@@ -10,11 +10,12 @@ use eindir_core::ffi::eindir_core_abi_stamp;
 use eindir_core::ffi::{eindir_objective_t, eindir_status_t};
 use rgmin::ffi::{
     rgmin_abi_compatible, rgmin_abi_stamp, rgmin_accept_t, rgmin_conjugacy_t, rgmin_control_t,
-    rgmin_curv_fn, rgmin_eigen_kind_t, rgmin_eigen_params_t, rgmin_last_error,
+    rgmin_curv_fn, rgmin_eigen_kind_t, rgmin_eigen_params_t, rgmin_exp_t, rgmin_last_error,
     rgmin_lowest_eigenpair, rgmin_lowest_mode_t, rgmin_method_from_name, rgmin_method_t,
     rgmin_minimize, rgmin_minimize_eindir, rgmin_minimize_scg, rgmin_report_t, rgmin_scg_params_t,
-    rgmin_solver_create, rgmin_solver_free, rgmin_solver_gradient_calls, rgmin_solver_hvp_calls,
-    rgmin_solver_set_accept, rgmin_solver_step, rgmin_solver_step_fg, rgmin_solver_step_hvp,
+    rgmin_solver_clear_exp, rgmin_solver_create, rgmin_solver_exp_mu, rgmin_solver_free,
+    rgmin_solver_gradient_calls, rgmin_solver_hvp_calls, rgmin_solver_set_accept,
+    rgmin_solver_set_exp, rgmin_solver_step, rgmin_solver_step_fg, rgmin_solver_step_hvp,
     rgmin_status_t, rgmin_tensor_borrow_cpu_f64, rgmin_tensor_free,
 };
 use rgpot_core::eindir::{rgpot_potential_free_eindir, rgpot_potential_new_eindir};
@@ -799,7 +800,7 @@ fn lowest_eigenpair_elpa_is_unavailable() {
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 27);
+    assert_eq!(stamp.abi_minor, 28);
     assert_eq!(stamp.layout_revision, 4);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
 }
@@ -1852,4 +1853,119 @@ fn newton_cg_method_string_and_counters_cross_the_c_abi() {
     assert_eq!(count.hvps.load(Ordering::Relaxed), hvps);
     assert!(hvps > 0, "analytic products were not counted");
     unsafe { rgmin_solver_free(session) };
+}
+
+unsafe extern "C" fn exp_chain_eval(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    value_out: *mut f64,
+) -> rgmin_status_t {
+    let (p, n) = unsafe { cpu_f64(x) };
+    let mut v = 0.0;
+    for i in 0..n {
+        let c = unsafe { *p.add(i) };
+        v += c * c;
+    }
+    unsafe { *value_out = 0.5 * v };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn exp_chain_grad(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    g: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let (p, n) = unsafe { cpu_f64(x) };
+    let (gp, gn) = unsafe { cpu_f64(g as *const _) };
+    assert_eq!(gn, n);
+    for i in 0..n {
+        unsafe { *(gp as *mut f64).add(i) = *p.add(i) };
+    }
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+#[test]
+fn c_abi_exp_installs_and_steps() {
+    let ctrl = rgmin_control_t {
+        maxiter: 1,
+        gtol: 1e-12,
+        istep: 1.0,
+        memory: 4,
+        maxmove: 0.0,
+    };
+    let bad = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_LBFGS, &ctrl, 2) };
+    let params = rgmin_exp_t {
+        a: f64::NAN,
+        c_stab: f64::NAN,
+        mu: 2.0,
+        r_nn: 1.0,
+        r_cut: 0.0,
+        length_x: 0.0,
+        length_y: 0.0,
+        length_z: 0.0,
+        recalc_mu: 0,
+    };
+    let pair_i = [0u32];
+    let pair_j = [1u32];
+    let dist = [1.0f64];
+    let st = unsafe {
+        rgmin_solver_set_exp(
+            bad,
+            &params,
+            pair_i.as_ptr(),
+            pair_j.as_ptr(),
+            dist.as_ptr(),
+            1,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    assert_eq!(st, rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    unsafe { rgmin_solver_free(bad) };
+
+    let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_LBFGS, &ctrl, 6) };
+    assert!(!session.is_null());
+    let st = unsafe {
+        rgmin_solver_set_exp(
+            session,
+            &params,
+            pair_i.as_ptr(),
+            pair_j.as_ptr(),
+            dist.as_ptr(),
+            1,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+    let mu = unsafe { rgmin_solver_exp_mu(session) };
+    assert!((mu - 2.0).abs() < 1e-12, "mu {mu}");
+
+    let mut x = [0.4, 0.1, -0.2, -0.3, 0.2, 0.05];
+    let mut out = rgmin_report_t {
+        value: 0.0,
+        steps: 0,
+        grad_norm: 0.0,
+    };
+    let xt = unsafe { rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), 6) };
+    let st = unsafe {
+        rgmin_solver_step(
+            session,
+            Some(exp_chain_eval),
+            Some(exp_chain_grad),
+            std::ptr::null_mut(),
+            xt,
+            &mut out,
+        )
+    };
+    unsafe { rgmin_tensor_free(xt) };
+    assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+    assert!(out.grad_norm < 1.0, "grad {}", out.grad_norm);
+    unsafe {
+        rgmin_solver_clear_exp(session);
+        assert!(rgmin_solver_exp_mu(session).is_nan());
+        rgmin_solver_free(session);
+    }
 }

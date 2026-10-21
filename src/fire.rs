@@ -122,6 +122,38 @@ fn mix_velocity(state: &mut FireState, force: &Array1<f64>) {
     }
 }
 
+/// Norms the FIRE mix matches.
+///
+/// The Euclidean mix uses the 2-norm of the velocity and of the
+/// steepest-descent direction. In the metric of a preconditioner `P`
+/// those are `sqrt(v^T P v)` and `sqrt(F · P^{-1} F)`.
+#[derive(Clone, Copy, Debug)]
+pub struct FireMix {
+    /// Norm of the velocity.
+    pub vel: f64,
+    /// Norm of the direction being mixed in.
+    pub direction: f64,
+}
+
+fn mix_toward(state: &mut FireState, direction: &Array1<f64>, mix: Option<FireMix>) {
+    let (vnorm, dnorm) = match mix {
+        Some(m) => (m.vel, m.direction),
+        None => (l2(&state.vel), l2(direction)),
+    };
+    if !(dnorm.is_finite() && dnorm > 0.0 && vnorm.is_finite() && vnorm >= 0.0) {
+        return;
+    }
+    let alpha = if state.alpha.is_nan() {
+        0.0
+    } else {
+        state.alpha.clamp(0.0, 1.0)
+    };
+    let scale = alpha * vnorm / dnorm;
+    for i in 0..state.vel.len() {
+        state.vel[i] = (1.0 - alpha) * state.vel[i] + scale * direction[i];
+    }
+}
+
 fn adapt(state: &mut FireState, power: f64) {
     if power > 0.0 {
         state.n_pos += 1;
@@ -223,6 +255,64 @@ pub fn fire_after_v1(state: &mut FireState, force: &Array1<f64>) {
     adapt(state, power);
 }
 
+/// Displacement when the physical force and the steepest direction differ.
+///
+/// `power_force` is `F = -∇E`. FIRE 2.0 power, rollback, and the time-step
+/// delay are [`fire_prepare_v2`] on that force, which the caller runs first.
+/// `steepest` is the kick and the mix direction (`P^{-1} F` when a metric
+/// is installed). `mix_at` is called with the post-kick velocity on FIRE 2.0
+/// and is not called on FIRE 1.0. FIRE 2.0 then mixes and advances the
+/// integration counter. FIRE 1.0 only takes the Verlet kick; the caller
+/// mixes on the new force via [`fire_after_v1_metric`].
+pub fn fire_displacement_metric<F>(
+    state: &mut FireState,
+    power_force: &Array1<f64>,
+    steepest: &Array1<f64>,
+    mut mix_at: F,
+) -> Array1<f64>
+where
+    F: FnMut(&Array1<f64>) -> Option<FireMix>,
+{
+    debug_assert_eq!(power_force.len(), steepest.len());
+    match state.kind {
+        FireKind::V2 => {
+            for i in 0..state.vel.len() {
+                state.vel[i] += steepest[i] * state.dt;
+            }
+            let mix = mix_at(&state.vel);
+            mix_toward(state, steepest, mix);
+            state.steps += 1;
+            &state.vel * state.dt
+        }
+        FireKind::V1 => {
+            for i in 0..state.vel.len() {
+                state.vel[i] += steepest[i] * state.dt;
+            }
+            &state.vel * state.dt
+        }
+    }
+}
+
+/// FIRE 1.0 mix and adapt in a preconditioner metric.
+///
+/// `power_force` is the physical force `F = -∇E`. The power is
+/// `F · v`. `steepest` is the direction the velocity is mixed toward
+/// (`P^{-1} F` when a metric is installed, otherwise `F`). `mix`
+/// supplies the norms; `None` uses the Euclidean 2-norm.
+pub fn fire_after_v1_metric(
+    state: &mut FireState,
+    power_force: &Array1<f64>,
+    steepest: &Array1<f64>,
+    mix: Option<FireMix>,
+) {
+    if !matches!(state.kind, FireKind::V1) {
+        return;
+    }
+    let power = crate::vecops::dot(power_force.view(), state.vel.view());
+    mix_toward(state, steepest, mix);
+    adapt(state, power);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +325,20 @@ mod tests {
         let dx = fire_displacement(&mut state, &force);
         assert!(dx[0] > 0.0);
         assert!(dx[1].abs() < 1e-15);
+    }
+
+    #[test]
+    fn v1_power_uses_the_physical_force() {
+        let mut state = FireState::new(FireKind::V1, 2, 0.1);
+        state.vel = array![1.0, 0.0];
+        state.n_pos = 6;
+        // Physical force is downhill. The metric direction is orthogonal,
+        // so a power test on the metric direction would reset the step.
+        let raw = array![1.0, 0.0];
+        let steepest = array![0.0, 4.0];
+        fire_after_v1_metric(&mut state, &raw, &steepest, None);
+        assert!(state.vel[0] > 0.0, "velocity was reset: {}", state.vel);
+        assert!(state.vel[1] > 0.0, "mix missed the metric direction");
     }
 
     #[test]
@@ -260,6 +364,30 @@ mod tests {
         state.vel[0] = 1.0;
         let _ = fire_prepare_v2(&mut state, &array![-1.0]);
         assert!((state.dt - 0.05).abs() < 1e-15);
+    }
+
+    #[test]
+    fn v2_metric_mixes_after_the_steepest_kick() {
+        let mut state = FireState::new(FireKind::V2, 2, 0.2);
+        state.vel = array![1.0, 0.0];
+        let raw = array![1.0, 0.0];
+        assert!(matches!(
+            fire_prepare_v2(&mut state, &raw),
+            FirePreparation::Ready
+        ));
+        let steepest = array![0.0, 2.0];
+        let mut seen = array![0.0, 0.0];
+        let dx = fire_displacement_metric(&mut state, &raw, &steepest, |vel| {
+            seen.assign(vel);
+            Some(FireMix {
+                vel: 1.0,
+                direction: 2.0,
+            })
+        });
+        assert!((seen[0] - 1.0).abs() < 1e-15 && (seen[1] - 0.4).abs() < 1e-15);
+        assert!((dx[0] - 0.18).abs() < 1e-15, "dx={dx:?}");
+        assert!((dx[1] - 0.092).abs() < 1e-15, "dx={dx:?}");
+        assert_eq!(state.steps, 1);
     }
 
     #[test]

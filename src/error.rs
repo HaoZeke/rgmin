@@ -54,6 +54,12 @@ pub enum Error {
         /// What the host callback failed to produce.
         what: &'static str,
     },
+    /// The exponential preconditioner rejected its inputs or its μ estimate.
+    #[error("exp preconditioner: {what}")]
+    Precon {
+        /// What the assembly or the estimate refused.
+        what: &'static str,
+    },
     /// Named eigensolver is not linked in this build. Fail closed:
     /// the waist does not silently fall back to Lanczos.
     #[error("eigensolver {kind} is not linked in this build")]

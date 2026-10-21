@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Exponential preconditioner (Packwood, Kermode, Mones, Bernstein,
+  Woolley, Gould, Ortner, and Csányi, J. Chem. Phys. 144, 164109
+  (2016), <https://doi.org/10.1063/1.4947024>).
+  `Solver::set_exp` builds `P` from a caller neighbour list.
+  L-BFGS uses `H0 = P^{-1}`. FIRE and nonlinear CG use `P` as the
+  metric. A dense pair or Lindh matrix passed into the two-loop
+  still wins. C: `rgmin_exp_t`, `rgmin_solver_set_exp`,
+  `rgmin_solver_clear_exp`, `rgmin_solver_exp_mu`. The C++ session
+  wraps those three as `set_exp`, `clear_exp`, and `exp_mu`.
+  `abi_minor` 28.
 - Steihaug-Toint Newton-CG as `Method::NewtonCg` (`newton-cg`) and
   `Method::NewtonPcg` (`newton-pcg`). `Method::from_name` parses the
   token. The session uses Hessian-vector products only: analytic via
@@ -57,11 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Capped Cartesian L-BFGS now reserves its finite-difference curvature
   probe for nominal steps at least 64 times larger than the cap;
   ordinary starts use a `0.1 I` inverse scale and five-value
-  nonmonotone acceptance.
+  nonmonotone acceptance. An installed exponential preconditioner
+  replaces that scalar seed, including those steepest fallbacks.
+  Uncapped L-BFGS keeps the two-loop step and the Wolfe search. A
+  HiGHS feasible set and a non-Euclidean manifold stay on that path.
 - FIRE 2.0 now follows Guénolé et al.'s semi-implicit update order,
   half-step-back uphill correction with a fresh corrected-point force,
   initial time-step delay, 2,000-step non-positive-power limit, and
-  cap-consistent velocity.
+  cap-consistent velocity. An installed exponential preconditioner
+  uses `P` as the metric: power is `F · v`, and the kick and the mix
+  use `P^{-1} F`.
 - Dogleg updates its trust radius from the dogleg step, and the
   Euclidean ceiling is `maxmove` rather than a per-atom displacement
   cap. A cap still limits the accepted trial. Nocedal and Wright,
