@@ -6,6 +6,9 @@
 
 ** Unreleased
 
+CI runs on pushes and pull requests to ~develop~ as well as ~main~,
+and installs numpy and scipy for the HiGHS reference tests.
+
 Steihaug-Toint Newton-CG is a session method: tokens ~newton-cg~
 and ~newton-pcg~ (~RGMIN_NEWTON_CG~ = 21, ~RGMIN_NEWTON_PCG~ = 22).
 Hessian access is a product, analytic from ~rgmin_solver_step_hvp~
