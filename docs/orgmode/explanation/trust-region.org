@@ -97,6 +97,22 @@ radius allows. It is the classical picture the Steihaug path
 generalizes: CG's first iterate is the Cauchy step, its limit is the
 Newton step, and truncation by the boundary lands in between.
 
+* Newton and dogleg leave a saddle
+
+A small force is not a positive Hessian, so dense Newton and dogleg
+can stop on a first-order saddle. When the force is already under
+~gtol~, the report reads the analytic Hessian before it returns.
+The floor is max(abs(gtol), 1e-6, 1e-8 times the Frobenius norm of
+H). A lowest eigenvalue below minus that floor is a kick: the step
+is that mode, scaled so the largest per-atom displacement equals
+the per-atom cap (~set_atom_maxmove~, or ~istep~ when the cap is
+unset). At most four kicks in one solve. Each kick restarts the
+dogleg radius at max(istep, 1e-8), the radius a new dogleg session
+starts from. A lowest eigenvalue that is not below that floor still
+evaluated the Hessian, so a converged Newton or dogleg report costs
+one extra Hessian. ~newton-cg~ and ~newton-pcg~ do not take this
+path, and neither does a HiGHS feasible set.
+
 * Selecting it: ~newton-cg~ and ~newton-pcg~
 
 ~Method::NewtonCg~ (token ~newton-cg~) and ~Method::NewtonPcg~
