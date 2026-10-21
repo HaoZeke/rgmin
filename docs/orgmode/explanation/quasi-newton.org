@@ -42,6 +42,16 @@ recursion (Nocedal and Wright 7.4):
 with the standard scalar seed H0 = (s . y) / (y . y) I from the most
 recent pair, a one-parameter fit of the average curvature along the
 last step; positivity of that scalar is again the pair condition.
+An installed exponential preconditioner replaces that scalar.
+The middle product of the two-loop solves with the preconditioner,
+so the initial inverse Hessian is taken from it: ~H0 = P^{-1}~.
+Packwood, Kermode, Mones, Bernstein, Woolley, Gould, Ortner, and
+Csányi, /A universal preconditioner for simulating condensed phase
+materials/, J. Chem. Phys. 144, 164109 (2016)
+([[https://doi.org/10.1063/1.4947024][10.1063/1.4947024]];
+@@rst::cite:`packwoodUniversalPreconditionerSimulating2016`@@).
+A dense pair or Lindh matrix passed into the two-loop still wins.
+With no preconditioner the scalar seed above is unchanged.
 Every dot and axpy in the crate's two-loop routes through the
 ~vecops~ seam, so the recursion is written once and the storage
 backend (serial, ~par~, and by design a later device backend) is a
