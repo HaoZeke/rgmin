@@ -11,6 +11,17 @@ Unreleased
 macros are ``RGMIN_H_MAJOR``, ``RGMIN_H_MINOR``, and ``RGMIN_H_PATCH``.
 ``HighsInt`` stays out of the public header.
 
+The exponential preconditioner of Packwood et al., J. Chem. Phys.
+144, 164109 (2016)
+(`10.1063/1.4947024 <https://doi.org/10.1063/1.4947024>`_)
+is ``Solver::set_exp``. The caller supplies the neighbour list.
+L-BFGS uses ``H0 = P^{-1}``. FIRE and nonlinear CG use ``P`` as the
+metric. A dense pair or Lindh matrix passed into the two-loop
+still wins. C: ``rgmin_exp_t``, ``rgmin_solver_set_exp``,
+``rgmin_solver_clear_exp``, ``rgmin_solver_exp_mu``. The C++ session
+wraps those three as ``set_exp``, ``clear_exp``, and ``exp_mu``.
+``abi_minor`` 28.
+
 ``rgmin_solver_set_box``: per-coordinate HiGHS box on ``x + p``.
 A NULL side is unbounded. Same status as ``set_highs`` (0, or 1
 without the ``highs`` feature). ``rgmin_solver_set_trust`` is the

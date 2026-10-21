@@ -34,6 +34,12 @@ pub enum Error {
         /// What exhausted the algorithm.
         what: &'static str,
     },
+    /// FIRE 2.0 exceeded its consecutive non-positive-power limit.
+    #[error("FIRE 2.0 stalled after {steps} steps")]
+    FireStalled {
+        /// Outer iterations completed before the limit was exceeded.
+        steps: usize,
+    },
     /// The trust region collapsed without an acceptable step: a
     /// non-finite gradient, a broken curvature action, or an
     /// objective that rejects every trial the model proposes.
@@ -46,6 +52,12 @@ pub enum Error {
     #[error("oracle: {what}")]
     Oracle {
         /// What the host callback failed to produce.
+        what: &'static str,
+    },
+    /// The exponential preconditioner rejected its inputs or its μ estimate.
+    #[error("exp preconditioner: {what}")]
+    Precon {
+        /// What the assembly or the estimate refused.
         what: &'static str,
     },
     /// Named eigensolver is not linked in this build. Fail closed:

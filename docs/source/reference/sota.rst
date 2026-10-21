@@ -235,8 +235,17 @@ These four tokens share ``rgmin_solver_t`` and a fused ``(f, g)``.
   inertial stepper. One fused force per geometry.
 
 - FIRE 2.0 (Guénolé 2020,
-  `10.1016/j.commatsci.2020.109584 <https://doi.org/10.1016/j.commatsci.2020.109584>`_) mixes before a semi-implicit
-  Euler step.
+  `10.1016/j.commatsci.2020.109584 <https://doi.org/10.1016/j.commatsci.2020.109584>`_) uses semi-implicit Euler:
+  update velocity, mix it toward the force, then update position. On
+  non-positive power it applies the paper's half-step-back correction;
+  a nonzero correction gets a fresh force before the forward step.
+  The initial delay leaves the time step unchanged during the first
+  delay window, and a clipped forward move rescales the stored velocity
+  to the displacement actually taken. More than 2,000 consecutive
+  non-positive-power steps terminate as a stalled solve. An installed
+  exponential preconditioner leaves that order in place and uses ``P``
+  as the metric: power is ``F · v``, and the kick and the mix use
+  ``P^{-1} F``.
 
 - Barzilai–Borwein (1988,
   `10.1093/imanum/8.1.141 <https://doi.org/10.1093/imanum/8.1.141>`_) with Raydan's nonmonotone globalization

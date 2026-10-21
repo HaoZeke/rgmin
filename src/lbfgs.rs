@@ -71,6 +71,10 @@ pub struct Lbfgs {
     /// rather than the two-loop recursion.
     #[cfg(feature = "highs")]
     pub highs: Option<crate::lbfgs_qp::HighsStep>,
+    /// \(H_0 = P^{-1}\) from an assembled exponential preconditioner.
+    /// A dense matrix passed to [`Self::direction_with_precon`] is the
+    /// pair / Lindh hook and wins over this factor.
+    h0: Option<crate::precon::Exp>,
     /// `s·y` of the latest geometry step, stored even when the pair is dropped.
     pub(crate) last_sy: f64,
     /// `y·y` of the latest geometry step.
@@ -101,10 +105,16 @@ impl Lbfgs {
             cautious_alpha: 0.01,
             #[cfg(feature = "highs")]
             highs: None,
+            h0: None,
             last_sy: 0.0,
             last_yy: 0.0,
             have_curvature: false,
         }
+    }
+
+    /// Install or clear the exponential \(H_0 = P^{-1}\).
+    pub(crate) fn set_h0(&mut self, h0: Option<crate::precon::Exp>) {
+        self.h0 = h0;
     }
 
     /// Discards the stored curvature.
@@ -149,16 +159,28 @@ impl Lbfgs {
     }
 
     /// Two-loop recursion: applies the inverse-Hessian approximation to `g`.
+    ///
+    /// An installed exponential preconditioner is \(H_0 = P^{-1}\).
     pub(crate) fn direction(&self, g: ArrayView1<f64>) -> Array1<f64> {
-        self.direction_with_precon(g, None)
+        self.direction_with_sources(g, None, self.h0.as_ref())
     }
 
     /// Two-loop with optional \(H_0 = P^{-1}\). `precon` is the pair / Lindh
     /// matrix \(P\); the middle product is `solve(P, q)`, not a scalar γ.
+    /// A dense `precon` wins over an installed exponential matrix.
     pub(crate) fn direction_with_precon(
         &self,
         g: ArrayView1<f64>,
         precon: Option<&ndarray::Array2<f64>>,
+    ) -> Array1<f64> {
+        self.direction_with_sources(g, precon, None)
+    }
+
+    fn direction_with_sources(
+        &self,
+        g: ArrayView1<f64>,
+        precon: Option<&ndarray::Array2<f64>>,
+        exp: Option<&crate::precon::Exp>,
     ) -> Array1<f64> {
         let mut q = g.to_owned();
         let m = self.memory.len();
@@ -178,6 +200,8 @@ impl Lbfgs {
         }
         if let Some(pmat) = precon {
             q = solve_dense(pmat, &q).unwrap_or_else(|| self.scale_gamma(q));
+        } else if let Some(exp) = exp {
+            q = exp.solve(q.view()).unwrap_or_else(|| self.scale_gamma(q));
         } else {
             q = self.scale_gamma(q);
         }
@@ -191,8 +215,15 @@ impl Lbfgs {
         q
     }
 
+    /// `P^{-1} v` when an exponential preconditioner is installed and the solve succeeds.
+    pub(crate) fn exp_apply(&self, v: ArrayView1<f64>) -> Option<Array1<f64>> {
+        self.h0.as_ref().and_then(|exp| exp.solve(v))
+    }
+
     /// Two-loop with a caller-supplied initial inverse curvature `h0`.
-    /// Empty memory returns `-h0 g`.
+    /// Empty memory returns `-h0 g`. An installed exponential
+    /// preconditioner replaces that scalar: the middle product is
+    /// `P^{-1} q`, and a failed solve falls back to `h0`.
     pub(crate) fn direction_h0(&self, g: ArrayView1<f64>, h0: f64) -> Array1<f64> {
         let mut q = g.to_owned();
         let m = self.memory.len();
@@ -210,7 +241,11 @@ impl Lbfgs {
             alpha[k] = a;
             crate::vecops::axpy(-a, p.y.view(), &mut q);
         }
-        q *= h0;
+        if let Some(solved) = self.exp_apply(q.view()) {
+            q = solved;
+        } else {
+            q *= h0;
+        }
         for k in 0..idxs.len() {
             let i = idxs[k];
             let p = &self.memory[i];
