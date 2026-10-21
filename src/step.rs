@@ -25,10 +25,9 @@ pub(crate) fn scale_step(origin: &Array1<f64>, trial: &mut Array1<f64>, cap: f64
     }
 }
 
-/// eOn `maxAtomMotionAppliedV`: scale the whole step so the largest
-/// per-atom displacement is at most `cap`.
-pub(crate) fn scale_step_atom(origin: &Array1<f64>, trial: &mut Array1<f64>, cap: f64) {
-    let n = trial.len();
+/// Largest per-atom displacement between `origin` and `trial`.
+pub(crate) fn max_atom_motion(origin: &Array1<f64>, trial: &Array1<f64>) -> f64 {
+    let n = trial.len().min(origin.len());
     let mut max_atom = 0.0;
     let mut i = 0;
     while i + 3 <= n {
@@ -50,9 +49,58 @@ pub(crate) fn scale_step_atom(origin: &Array1<f64>, trial: &mut Array1<f64>, cap
         }
         max_atom = max_atom.max(r2.sqrt());
     }
+    max_atom
+}
+
+/// Largest per-atom length of a displacement.
+pub(crate) fn max_atom_displacement(step: &Array1<f64>) -> f64 {
+    let n = step.len();
+    let mut max_atom = 0.0;
+    let mut i = 0;
+    while i + 3 <= n {
+        let r = (step[i] * step[i] + step[i + 1] * step[i + 1] + step[i + 2] * step[i + 2]).sqrt();
+        if r > max_atom {
+            max_atom = r;
+        }
+        i += 3;
+    }
+    if i < n {
+        let mut r2 = 0.0;
+        while i < n {
+            r2 += step[i] * step[i];
+            i += 1;
+        }
+        max_atom = max_atom.max(r2.sqrt());
+    }
+    max_atom
+}
+
+/// Scale `step` so its largest per-atom displacement equals `cap`.
+pub(crate) fn scale_displacement_to_atom_cap(step: &Array1<f64>, cap: f64) -> Array1<f64> {
+    let motion = max_atom_displacement(step);
+    if !cap.is_finite() || !motion.is_finite() || cap <= 0.0 || motion <= 0.0 {
+        return Array1::zeros(step.len());
+    }
+    step * (cap / motion)
+}
+
+/// Shrink `step` so its largest per-atom displacement is at most `cap`.
+pub(crate) fn cap_displacement_atom(step: &Array1<f64>, cap: f64) -> Array1<f64> {
+    let motion = max_atom_displacement(step);
+    if motion > cap && motion > 0.0 && cap > 0.0 {
+        step * (cap / motion)
+    } else {
+        step.clone()
+    }
+}
+
+/// eOn `maxAtomMotionAppliedV`: scale the whole step so the largest
+/// per-atom displacement is at most `cap`.
+pub(crate) fn scale_step_atom(origin: &Array1<f64>, trial: &mut Array1<f64>, cap: f64) {
+    let max_atom = max_atom_motion(origin, trial);
     if max_atom > cap && max_atom > 0.0 {
         let s = cap / max_atom;
-        for k in 0..n {
+        for k in 0..trial.len() {
             trial[k] = origin[k] + s * (trial[k] - origin[k]);
         }
     }
