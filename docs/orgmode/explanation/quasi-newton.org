@@ -47,29 +47,15 @@ Every dot and axpy in the crate's two-loop routes through the
 backend (serial, ~par~, and by design a later device backend) is a
 detail behind four functions.
 
-* The geometry step
-
-A per-atom cap (~set_atom_maxmove~) on a Euclidean L-BFGS session
-selects this step and ignores ~set_accept~. A HiGHS feasible set
-and a non-Euclidean manifold stay on the two-loop path above.
-Uncapped L-BFGS is unchanged: the scalar seed, and the strong Wolfe
-search unless acceptance is ~none~.
-
-On the first iteration the inverse curvature is a forward difference
-along the force. The probe is ~x + 0.01 u~, with ~u~ the unit force,
-clipped to the objective bounds before it is evaluated. The quotient
-divides by the displacement that remains along ~u~. A probe the box
-reduces to nothing, or a non-positive result, clears the memory and
-the step is steepest descent scaled to the cap. Later iterations set
-~H0 = (s . y) / (y . y)~ when both dots are positive. Negative
-curvature clears the stored pairs and uses that same steepest step.
-
-An uncapped direction longer than the cap, or one that opposes the
-force, also clears the memory and replaces the direction with a
-capped multiple of the force. The trial is kept when the energy rises
-by at most 1e-8. The step is halved at most ten times. If none of
-those trials pass, the memory is cleared and a short steepest step,
-one tenth of the force and then the cap, is taken.
+For capped Cartesian geometry sessions, the initial scale is selected
+from the size of the nominal steepest trial.  A trial that exceeds the
+per-atom cap by at least 64 times receives one directional-curvature
+probe; ordinary trials start from ~H0 = 0.1 I~ without spending that
+force call.  The former uses monotone energy acceptance, while the
+latter admits an energy below the largest of the last five accepted
+values.  A proposal that reaches the cap clears the history and takes
+the scaled seed direction, so an extrapolative two-loop model is not
+carried past the trust ceiling.
 
 * Stale pairs and the cautious update
 

@@ -45,17 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   below minus that floor steps along the mode, scaled to the
   per-atom cap, at most four times. The dogleg radius restarts from
   the initial step. A converged report costs one extra Hessian.
-- With a per-atom cap, Euclidean L-BFGS takes a geometry step and
-  ignores `set_accept`. The first iteration estimates the inverse
-  curvature by a finite difference along the force. That probe is
-  clipped to the objective bounds, and the quotient uses the
-  displacement that remains. Later iterations use `s·y / y·y`.
-  Memory resets when the curvature is negative, the uncapped step
-  exceeds the cap, or the step opposes the force. A trial is kept
-  when the energy rises by at most 1e-8, with at most ten halvings,
-  otherwise a short steepest-descent step. Uncapped L-BFGS keeps
-  the two-loop step and the Wolfe search. A HiGHS feasible set and
-  a non-Euclidean manifold stay on that path.
 - The docs export installs Org 9.7 or newer from GNU ELPA before
   ox-rst. Pull requests run the Org export and the Sphinx build.
   The Pages deploy stays on a push to `main` or
@@ -65,6 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays read-only.
 - CI runs on pushes and pull requests to `develop` as well as `main`,
   and installs numpy and scipy for the HiGHS reference tests.
+- Capped Cartesian L-BFGS now reserves its finite-difference curvature
+  probe for nominal steps at least 64 times larger than the cap;
+  ordinary starts use a `0.1 I` inverse scale and five-value
+  nonmonotone acceptance.
+- FIRE 2.0 now follows Guénolé et al.'s semi-implicit update order,
+  half-step-back uphill correction, and initial time-step delay.
 - Dogleg updates its trust radius from the dogleg step, and the
   Euclidean ceiling is `maxmove` rather than a per-atom displacement
   cap. A cap still limits the accepted trial. Nocedal and Wright,
