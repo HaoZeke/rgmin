@@ -15,8 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Solver::set_exp` builds `P` from a caller neighbour list.
   L-BFGS uses `H0 = P^{-1}`. FIRE and nonlinear CG use `P` as the
   metric. A dense pair or Lindh matrix passed into the two-loop
-  still wins. C: `rgmin_exp_t`, `rgmin_solver_set_exp`,
-  `rgmin_solver_clear_exp`, `rgmin_solver_exp_mu`. `abi_minor` 28.
+  still wins.   C: `rgmin_exp_t`, `rgmin_solver_set_exp`,
+  `rgmin_solver_clear_exp`, `rgmin_solver_exp_mu`. The C++ session
+  wraps those three as `set_exp`, `clear_exp`, and `exp_mu`.
+  `abi_minor` 28.
 - Steihaug-Toint Newton-CG as `Method::NewtonCg` (`newton-cg`) and
   `Method::NewtonPcg` (`newton-pcg`). `Method::from_name` parses the
   token. The session uses Hessian-vector products only: analytic via

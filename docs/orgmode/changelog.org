@@ -13,7 +13,9 @@ is ~Solver::set_exp~. The caller supplies the neighbour list.
 L-BFGS uses ~H0 = P^{-1}~. FIRE and nonlinear CG use ~P~ as the
 metric. A dense pair or Lindh matrix passed into the two-loop
 still wins. C: ~rgmin_exp_t~, ~rgmin_solver_set_exp~,
-~rgmin_solver_clear_exp~, ~rgmin_solver_exp_mu~. ~abi_minor~ 28.
+~rgmin_solver_clear_exp~, ~rgmin_solver_exp_mu~. The C++ session
+wraps those three as ~set_exp~, ~clear_exp~, and ~exp_mu~.
+~abi_minor~ 28.
 
 CI runs on pushes and pull requests to ~develop~ as well as ~main~,
 and installs numpy and scipy for the HiGHS reference tests.
