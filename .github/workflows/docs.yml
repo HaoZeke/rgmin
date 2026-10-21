@@ -10,8 +10,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # A pull request gets its own group, so it never cancels a Pages deploy.
 concurrency:
@@ -40,6 +38,11 @@ jobs:
           path: docs/build
   deploy:
     needs: build
+    # Job permissions replace the workflow set, so read is repeated.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     # The github-pages environment accepts main and gh-pages only.
     # A pull request still runs the export and the Sphinx build.
     if: github.event_name != 'pull_request'
