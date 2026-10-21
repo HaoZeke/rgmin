@@ -47,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI runs on pushes and pull requests to `develop` as well as `main`,
+  and installs numpy and scipy for the HiGHS reference tests.
 - Dogleg updates its trust radius from the dogleg step, and the
   Euclidean ceiling is `maxmove` rather than a per-atom displacement
   cap. A cap still limits the accepted trial. Nocedal and Wright,
