@@ -6,6 +6,15 @@
 
 ** Unreleased
 
+The exponential preconditioner of Packwood et al., J. Chem. Phys.
+144, 164109 (2016)
+([[https://doi.org/10.1063/1.4947024][10.1063/1.4947024]])
+is ~Solver::set_exp~. The caller supplies the neighbour list.
+L-BFGS uses ~H0 = P^{-1}~. FIRE and nonlinear CG use ~P~ as the
+metric. A dense pair or Lindh matrix passed into the two-loop
+still wins. C: ~rgmin_exp_t~, ~rgmin_solver_set_exp~,
+~rgmin_solver_clear_exp~, ~rgmin_solver_exp_mu~. ~abi_minor~ 28.
+
 Steihaug-Toint Newton-CG is a session method: tokens ~newton-cg~
 and ~newton-pcg~ (~RGMIN_NEWTON_CG~ = 21, ~RGMIN_NEWTON_PCG~ = 22).
 Hessian access is a product, analytic from ~rgmin_solver_step_hvp~

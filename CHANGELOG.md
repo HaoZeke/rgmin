@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Exponential preconditioner (Packwood, Kermode, Mones, Bernstein,
+  Woolley, Gould, Ortner, and Csányi, J. Chem. Phys. 144, 164109
+  (2016), <https://doi.org/10.1063/1.4947024>).
+  `Solver::set_exp` builds `P` from a caller neighbour list.
+  L-BFGS uses `H0 = P^{-1}`. FIRE and nonlinear CG use `P` as the
+  metric. A dense pair or Lindh matrix passed into the two-loop
+  still wins. C: `rgmin_exp_t`, `rgmin_solver_set_exp`,
+  `rgmin_solver_clear_exp`, `rgmin_solver_exp_mu`. `abi_minor` 28.
 - Steihaug-Toint Newton-CG as `Method::NewtonCg` (`newton-cg`) and
   `Method::NewtonPcg` (`newton-pcg`). `Method::from_name` parses the
   token. The session uses Hessian-vector products only: analytic via
