@@ -215,8 +215,15 @@ impl Lbfgs {
         q
     }
 
+    /// `P^{-1} v` when an exponential preconditioner is installed and the solve succeeds.
+    pub(crate) fn exp_apply(&self, v: ArrayView1<f64>) -> Option<Array1<f64>> {
+        self.h0.as_ref().and_then(|exp| exp.solve(v))
+    }
+
     /// Two-loop with a caller-supplied initial inverse curvature `h0`.
-    /// Empty memory returns `-h0 g`.
+    /// Empty memory returns `-h0 g`. An installed exponential
+    /// preconditioner replaces that scalar: the middle product is
+    /// `P^{-1} q`, and a failed solve falls back to `h0`.
     pub(crate) fn direction_h0(&self, g: ArrayView1<f64>, h0: f64) -> Array1<f64> {
         let mut q = g.to_owned();
         let m = self.memory.len();
@@ -234,7 +241,11 @@ impl Lbfgs {
             alpha[k] = a;
             crate::vecops::axpy(-a, p.y.view(), &mut q);
         }
-        q *= h0;
+        if let Some(solved) = self.exp_apply(q.view()) {
+            q = solved;
+        } else {
+            q *= h0;
+        }
         for k in 0..idxs.len() {
             let i = idxs[k];
             let p = &self.memory[i];

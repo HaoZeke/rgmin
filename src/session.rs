@@ -245,8 +245,9 @@ impl Solver {
     /// `positions` has length [`Self::dim`] and is `3 N` coordinates in
     /// C order. [`ExpParams::mu`] `None` defers the energy scale to the
     /// next [`Self::step`], which estimates it from the objective.
-    /// L-BFGS then takes \(H_0 = P^{-1}\). FIRE and nonlinear CG take
-    /// `P` as the metric. A dense pair or Lindh matrix supplied to the
+    /// L-BFGS then takes \(H_0 = P^{-1}\), including the capped geometry
+    /// step selected by [`Self::set_atom_maxmove`]. FIRE and nonlinear CG
+    /// take `P` as the metric. A dense pair or Lindh matrix supplied to the
     /// two-loop still wins over this factor.
     pub fn set_exp(
         &mut self,
@@ -1007,6 +1008,28 @@ impl Solver {
         })
     }
 
+    /// `P^{-1} force` when an exponential preconditioner is installed.
+    /// Otherwise `h0 * force`, the scalar geometry seed.
+    fn geometry_seed_force(&self, force: &Array1<f64>, h0: f64) -> Array1<f64> {
+        if let Inner::Lbfgs(solver) = &self.inner {
+            if let Some(pre) = solver.exp_apply(force.view()) {
+                return pre;
+            }
+        }
+        h0 * force
+    }
+
+    /// `scale * P^{-1} force` when an exponential preconditioner is installed.
+    /// Otherwise `scale * force`.
+    fn geometry_scaled_force(&self, force: &Array1<f64>, scale: f64) -> Array1<f64> {
+        if let Inner::Lbfgs(solver) = &self.inner {
+            if let Some(pre) = solver.exp_apply(force.view()) {
+                return scale * &pre;
+            }
+        }
+        scale * force
+    }
+
     /// Per-atom cap selects the geometry L-BFGS step. Uncapped sessions keep
     /// the one-oracle two-loop (and Wolfe when acceptance is not [`Accept::None`]).
     fn use_geometry_lbfgs(&self) -> bool {
@@ -1041,7 +1064,10 @@ impl Solver {
             if let Inner::Lbfgs(solver) = &mut self.inner {
                 solver.forget();
             }
-            *forced = Some(cap_displacement_atom(&(1000.0 * force), cap));
+            *forced = Some(cap_displacement_atom(
+                &self.geometry_scaled_force(force, 1000.0),
+                cap,
+            ));
         } else if sy > 0.0 && yy > 0.0 {
             *h0 = sy / yy;
         }
@@ -1052,8 +1078,12 @@ impl Solver {
     /// uncapped step exceeds the per-atom cap, or the step opposes the force.
     /// The finite-difference probe is clipped to the objective bounds, and
     /// the quotient uses the displacement that remains inside the box.
+    /// An installed exponential preconditioner replaces the scalar seed:
+    /// the two-loop applies `P^{-1}`, and a reset that would have stepped
+    /// along `h0` times the force steps along `P^{-1}` times the force.
     /// The trial is accepted when the energy rise is at most 1e-8, with at
-    /// most ten halvings, otherwise a short steepest step.
+    /// most ten halvings, otherwise a short steepest step. Those force
+    /// steps use `P^{-1}` as well when the preconditioner is installed.
     fn geometry_lbfgs_step<O>(
         &mut self,
         obj: &O,
@@ -1111,7 +1141,10 @@ impl Solver {
                     h0 = 1.0 / curvature;
                 } else if let Inner::Lbfgs(solver) = &mut self.inner {
                     solver.forget();
-                    forced = Some(cap_displacement_atom(&(1000.0 * &force), cap));
+                    forced = Some(cap_displacement_atom(
+                        &self.geometry_scaled_force(&force, 1000.0),
+                        cap,
+                    ));
                 }
             }
         }
@@ -1131,7 +1164,7 @@ impl Solver {
                 if let Inner::Lbfgs(solver) = &mut self.inner {
                     solver.forget();
                 }
-                cap_displacement_atom(&(h0 * &force), cap)
+                cap_displacement_atom(&self.geometry_seed_force(&force, h0), cap)
             } else {
                 let dn = l2(&direction);
                 let fnorm = l2(&force);
@@ -1141,7 +1174,8 @@ impl Solver {
                         if let Inner::Lbfgs(solver) = &mut self.inner {
                             solver.forget();
                         }
-                        direction = cap_displacement_atom(&(h0 * &force), cap);
+                        direction =
+                            cap_displacement_atom(&self.geometry_seed_force(&force, h0), cap);
                     }
                 }
                 cap_displacement_atom(&direction, cap)
@@ -1167,7 +1201,7 @@ impl Solver {
             if let Inner::Lbfgs(solver) = &mut self.inner {
                 solver.forget();
             }
-            let sd = cap_displacement_atom(&(0.1 * &force), cap);
+            let sd = cap_displacement_atom(&self.geometry_scaled_force(&force, 0.1), cap);
             trial = obj.bounds().clip((&*x + &sd).view());
             let ev = obj.value_and_gradient(trial.view());
             tval = ev.0;

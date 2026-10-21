@@ -63,9 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Memory resets when the curvature is negative, the uncapped step
   exceeds the cap, or the step opposes the force. A trial is kept
   when the energy rises by at most 1e-8, with at most ten halvings,
-  otherwise a short steepest-descent step. Uncapped L-BFGS keeps
-  the two-loop step and the Wolfe search. A HiGHS feasible set and
-  a non-Euclidean manifold stay on that path.
+  otherwise a short steepest-descent step. An installed exponential
+  preconditioner replaces that scalar seed, including those
+  steepest fallbacks. Uncapped L-BFGS keeps the two-loop step and
+  the Wolfe search. A HiGHS feasible set and a non-Euclidean
+  manifold stay on that path.
 - The docs export installs Org 9.7 or newer from GNU ELPA before
   ox-rst. Pull requests run the Org export and the Sphinx build.
   The Pages deploy stays on a push to `main` or

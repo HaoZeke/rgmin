@@ -1717,8 +1717,10 @@ pub unsafe extern "C" fn rgmin_solver_set_accept(
 
 /// Per-atom cap (eOn `maxAtomMotionAppliedV`). On Euclidean L-BFGS this
 /// selects the geometry step and ignores [`rgmin_solver_set_accept`].
-/// The geometry probe is clipped to the objective bounds. Newton and
-/// dogleg scale a saddle kick to this length. Non-positive clears it.
+/// The geometry probe is clipped to the objective bounds. An installed
+/// exponential preconditioner is that step's initial inverse Hessian.
+/// Newton and dogleg scale a saddle kick to this length. Non-positive
+/// clears it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_atom_maxmove(solver: *mut rgmin_solver_t, maxmove: f64) {
     if solver.is_null() {
