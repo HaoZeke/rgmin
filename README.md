@@ -38,6 +38,11 @@ Line search: Brent, Armijo, Goldstein, strong Wolfe with zoom.
 Methods: NLCG, BFGS, L-BFGS, SR1, SR2, Newton, RFO, Adam, steepest
 descent, PSO, FIRE, FIRE 2.0, Barzilai-Borwein, Powell dogleg,
 Steihaug-Toint Newton-CG (`newton-cg`, `newton-pcg`).
+`Solver::set_exp` installs the exponential preconditioner of
+Packwood et al., J. Chem. Phys. 144, 164109 (2016), from a caller
+neighbour list. L-BFGS uses it as `H0`. FIRE and nonlinear CG use
+it as the metric. A dense pair or Lindh matrix supplied to the
+two-loop still wins.
 
 Narrative docs live in [`docs/orgmode/`](docs/orgmode/index.org)
 (Diataxis); the explanation quadrant derives the math behind each

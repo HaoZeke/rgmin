@@ -12,6 +12,7 @@
 #include "../rgmin.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 
@@ -219,10 +220,25 @@ public:
     std::size_t hvp_calls() const noexcept { return rgmin_solver_hvp_calls(ptr_); }
     void set_maxmove(double m) { rgmin_solver_set_maxmove(ptr_, m); }
     void set_qn_step(rgmin_qn_step_t step) { rgmin_solver_set_qn_step(ptr_, step); }
+    /// Install the Packwood exponential preconditioner.
+    /// A null distance pointer means Cartesian pairs. mu NaN estimates
+    /// the energy scale on the next step.
+    rgmin_status_t set_exp(rgmin_exp_t const* params, std::uint32_t const* pair_i,
+                           std::uint32_t const* pair_j, double const* distance,
+                           std::size_t npair, std::uint32_t const* anchor_i,
+                           double const* anchor_r, std::size_t nanchor) {
+        return rgmin_solver_set_exp(ptr_, params, pair_i, pair_j, distance, npair, anchor_i,
+                                    anchor_r, nanchor);
+    }
+    /// Drop the preconditioner installed by set_exp.
+    void clear_exp() { rgmin_solver_clear_exp(ptr_); }
+    /// Energy scale, or NaN when none is installed.
+    double exp_mu() const noexcept { return rgmin_solver_exp_mu(ptr_); }
     void set_accept(rgmin_accept_t accept) { rgmin_solver_set_accept(ptr_, accept); }
     /// Per-atom cap. Euclidean L-BFGS selects the geometry step and
     /// ignores set_accept. The geometry probe is clipped to the
-    /// objective bounds. Non-positive clears it.
+    /// objective bounds. An installed exponential preconditioner is
+    /// that step's initial inverse Hessian. Non-positive clears it.
     void set_atom_maxmove(double m) { rgmin_solver_set_atom_maxmove(ptr_, m); }
     void set_project_rigid(bool on) {
         rgmin_solver_set_project_rigid(ptr_, on ? 1 : 0);

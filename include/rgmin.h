@@ -49,7 +49,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 27
+#define RGMIN_ABI_VERSION_MINOR 28
 #define RGMIN_ABI_LAYOUT_REVISION 4
 
 /** Solver selector. \c RGMIN_LBFGS is the production unconstrained method. */
@@ -209,6 +209,31 @@ typedef enum rgmin_qn_step_t {
 } rgmin_qn_step_t;
 /** Two-loop + H0, or Newton/RFO on P. Legal with \ref rgmin_solver_step_hess. */
 void rgmin_solver_set_qn_step(rgmin_solver_t *solver, rgmin_qn_step_t step);
+/** Exponential preconditioner parameters. NaN selects a default or an estimate.
+ *  ABI minor 28. */
+typedef struct rgmin_exp_t {
+    double a;
+    double c_stab;
+    double mu;
+    double r_nn;
+    double r_cut;
+    double length_x;
+    double length_y;
+    double length_z;
+    int32_t recalc_mu;
+} rgmin_exp_t;
+/** Install the Packwood exponential preconditioner.
+ *  \a distance is null for Cartesian pairs. \a anchor_i is null when
+ *  \a nanchor is 0. \c mu NaN estimates the energy scale on the next step. */
+rgmin_status_t rgmin_solver_set_exp(rgmin_solver_t *solver, const rgmin_exp_t *params,
+                                    const uint32_t *pair_i, const uint32_t *pair_j,
+                                    const double *distance, size_t npair,
+                                    const uint32_t *anchor_i, const double *anchor_r,
+                                    size_t nanchor);
+/** Drop the preconditioner installed by \ref rgmin_solver_set_exp. */
+void rgmin_solver_clear_exp(rgmin_solver_t *solver);
+/** Energy scale, or NaN when none is installed. */
+double rgmin_solver_exp_mu(const rgmin_solver_t *solver);
 /** How a session takes a proposed step (eOn lbfgs_accept). */
 typedef enum rgmin_accept_t {
     RGMIN_ACCEPT_NONE = 0,
@@ -218,8 +243,10 @@ typedef enum rgmin_accept_t {
 void rgmin_solver_set_accept(rgmin_solver_t *solver, rgmin_accept_t accept);
 /** Per-atom cap (eOn \c maxAtomMotionAppliedV). On Euclidean L-BFGS
  *  this selects the geometry step and ignores \ref rgmin_solver_set_accept.
- *  The geometry probe is clipped to the objective bounds. Newton and
- *  dogleg scale a saddle kick to this length. Non-positive clears it. */
+ *  The geometry probe is clipped to the objective bounds. An installed
+ *  exponential preconditioner is that step's initial inverse Hessian.
+ *  Newton and dogleg scale a saddle kick to this length. Non-positive
+ *  clears it. */
 void rgmin_solver_set_atom_maxmove(rgmin_solver_t *solver, double maxmove);
 void rgmin_solver_set_project_rigid(rgmin_solver_t *solver, int32_t enabled);
 void rgmin_solver_set_extra_updates(rgmin_solver_t *solver, size_t extra);

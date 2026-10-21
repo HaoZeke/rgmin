@@ -14,7 +14,10 @@ use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::Control;
 use crate::error::{Error, Result};
-use crate::fire::{FireState, fire_after_v1, fire_displacement, project_box_tangent};
+use crate::fire::{
+    FireMix, FireState, fire_after_v1, fire_after_v1_metric, fire_displacement,
+    fire_displacement_metric, project_box_tangent,
+};
 use crate::hvp::{
     FiniteDifference, HessianVector, NewtonCgRequest, OptionalAction, newton_cg_step,
     sym_eig_jacobi,
@@ -26,6 +29,7 @@ use crate::manifold::{Manifold, ManifoldKind};
 use crate::method::Method;
 use crate::newton::{HessianObjective, NewtonKind, rfo_direction, shifted_newton};
 use crate::nlcg::{Conjugacy, ConjugacyContext, Restart};
+use crate::precon::{ExpParams, ExpState, Neighbours};
 use crate::pso::{Particle, RNG_SEED, random_velocity, update_swarm};
 use crate::qn::{bfgs_inverse_update, solve_dense, sr1_inverse_update, sr2_hessian_update};
 use crate::qn_step::QnStep;
@@ -38,6 +42,31 @@ use crate::step::{
 use crate::trust::{
     accept_ratio, dogleg_direction, predicted_reduction, reduction_ratio, update_radius,
 };
+
+/// `P^{-1} v` when an exponential metric is installed, otherwise `v`.
+fn metric_vector(exp: &Option<ExpState>, v: &Array1<f64>) -> Array1<f64> {
+    match exp.as_ref().and_then(ExpState::matrix) {
+        Some(p) => p.solve(v.view()).unwrap_or_else(|| v.clone()),
+        None => v.clone(),
+    }
+}
+
+/// P-norms for the FIRE mix: `sqrt(v^T P v)` and `sqrt(F · P^{-1} F)`.
+fn fire_mix(
+    exp: &Option<ExpState>,
+    vel: &Array1<f64>,
+    raw: &Array1<f64>,
+    steepest: &Array1<f64>,
+) -> Option<FireMix> {
+    let p = exp.as_ref().and_then(ExpState::matrix)?;
+    let pv = p.apply(vel.view());
+    let vel_n = vel.dot(&pv).max(0.0).sqrt();
+    let dir_n = raw.dot(steepest).max(0.0).sqrt();
+    Some(FireMix {
+        vel: vel_n,
+        direction: dir_n,
+    })
+}
 
 /// Long-lived solver. Algorithm memory lives here; `x` stays with the caller.
 pub struct Solver {
@@ -80,6 +109,8 @@ pub struct Solver {
     /// Objective gradients. A finite-difference product is an
     /// [`Self::hvp_calls`] entry, not a gradient.
     gradient_calls: usize,
+    /// Packwood exponential metric. `None` leaves every method unchanged.
+    exp: Option<ExpState>,
     /// Analytic or finite-difference Hessian-vector products.
     hvp_calls: usize,
     /// Negative-curvature kicks already taken in this solve.
@@ -94,6 +125,9 @@ enum Inner {
         restart: Restart,
         dir: Array1<f64>,
         g_old: Array1<f64>,
+        /// `P^{-1} g` at the previous accepted point. Equals `g_old` when
+        /// no exponential metric is installed.
+        z_old: Array1<f64>,
         d_old: Array1<f64>,
         initialized: bool,
     },
@@ -200,9 +234,81 @@ impl Solver {
             last_grad: Array1::zeros(dim),
             gradient_calls: 0,
             hvp_calls: 0,
+            exp: None,
             saddle_kicks: 0,
             inner,
         }
+    }
+
+    /// Install the exponential preconditioner at `positions`.
+    ///
+    /// `positions` has length [`Self::dim`] and is `3 N` coordinates in
+    /// C order. [`ExpParams::mu`] `None` defers the energy scale to the
+    /// next [`Self::step`], which estimates it from the objective.
+    /// L-BFGS then takes \(H_0 = P^{-1}\), including the capped geometry
+    /// step selected by [`Self::set_atom_maxmove`]. FIRE and nonlinear CG
+    /// take `P` as the metric. A dense pair or Lindh matrix supplied to the
+    /// two-loop still wins over this factor.
+    pub fn set_exp(
+        &mut self,
+        positions: ArrayView1<f64>,
+        neighbours: &Neighbours,
+        params: &ExpParams,
+    ) -> Result<()> {
+        if positions.len() != self.dim {
+            return Err(Error::Dim {
+                got: positions.len(),
+                dim: self.dim,
+            });
+        }
+        let state = ExpState::new(positions, neighbours, params)?;
+        let matrix = state.matrix().cloned();
+        self.exp = Some(state);
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_h0(matrix);
+        }
+        Ok(())
+    }
+
+    /// Install a neighbour list whose geometry arrives on the next step.
+    #[cfg(feature = "capi")]
+    pub(crate) fn set_exp_deferred(&mut self, state: ExpState) {
+        self.exp = Some(state);
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_h0(None);
+        }
+    }
+
+    /// Drop the exponential preconditioner.
+    pub fn clear_exp(&mut self) {
+        self.exp = None;
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_h0(None);
+        }
+    }
+
+    /// Energy scale of the installed preconditioner, after estimation.
+    #[must_use]
+    pub fn exp_mu(&self) -> Option<f64> {
+        self.exp.as_ref().and_then(ExpState::mu)
+    }
+
+    fn refresh_exp<O>(&mut self, obj: &O, x: &Array1<f64>, grad: &Array1<f64>) -> Result<()>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        if self.exp.is_none() {
+            return Ok(());
+        }
+        let grad_fn = |p: ArrayView1<f64>| obj.grad(p);
+        if let Some(state) = &mut self.exp {
+            state.refresh(x.view(), grad, grad_fn)?;
+        }
+        let matrix = self.exp.as_ref().and_then(|s| s.matrix().cloned());
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_h0(matrix);
+        }
+        Ok(())
     }
 
     /// eOn `lbfgs_step`. Newton / RFO need a Hessian on [`Self::step_hess`].
@@ -902,6 +1008,28 @@ impl Solver {
         })
     }
 
+    /// `P^{-1} force` when an exponential preconditioner is installed.
+    /// Otherwise `h0 * force`, the scalar geometry seed.
+    fn geometry_seed_force(&self, force: &Array1<f64>, h0: f64) -> Array1<f64> {
+        if let Inner::Lbfgs(solver) = &self.inner {
+            if let Some(pre) = solver.exp_apply(force.view()) {
+                return pre;
+            }
+        }
+        h0 * force
+    }
+
+    /// `scale * P^{-1} force` when an exponential preconditioner is installed.
+    /// Otherwise `scale * force`.
+    fn geometry_scaled_force(&self, force: &Array1<f64>, scale: f64) -> Array1<f64> {
+        if let Inner::Lbfgs(solver) = &self.inner {
+            if let Some(pre) = solver.exp_apply(force.view()) {
+                return scale * &pre;
+            }
+        }
+        scale * force
+    }
+
     /// Per-atom cap selects the geometry L-BFGS step. Uncapped sessions keep
     /// the one-oracle two-loop (and Wolfe when acceptance is not [`Accept::None`]).
     fn use_geometry_lbfgs(&self) -> bool {
@@ -936,7 +1064,10 @@ impl Solver {
             if let Inner::Lbfgs(solver) = &mut self.inner {
                 solver.forget();
             }
-            *forced = Some(cap_displacement_atom(&(1000.0 * force), cap));
+            *forced = Some(cap_displacement_atom(
+                &self.geometry_scaled_force(force, 1000.0),
+                cap,
+            ));
         } else if sy > 0.0 && yy > 0.0 {
             *h0 = sy / yy;
         }
@@ -947,8 +1078,12 @@ impl Solver {
     /// uncapped step exceeds the per-atom cap, or the step opposes the force.
     /// The finite-difference probe is clipped to the objective bounds, and
     /// the quotient uses the displacement that remains inside the box.
+    /// An installed exponential preconditioner replaces the scalar seed:
+    /// the two-loop applies `P^{-1}`, and a reset that would have stepped
+    /// along `h0` times the force steps along `P^{-1}` times the force.
     /// The trial is accepted when the energy rise is at most 1e-8, with at
-    /// most ten halvings, otherwise a short steepest step.
+    /// most ten halvings, otherwise a short steepest step. Those force
+    /// steps use `P^{-1}` as well when the preconditioner is installed.
     fn geometry_lbfgs_step<O>(
         &mut self,
         obj: &O,
@@ -1006,7 +1141,10 @@ impl Solver {
                     h0 = 1.0 / curvature;
                 } else if let Inner::Lbfgs(solver) = &mut self.inner {
                     solver.forget();
-                    forced = Some(cap_displacement_atom(&(1000.0 * &force), cap));
+                    forced = Some(cap_displacement_atom(
+                        &self.geometry_scaled_force(&force, 1000.0),
+                        cap,
+                    ));
                 }
             }
         }
@@ -1026,7 +1164,7 @@ impl Solver {
                 if let Inner::Lbfgs(solver) = &mut self.inner {
                     solver.forget();
                 }
-                cap_displacement_atom(&(h0 * &force), cap)
+                cap_displacement_atom(&self.geometry_seed_force(&force, h0), cap)
             } else {
                 let dn = l2(&direction);
                 let fnorm = l2(&force);
@@ -1036,7 +1174,8 @@ impl Solver {
                         if let Inner::Lbfgs(solver) = &mut self.inner {
                             solver.forget();
                         }
-                        direction = cap_displacement_atom(&(h0 * &force), cap);
+                        direction =
+                            cap_displacement_atom(&self.geometry_seed_force(&force, h0), cap);
                     }
                 }
                 cap_displacement_atom(&direction, cap)
@@ -1062,7 +1201,7 @@ impl Solver {
             if let Inner::Lbfgs(solver) = &mut self.inner {
                 solver.forget();
             }
-            let sd = cap_displacement_atom(&(0.1 * &force), cap);
+            let sd = cap_displacement_atom(&self.geometry_scaled_force(&force, 0.1), cap);
             trial = obj.bounds().clip((&*x + &sd).view());
             let ev = obj.value_and_gradient(trial.view());
             tval = ev.0;
@@ -1471,6 +1610,7 @@ impl Solver {
                 grad_norm: gnorm,
             });
         }
+        self.refresh_exp(obj, x, &grad)?;
 
         if matches!(self.manifold, ManifoldKind::Sphere | ManifoldKind::Stiefel)
             && matches!(self.inner, Inner::Lbfgs(_))
@@ -1593,12 +1733,24 @@ impl Solver {
                 restart,
                 dir,
                 g_old,
+                z_old,
                 d_old,
                 initialized,
             } => {
+                let metric = self.exp.is_some();
+                let z_now = if metric {
+                    metric_vector(&self.exp, &grad)
+                } else {
+                    grad.clone()
+                };
                 if !*initialized {
-                    *dir = grad.mapv(|g| -g * self.istep);
+                    *dir = if metric {
+                        z_now.mapv(|z| -z * self.istep)
+                    } else {
+                        grad.mapv(|g| -g * self.istep)
+                    };
                     *g_old = grad.clone();
+                    *z_old = z_now;
                     *d_old = dir.clone();
                     *initialized = true;
                 }
@@ -1624,15 +1776,42 @@ impl Solver {
                         previous_gradient: g_old.view(),
                         previous_direction: d_old.view(),
                     };
-                    let mut beta = conjugacy.beta(&ctx);
-                    if restart.should_restart(&ctx) {
-                        beta = 0.0;
+                    if metric {
+                        let z_new = metric_vector(&self.exp, &grad);
+                        let mut beta = conjugacy.beta_metric(&ctx, z_new.view(), z_old.view());
+                        if restart.should_restart_metric(
+                            grad.view(),
+                            z_new.view(),
+                            g_old.view(),
+                            z_old.view(),
+                        ) {
+                            beta = 0.0;
+                        }
+                        *dir = Array1::from_iter(
+                            z_new
+                                .iter()
+                                .zip(d_old.iter())
+                                .map(|(z, d)| -z * self.istep + beta * d),
+                        );
+                        // A non-descent direction in the metric is not a valid
+                        // conjugate step. Fall back to the Riesz steepest direction.
+                        let gd = crate::vecops::dot(grad.view(), dir.view());
+                        if gd.partial_cmp(&0.0) != Some(std::cmp::Ordering::Less) {
+                            *dir = z_new.mapv(|z| -z * self.istep);
+                        }
+                        z_old.assign(&z_new);
+                    } else {
+                        let mut beta = conjugacy.beta(&ctx);
+                        if restart.should_restart(&ctx) {
+                            beta = 0.0;
+                        }
+                        *dir = Array1::from_iter(
+                            grad.iter()
+                                .zip(d_old.iter())
+                                .map(|(g, d)| -g * self.istep + beta * d),
+                        );
+                        z_old.assign(&grad);
                     }
-                    *dir = Array1::from_iter(
-                        grad.iter()
-                            .zip(d_old.iter())
-                            .map(|(g, d)| -g * self.istep + beta * d),
-                    );
                     g_old.assign(&grad);
                     d_old.assign(dir);
                 }
@@ -1737,10 +1916,17 @@ impl Solver {
                 *b2p *= *beta2;
             }
             Inner::Fire(state) => {
-                let mut force = grad.mapv(|g| -g);
-                project_box_tangent(obj.bounds(), x, &mut force);
+                let mut raw = grad.mapv(|g| -g);
+                project_box_tangent(obj.bounds(), x, &mut raw);
                 project_box_tangent(obj.bounds(), x, &mut state.vel);
-                let dx = fire_displacement(state, &force);
+                let dx = if self.exp.is_some() {
+                    let mut steepest = metric_vector(&self.exp, &raw);
+                    project_box_tangent(obj.bounds(), x, &mut steepest);
+                    let mix = fire_mix(&self.exp, &state.vel, &raw, &steepest);
+                    fire_displacement_metric(state, &raw, &steepest, mix)
+                } else {
+                    fire_displacement(state, &raw)
+                };
                 let mut trial = &*x + &dx;
                 if let Some(cap) = self.atom_maxmove {
                     scale_step_atom(x, &mut trial, cap);
@@ -1752,10 +1938,17 @@ impl Solver {
                 let ev = obj.value_and_gradient(x.view());
                 value = ev.0;
                 grad = ev.1;
-                let mut force_new = grad.mapv(|g| -g);
-                project_box_tangent(obj.bounds(), x, &mut force_new);
+                let mut raw_new = grad.mapv(|g| -g);
+                project_box_tangent(obj.bounds(), x, &mut raw_new);
                 project_box_tangent(obj.bounds(), x, &mut state.vel);
-                fire_after_v1(state, &force_new);
+                if self.exp.is_some() {
+                    let mut steep_new = metric_vector(&self.exp, &raw_new);
+                    project_box_tangent(obj.bounds(), x, &mut steep_new);
+                    let mix_new = fire_mix(&self.exp, &state.vel, &raw_new, &steep_new);
+                    fire_after_v1_metric(state, &raw_new, &steep_new, mix_new);
+                } else {
+                    fire_after_v1(state, &raw_new);
+                }
             }
             Inner::Bb { prev_s, prev_y } => {
                 let dir = bb_direction(prev_s.as_ref(), prev_y.as_ref(), &grad, self.istep);
@@ -1920,6 +2113,7 @@ impl Inner {
                 restart: *restart,
                 dir: Array1::zeros(dim),
                 g_old: Array1::zeros(dim),
+                z_old: Array1::zeros(dim),
                 d_old: Array1::zeros(dim),
                 initialized: false,
             },

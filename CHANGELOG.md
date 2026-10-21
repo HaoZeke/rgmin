@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Exponential preconditioner (Packwood, Kermode, Mones, Bernstein,
+  Woolley, Gould, Ortner, and Csányi, J. Chem. Phys. 144, 164109
+  (2016), <https://doi.org/10.1063/1.4947024>).
+  `Solver::set_exp` builds `P` from a caller neighbour list.
+  L-BFGS uses `H0 = P^{-1}`. FIRE and nonlinear CG use `P` as the
+  metric. A dense pair or Lindh matrix passed into the two-loop
+  still wins.   C: `rgmin_exp_t`, `rgmin_solver_set_exp`,
+  `rgmin_solver_clear_exp`, `rgmin_solver_exp_mu`. The C++ session
+  wraps those three as `set_exp`, `clear_exp`, and `exp_mu`.
+  `abi_minor` 28.
 - Steihaug-Toint Newton-CG as `Method::NewtonCg` (`newton-cg`) and
   `Method::NewtonPcg` (`newton-pcg`). `Method::from_name` parses the
   token. The session uses Hessian-vector products only: analytic via
@@ -53,9 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Memory resets when the curvature is negative, the uncapped step
   exceeds the cap, or the step opposes the force. A trial is kept
   when the energy rises by at most 1e-8, with at most ten halvings,
-  otherwise a short steepest-descent step. Uncapped L-BFGS keeps
-  the two-loop step and the Wolfe search. A HiGHS feasible set and
-  a non-Euclidean manifold stay on that path.
+  otherwise a short steepest-descent step. An installed exponential
+  preconditioner replaces that scalar seed, including those
+  steepest fallbacks. Uncapped L-BFGS keeps the two-loop step and
+  the Wolfe search. A HiGHS feasible set and a non-Euclidean
+  manifold stay on that path.
 - The docs export installs Org 9.7 or newer from GNU ELPA before
   ox-rst. Pull requests run the Org export and the Sphinx build.
   The Pages deploy stays on a push to `main` or
