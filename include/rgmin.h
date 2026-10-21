@@ -241,6 +241,10 @@ typedef enum rgmin_accept_t {
     RGMIN_ACCEPT_NONMONOTONE = 2
 } rgmin_accept_t;
 void rgmin_solver_set_accept(rgmin_solver_t *solver, rgmin_accept_t accept);
+/** Per-atom cap (eOn \c maxAtomMotionAppliedV). On Euclidean L-BFGS
+ *  this selects the geometry step and ignores \ref rgmin_solver_set_accept.
+ *  The geometry probe is clipped to the objective bounds. Newton and
+ *  dogleg scale a saddle kick to this length. Non-positive clears it. */
 void rgmin_solver_set_atom_maxmove(rgmin_solver_t *solver, double maxmove);
 void rgmin_solver_set_project_rigid(rgmin_solver_t *solver, int32_t enabled);
 void rgmin_solver_set_extra_updates(rgmin_solver_t *solver, size_t extra);

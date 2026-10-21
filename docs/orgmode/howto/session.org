@@ -27,7 +27,15 @@ let report = solver.step(&obj, &mut x).unwrap();
 
 ~step~ is one outer iteration. ~step_hess~ / ~step_hess_fg~ take a
 host Hessian. ~forget~ drops pair history, conjugacy, and moments.
-~set_atom_maxmove~ is the eOn per-atom clip.
+~set_atom_maxmove~ is the eOn per-atom cap. On a Euclidean L-BFGS
+session it selects the geometry step and ignores ~set_accept~.
+The first iteration estimates inverse curvature by a finite
+difference along the force, and that probe is clipped to the
+objective bounds. Later iterations use ~s.y / y.y~. Negative
+curvature clears the stored pairs. A trial is kept when the energy
+rises by at most 1e-8, with at most ten halvings; otherwise a short
+steepest step is taken. A HiGHS feasible set and a non-Euclidean
+manifold keep the two-loop step.
 ~set_project_rigid~ projects translations and rotations on isolated
 clusters.
 
@@ -62,7 +70,7 @@ together is not asked twice.
 | ~clear_exp~ | Drop that preconditioner |
 | ~exp_mu~ | Its energy scale after estimation, or none when it is not installed |
 | ~set_accept~ | ~none~ / ~energy~ / ~nonmonotone~ |
-| ~set_atom_maxmove~ | Per-atom clip (preferred over a Euclidean cap) |
+| ~set_atom_maxmove~ | Per-atom cap. Euclidean L-BFGS takes the geometry step and ignores ~set_accept~ |
 | ~set_project_rigid~ | Drop rigid modes on isolated clusters |
 | ~set_extra_updates~ | Al-Baali extra L-BFGS pairs |
 | ~set_cautious~ | Li--Fukushima pair filter |

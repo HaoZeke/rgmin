@@ -20,9 +20,11 @@ use crate::fire::{
 };
 use crate::hvp::{
     FiniteDifference, HessianVector, NewtonCgRequest, OptionalAction, newton_cg_step,
+    sym_eig_jacobi,
 };
 use crate::lbfgs::{GradNorm, Lbfgs};
 use crate::linesearch::LineSearch;
+use crate::lowest_mode::{ApplyHessian, lowest_eigenpair};
 use crate::manifold::{Manifold, ManifoldKind};
 use crate::method::Method;
 use crate::newton::{HessianObjective, NewtonKind, rfo_direction, shifted_newton};
@@ -33,7 +35,10 @@ use crate::qn::{bfgs_inverse_update, solve_dense, sr1_inverse_update, sr2_hessia
 use crate::qn_step::QnStep;
 use crate::report::Report;
 use crate::rigid::{project_horizontal, project_out_rot_trans};
-use crate::step::{l2, scale_step, scale_step_atom};
+use crate::step::{
+    cap_displacement_atom, l2, max_atom_displacement, scale_displacement_to_atom_cap, scale_step,
+    scale_step_atom,
+};
 use crate::trust::{
     accept_ratio, dogleg_direction, predicted_reduction, reduction_ratio, update_radius,
 };
@@ -108,6 +113,8 @@ pub struct Solver {
     exp: Option<ExpState>,
     /// Analytic or finite-difference Hessian-vector products.
     hvp_calls: usize,
+    /// Negative-curvature kicks already taken in this solve.
+    saddle_kicks: u8,
     inner: Inner,
 }
 
@@ -228,6 +235,7 @@ impl Solver {
             gradient_calls: 0,
             hvp_calls: 0,
             exp: None,
+            saddle_kicks: 0,
             inner,
         }
     }
@@ -798,11 +806,12 @@ impl Solver {
         self.last_pos = None;
     }
 
-    /// Drop method memory. The next step starts cold at `x`.
+    /// Drop method memory. The next step is a cold start from the current `x`.
     pub fn forget(&mut self) {
         self.istep = self.control.istep;
         self.e_hist.clear();
         self.last_pos = None;
+        self.saddle_kicks = 0;
         match &mut self.inner {
             Inner::Lbfgs(solver) => solver.forget(),
             Inner::Nlcg { initialized, .. } => *initialized = false,
@@ -998,6 +1007,311 @@ impl Solver {
         })
     }
 
+    /// Per-atom cap selects the geometry L-BFGS step. Uncapped sessions keep
+    /// the one-oracle two-loop (and Wolfe when acceptance is not [`Accept::None`]).
+    fn use_geometry_lbfgs(&self) -> bool {
+        if self.atom_maxmove.is_none() || !matches!(self.manifold, ManifoldKind::Euclidean) {
+            return false;
+        }
+        if !matches!(self.inner, Inner::Lbfgs(_)) {
+            return false;
+        }
+        #[cfg(feature = "highs")]
+        if self.highs {
+            return false;
+        }
+        true
+    }
+
+    fn apply_geometry_curvature(
+        &mut self,
+        sy: f64,
+        yy: f64,
+        h0: &mut f64,
+        force: &Array1<f64>,
+        cap: f64,
+        forced: &mut Option<Array1<f64>>,
+    ) {
+        let curvature = if sy.is_finite() && yy.is_finite() && sy != 0.0 {
+            yy / sy
+        } else {
+            -1.0
+        };
+        if curvature < 0.0 {
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.forget();
+            }
+            *forced = Some(cap_displacement_atom(&(1000.0 * force), cap));
+        } else if sy > 0.0 && yy > 0.0 {
+            *h0 = sy / yy;
+        }
+    }
+
+    /// eOn L-BFGS step: finite-difference inverse curvature on the first
+    /// iteration, `sy/yy` after that, reset when curvature is negative, the
+    /// uncapped step exceeds the per-atom cap, or the step opposes the force.
+    /// The finite-difference probe is clipped to the objective bounds, and
+    /// the quotient uses the displacement that remains inside the box.
+    /// The trial is accepted when the energy rise is at most 1e-8, with at
+    /// most ten halvings, otherwise a short steepest step.
+    fn geometry_lbfgs_step<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        value: f64,
+        mut grad: Array1<f64>,
+    ) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let cap = self.atom_maxmove.unwrap_or(0.2);
+        let mut h0 = 0.01_f64;
+        let mut forced: Option<Array1<f64>> = None;
+        let force = grad.mapv(|g| -g);
+        let cached = self.same_last_x(x);
+        if !cached {
+            if let Some(previous) = self.last_pos.clone() {
+                let s = &*x - &previous;
+                let y = &grad - &self.last_grad;
+                let sy = s.dot(&y);
+                let yy = y.dot(&y);
+                self.apply_geometry_curvature(sy, yy, &mut h0, &force, cap, &mut forced);
+                if forced.is_none()
+                    && let Inner::Lbfgs(solver) = &mut self.inner
+                {
+                    solver.push_geometry(s, y);
+                }
+            }
+        } else {
+            let (have, sy, yy) = match &self.inner {
+                Inner::Lbfgs(solver) => (solver.have_curvature, solver.last_sy, solver.last_yy),
+                _ => (false, 0.0, 0.0),
+            };
+            if have {
+                self.apply_geometry_curvature(sy, yy, &mut h0, &force, cap, &mut forced);
+            }
+        }
+        if forced.is_none() && self.steps == 0 {
+            let fnorm = l2(&force);
+            if fnorm > 0.0 {
+                let unit = &force / fnorm;
+                // 0.01 is the eOn probe length. Clip before the evaluation:
+                // the raw point can lie outside the objective box.
+                let raw = &*x + &(0.01 * &unit);
+                let probe = obj.bounds().clip(raw.view());
+                let along = (&probe - &*x).dot(&unit);
+                let curvature = if along > 0.0 && along.is_finite() {
+                    let (_efd, gfd) = obj.value_and_gradient(probe.view());
+                    let delta = &gfd - &grad;
+                    delta.dot(&unit) / along
+                } else {
+                    -1.0
+                };
+                if curvature > 0.0 && curvature.is_finite() {
+                    h0 = 1.0 / curvature;
+                } else if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.forget();
+                    forced = Some(cap_displacement_atom(&(1000.0 * &force), cap));
+                }
+            }
+        }
+        let direction = if let Some(dir) = forced {
+            dir
+        } else {
+            let mut direction = match &self.inner {
+                Inner::Lbfgs(solver) => solver.direction_h0(grad.view(), h0),
+                _ => h0 * &force,
+            };
+            if self.project_rigid {
+                project_out_rot_trans(&mut direction, x.view());
+            }
+            direction = self.project_vec(x, &direction);
+            let motion = max_atom_displacement(&direction);
+            if motion >= cap {
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.forget();
+                }
+                cap_displacement_atom(&(h0 * &force), cap)
+            } else {
+                let dn = l2(&direction);
+                let fnorm = l2(&force);
+                if dn > 0.0 && fnorm > 0.0 {
+                    let cosine = (direction.dot(&force) / (dn * fnorm)).clamp(-1.0, 1.0);
+                    if cosine < 0.0 {
+                        if let Inner::Lbfgs(solver) = &mut self.inner {
+                            solver.forget();
+                        }
+                        direction = cap_displacement_atom(&(h0 * &force), cap);
+                    }
+                }
+                cap_displacement_atom(&direction, cap)
+            }
+        };
+        let mut alpha = 1.0;
+        let mut accepted = false;
+        let mut trial = x.clone();
+        let mut tval = value;
+        let mut tgrad = grad.clone();
+        for _ in 0..10 {
+            trial = obj.bounds().clip((&*x + alpha * &direction).view());
+            let ev = obj.value_and_gradient(trial.view());
+            tval = ev.0;
+            tgrad = ev.1;
+            if tval.is_finite() && tval - value <= 1.0e-8 {
+                accepted = true;
+                break;
+            }
+            alpha *= 0.5;
+        }
+        if !accepted {
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.forget();
+            }
+            let sd = cap_displacement_atom(&(0.1 * &force), cap);
+            trial = obj.bounds().clip((&*x + &sd).view());
+            let ev = obj.value_and_gradient(trial.view());
+            tval = ev.0;
+            tgrad = ev.1;
+        }
+        let old = x.clone();
+        let gold = grad.clone();
+        *x = trial;
+        grad = self.horizontal_grad(x, &tgrad);
+        let s = &*x - &old;
+        let y = &grad - &gold;
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.note_curvature(&s, &y);
+            if solver.have_curvature {
+                let sy = solver.last_sy;
+                let yy = solver.last_yy;
+                let curvature = if sy != 0.0 { yy / sy } else { -1.0 };
+                if curvature >= 0.0 {
+                    solver.push_geometry(s, y);
+                }
+            }
+        }
+        self.remember(x, tval, &grad);
+        self.steps += 1;
+        Ok(Report {
+            value: tval,
+            coords: x.clone(),
+            steps: self.steps,
+            grad_norm: self.stationarity_norm(x, &grad),
+        })
+    }
+
+    fn saddle_escape_enabled(&self) -> bool {
+        #[cfg(feature = "highs")]
+        if self.highs {
+            return false;
+        }
+        matches!(self.inner, Inner::Newton { .. } | Inner::Dogleg { .. })
+    }
+
+    /// Lowest eigenpair of `hess` when it lies below the stationarity tolerance.
+    fn unstable_mode(&self, hess: &Array2<f64>) -> Option<Array1<f64>> {
+        let n = hess.nrows();
+        if n == 0 || hess.ncols() != n || hess.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let mut fro2 = 0.0;
+        for v in hess.iter() {
+            fro2 += v * v;
+        }
+        let fro = fro2.sqrt();
+        let tol = self.control.gtol.abs().max(1.0e-6).max(1.0e-8 * fro);
+        let (value, vector) = if n <= 160 {
+            let (evals, evecs) = sym_eig_jacobi(hess.clone());
+            let mut k = 0usize;
+            let mut best = f64::INFINITY;
+            for (i, lam) in evals.iter().enumerate() {
+                if *lam < best {
+                    best = *lam;
+                    k = i;
+                }
+            }
+            if !best.is_finite() {
+                return None;
+            }
+            (best, evecs.column(k).to_owned())
+        } else {
+            struct Mat<'a>(&'a Array2<f64>);
+            impl ApplyHessian for Mat<'_> {
+                fn apply_hessian(&self, _x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
+                    self.0.dot(&v)
+                }
+            }
+            let mut seed = Array1::zeros(n);
+            for i in 0..n {
+                seed[i] = ((i % 11) as f64) - 5.0;
+            }
+            let found = lowest_eigenpair(&Mat(hess), seed.view(), seed.view(), 48.min(n));
+            (found.value, found.vector)
+        };
+        if value < -tol { Some(vector) } else { None }
+    }
+
+    /// Move off a converged saddle along the lowest Hessian mode, scaled to
+    /// the per-atom cap. Analytic Hessian only; at most four kicks per solve.
+    fn leave_saddle<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        value: &mut f64,
+        grad: &mut Array1<f64>,
+    ) where
+        O: HessianObjective + ?Sized,
+    {
+        loop {
+            let gnorm = self.stationarity_norm(x, grad);
+            if gnorm > self.control.gtol || self.saddle_kicks >= 4 {
+                return;
+            }
+            let hess = obj.hessian(x.view());
+            let Some(mode) = self.unstable_mode(&hess) else {
+                return;
+            };
+            let cap = self
+                .atom_maxmove
+                .unwrap_or_else(|| self.control.istep.max(1.0e-8));
+            let step = scale_displacement_to_atom_cap(&mode, cap);
+            let trial = obj.bounds().clip((&*x + &step).view());
+            let (v, g) = obj.value_and_gradient(trial.view());
+            if !v.is_finite() || g.iter().any(|c| !c.is_finite()) {
+                return;
+            }
+            *x = trial;
+            *value = v;
+            *grad = self.horizontal_grad(x, &g);
+            self.saddle_kicks = self.saddle_kicks.saturating_add(1);
+            if let Inner::Dogleg { radius } = &mut self.inner {
+                *radius = self.control.istep.max(1.0e-8);
+            }
+            self.remember(x, *value, grad);
+        }
+    }
+
+    fn report_or_escape<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        mut value: f64,
+        mut grad: Array1<f64>,
+    ) -> Result<Report>
+    where
+        O: HessianObjective + ?Sized,
+    {
+        if self.saddle_escape_enabled() && self.stationarity_norm(x, &grad) <= self.control.gtol {
+            self.leave_saddle(obj, x, &mut value, &mut grad);
+        }
+        Ok(Report {
+            value,
+            coords: x.clone(),
+            steps: self.steps,
+            grad_norm: self.stationarity_norm(x, &grad),
+        })
+    }
+
     fn step_hess_inner<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: HessianObjective + ?Sized,
@@ -1035,12 +1349,7 @@ impl Solver {
         grad = self.horizontal_grad(x, &grad);
         let gnorm = self.stationarity_norm(x, &grad);
         if gnorm < self.control.gtol {
-            return Ok(Report {
-                value,
-                coords: x.clone(),
-                steps: self.steps,
-                grad_norm: gnorm,
-            });
+            return self.report_or_escape(obj, x, value, grad);
         }
         let hess = obj.hessian(x.view());
         if matches!(self.inner, Inner::Dogleg { .. }) {
@@ -1162,12 +1471,7 @@ impl Solver {
             solver.push_pair(s, y, Some(gn));
         }
         self.steps += 1;
-        Ok(Report {
-            value,
-            coords: x.clone(),
-            steps: self.steps,
-            grad_norm: self.stationarity_norm(x, &grad),
-        })
+        self.report_or_escape(obj, x, value, grad)
     }
 
     fn step_dogleg<O>(
@@ -1179,7 +1483,7 @@ impl Solver {
         hess: &ndarray::Array2<f64>,
     ) -> Result<Report>
     where
-        O: DifferentiableObjective<f64> + ?Sized,
+        O: HessianObjective + ?Sized,
     {
         let radius = match &self.inner {
             Inner::Dogleg { radius } => *radius,
@@ -1229,21 +1533,11 @@ impl Solver {
             *x = trial;
             self.remember(x, ft, &gt);
             self.steps += 1;
-            Ok(Report {
-                value: ft,
-                coords: x.clone(),
-                steps: self.steps,
-                grad_norm: self.stationarity_norm(x, &gt),
-            })
+            self.report_or_escape(obj, x, ft, gt)
         } else {
             self.remember(x, value, &grad);
             self.steps += 1;
-            Ok(Report {
-                value,
-                coords: x.clone(),
-                steps: self.steps,
-                grad_norm: self.stationarity_norm(x, &grad),
-            })
+            self.report_or_escape(obj, x, value, grad)
         }
     }
 
@@ -1319,6 +1613,10 @@ impl Solver {
                 steps: self.steps,
                 grad_norm: self.stationarity_norm(x, &grad),
             });
+        }
+
+        if self.use_geometry_lbfgs() {
+            return self.geometry_lbfgs_step(obj, x, value, grad);
         }
 
         // An external displacement has a measured gradient at both ends.
