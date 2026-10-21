@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The docs export installs Org 9.7 or newer from GNU ELPA before
+  ox-rst. Pull requests run the Org export and the Sphinx build.
+  The Pages deploy stays on a push to `main` or
+  `workflow_dispatch`. A pull request has its own concurrency
+  group, so it does not cancel a deploy. `pages: write` and
+  `id-token: write` belong to the deploy job; the workflow token
+  stays read-only.
 - CI runs on pushes and pull requests to `develop` as well as `main`,
   and installs numpy and scipy for the HiGHS reference tests.
 - Dogleg updates its trust radius from the dogleg step, and the
