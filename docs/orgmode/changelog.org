@@ -30,7 +30,8 @@ use ~H0 = 0.1 I~ and five-value nonmonotone acceptance.
 
 FIRE 2.0 follows Guénolé et al.'s semi-implicit update order,
 half-step-back uphill correction with a fresh corrected-point force,
-initial time-step delay, and cap-consistent velocity.
+initial time-step delay, 2,000-step non-positive-power limit, and
+cap-consistent velocity.
 
 Steihaug-Toint Newton-CG is a session method: tokens ~newton-cg~
 and ~newton-pcg~ (~RGMIN_NEWTON_CG~ = 21, ~RGMIN_NEWTON_PCG~ = 22).

@@ -54,6 +54,10 @@ pub struct FireState {
     pub alpha_start: f64,
     /// Consecutive downhill steps.
     pub n_pos: usize,
+    /// Consecutive non-positive-power steps.
+    n_neg: usize,
+    /// Divergence limit for consecutive non-positive-power steps.
+    n_neg_max: usize,
     /// Integration steps since the last cold start.
     steps: usize,
     /// Delay before growing `dt`.
@@ -83,6 +87,8 @@ impl FireState {
             alpha: alpha_start,
             alpha_start,
             n_pos: 0,
+            n_neg: 0,
+            n_neg_max: 2_000,
             steps: 0,
             n_min,
             f_inc: 1.1,
@@ -96,6 +102,7 @@ impl FireState {
         self.vel.fill(0.0);
         self.alpha = self.alpha_start;
         self.n_pos = 0;
+        self.n_neg = 0;
         if matches!(self.kind, FireKind::V2) {
             self.dt = self.dt_start;
             self.steps = 0;
@@ -133,24 +140,39 @@ fn adapt(state: &mut FireState, power: f64) {
     }
 }
 
-/// Prepare a FIRE 2.0 step and return its half-step-back correction.
+/// FIRE 2.0 preparation before the forward integrator.
+pub(crate) enum FirePreparation {
+    /// Continue from the current point.
+    Ready,
+    /// Apply the half-step-back correction and refresh the force.
+    Rollback(Array1<f64>),
+    /// Consecutive uphill steps exceeded Guénolé's limit.
+    Stalled,
+}
+
+/// Prepare a FIRE 2.0 step.
 ///
 /// The caller must evaluate a fresh force after applying a nonzero
 /// correction, before passing that force to [`fire_displacement`].
-pub fn fire_prepare_v2(state: &mut FireState, force: &Array1<f64>) -> Option<Array1<f64>> {
+pub(crate) fn fire_prepare_v2(state: &mut FireState, force: &Array1<f64>) -> FirePreparation {
     if !matches!(state.kind, FireKind::V2) {
-        return None;
+        return FirePreparation::Ready;
     }
     let power = crate::vecops::dot(force.view(), state.vel.view());
     if power > 0.0 {
         state.n_pos += 1;
+        state.n_neg = 0;
         if state.n_pos > state.n_min {
             state.dt = (state.dt * state.f_inc).min(state.dt_max);
             state.alpha *= state.f_alpha;
         }
-        None
+        FirePreparation::Ready
     } else {
         state.n_pos = 0;
+        state.n_neg += 1;
+        if state.n_neg > state.n_neg_max {
+            return FirePreparation::Stalled;
+        }
         if state.steps + 1 >= state.n_min {
             state.dt = (state.dt * state.f_dec).max(state.dt_min);
         }
@@ -158,7 +180,11 @@ pub fn fire_prepare_v2(state: &mut FireState, force: &Array1<f64>) -> Option<Arr
         let moved = correction.iter().any(|v| *v != 0.0);
         state.vel.fill(0.0);
         state.alpha = state.alpha_start;
-        moved.then_some(correction)
+        if moved {
+            FirePreparation::Rollback(correction)
+        } else {
+            FirePreparation::Ready
+        }
     }
 }
 
@@ -216,7 +242,9 @@ mod tests {
         let mut state = FireState::new(FireKind::V2, 2, 0.2);
         state.vel = array![1.0, 0.0];
         let force = array![-1.0, 0.0];
-        let correction = fire_prepare_v2(&mut state, &force).expect("rollback");
+        let FirePreparation::Rollback(correction) = fire_prepare_v2(&mut state, &force) else {
+            panic!("expected rollback");
+        };
         let dx = fire_displacement(&mut state, &force);
         assert_eq!(state.n_pos, 0);
         assert!((state.alpha - state.alpha_start).abs() < 1e-15);
@@ -232,5 +260,16 @@ mod tests {
         state.vel[0] = 1.0;
         let _ = fire_prepare_v2(&mut state, &array![-1.0]);
         assert!((state.dt - 0.05).abs() < 1e-15);
+    }
+
+    #[test]
+    fn v2_stops_after_the_negative_power_limit() {
+        let mut state = FireState::new(FireKind::V2, 1, 0.1);
+        state.n_neg = state.n_neg_max;
+        state.vel[0] = 1.0;
+        assert!(matches!(
+            fire_prepare_v2(&mut state, &array![-1.0]),
+            FirePreparation::Stalled
+        ));
     }
 }

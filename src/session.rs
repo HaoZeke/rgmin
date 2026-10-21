@@ -15,7 +15,8 @@ use crate::bb::bb_direction;
 use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::fire::{
-    FireKind, FireState, fire_after_v1, fire_displacement, fire_prepare_v2, project_box_tangent,
+    FireKind, FirePreparation, FireState, fire_after_v1, fire_displacement, fire_prepare_v2,
+    project_box_tangent,
 };
 use crate::hvp::{
     FiniteDifference, HessianVector, NewtonCgRequest, OptionalAction, newton_cg_step,
@@ -1767,12 +1768,18 @@ impl Solver {
                 let mut force = grad.mapv(|g| -g);
                 project_box_tangent(obj.bounds(), x, &mut force);
                 project_box_tangent(obj.bounds(), x, &mut state.vel);
-                if let Some(correction) = fire_prepare_v2(state, &force) {
-                    *x = obj.bounds().clip((&*x + &correction).view());
-                    let ev = obj.value_and_gradient(x.view());
-                    grad = ev.1;
-                    force = grad.mapv(|g| -g);
-                    project_box_tangent(obj.bounds(), x, &mut force);
+                match fire_prepare_v2(state, &force) {
+                    FirePreparation::Ready => {}
+                    FirePreparation::Rollback(correction) => {
+                        *x = obj.bounds().clip((&*x + &correction).view());
+                        let ev = obj.value_and_gradient(x.view());
+                        grad = ev.1;
+                        force = grad.mapv(|g| -g);
+                        project_box_tangent(obj.bounds(), x, &mut force);
+                    }
+                    FirePreparation::Stalled => {
+                        return Err(Error::FireStalled { steps: self.steps });
+                    }
                 }
                 let forward_start = x.clone();
                 let dx = fire_displacement(state, &force);
