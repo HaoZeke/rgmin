@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opt-in session stop norm. `Solver::set_stop_norm` takes a
+  `StopNorm`: `Two` (the default, `||g||_2`), `MaxAtom` (the largest
+  norm over `(x, y, z)` triples: ASE `fmax`, eOn `max_atom`, LAMMPS
+  `max`), or `Inf` (the largest absolute component: eOn
+  `max_component`, LAMMPS `inf`). Every session stop test and
+  `Report::grad_norm` use it. The default path computes the same
+  numbers as before. C: `rgmin_stop_norm_t`,
+  `rgmin_solver_set_stop_norm` (unknown integers return 1), and
+  `rgmin_solver_report_gradient`, which copies the gradient behind the
+  last step report. The C++ session wraps them as `set_stop_norm` and
+  `report_gradient`. xts aliases follow. `abi_minor` 29.
+- `benches/stop_norm.rs` compares stop points of geometry L-BFGS and
+  FIRE on LJ38 and Pt256 Morse under the two-norm and the max-atom
+  norm.
 - Exponential preconditioner (Packwood, Kermode, Mones, Bernstein,
   Woolley, Gould, Ortner, and Csányi, J. Chem. Phys. 144, 164109
   (2016), <https://doi.org/10.1063/1.4947024>).
@@ -58,6 +72,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Report` gains `grad: Option<Array1<f64>>`, the gradient that
+  `grad_norm` measures. Sessions fill it and one-shot drivers leave it
+  `None`. Code that builds a `Report` literal must set the field.
 - Newton and dogleg leave a first-order saddle. When the force is
   already under `gtol`, the report reads the analytic Hessian. The
   floor is `max(|gtol|, 1e-6, 1e-8 ||H||_F)`. A lowest eigenvalue

@@ -236,3 +236,5 @@ reject a 3N cluster.
   ~1 / norm(d)~ when the memory is empty (raw steepest descent)
 - Gradient stop: ~norminf(g) < 1e-6~ on ~Lbfgs~, ~norm2(g)~ on
   ~minimize_lbfgs~ so existing cold-start reports stay comparable
+- Session stop: ~norm2(g) < gtol~. ~Solver::set_stop_norm~ selects
+  the largest per-atom norm (ASE ~fmax~) or the largest component
