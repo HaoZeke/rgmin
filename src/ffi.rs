@@ -22,7 +22,7 @@ use crate::precon::{ExpParams, ExpState, Neighbours};
 use crate::{
     Accept, ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind,
     Error, HessianOracle, HvpOracle, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep,
-    Restart, ScgParams, Solver, lowest_mode, minimize_method, minimize_method_hess,
+    Restart, ScgParams, Solver, StopNorm, lowest_mode, minimize_method, minimize_method_hess,
     minimize_method_hvp, minimize_scg, minimize_scg_exact,
 };
 
@@ -64,7 +64,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 28;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 29;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -1399,6 +1399,8 @@ pub unsafe extern "C" fn rgmin_minimize_eindir(
 /// Opaque session. Algorithm memory lives here; `x` stays a DLPack tensor.
 pub struct rgmin_solver_t {
     solver: Solver,
+    /// Gradient behind the last successful step report.
+    grad: Option<Array1<f64>>,
 }
 
 /// Allocate a session. `dim` is the length of `x`. Null on bad arguments.
@@ -1431,7 +1433,7 @@ pub unsafe extern "C" fn rgmin_solver_create(
     };
     let mut solver = Solver::new(method_from_c(method, c.memory), control, dim).with_gtol(c.gtol);
     solver.set_accept(Accept::Energy);
-    Box::into_raw(Box::new(rgmin_solver_t { solver }))
+    Box::into_raw(Box::new(rgmin_solver_t { solver, grad: None }))
 }
 
 /// Release a session from [`rgmin_solver_create`].
@@ -1713,6 +1715,40 @@ pub unsafe extern "C" fn rgmin_solver_set_accept(
         rgmin_accept_t::RGMIN_ACCEPT_NONE => Accept::None,
     };
     unsafe { (*solver).solver.set_accept(a) };
+}
+
+/// Gradient norm a session compares to `gtol` and writes to
+/// [`rgmin_report_t::grad_norm`]. Integers match [`StopNorm`].
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum rgmin_stop_norm_t {
+    /// `||g||_2` (default).
+    RGMIN_STOP_NORM_TWO = 0,
+    /// Largest per-atom norm: ASE `fmax`, eOn `max_atom`, LAMMPS `max`.
+    RGMIN_STOP_NORM_MAX_ATOM = 1,
+    /// Largest absolute component: eOn `max_component`, LAMMPS `inf`.
+    RGMIN_STOP_NORM_INF = 2,
+}
+
+/// Select the session stop norm. ABI minor 29. Returns 0, or 1 on a
+/// null session or an unknown integer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_stop_norm(solver: *mut rgmin_solver_t, norm: i32) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_stop_norm: null solver");
+        return 1;
+    }
+    let norm = match norm {
+        0 => StopNorm::Two,
+        1 => StopNorm::MaxAtom,
+        2 => StopNorm::Inf,
+        _ => {
+            set_last_error("rgmin_solver_set_stop_norm: unknown norm");
+            return 1;
+        }
+    };
+    unsafe { (*solver).solver.set_stop_norm(norm) };
+    0
 }
 
 /// Per-atom cap (eOn `maxAtomMotionAppliedV`). On Euclidean L-BFGS this
@@ -2257,7 +2293,7 @@ pub unsafe extern "C" fn rgmin_solver_step(
         let obj = c_oracle(eval, grad, user, n);
         let mut pos = Array1::from(init);
         match unsafe { (*solver).solver.step(&obj, &mut pos) } {
-            Ok(rep) => write_report(x, out, &rep),
+            Ok(rep) => write_report(solver, x, out, rep),
             Err(e) => status_from_error(&e),
         }
     })) {
@@ -2318,7 +2354,7 @@ pub unsafe extern "C" fn rgmin_solver_step_hess(
         let obj = c_oracle_hess(eval, grad, hess, user, n);
         let mut pos = Array1::from(init);
         match unsafe { (*solver).solver.step_hess(&obj, &mut pos) } {
-            Ok(rep) => write_report(x, out, &rep),
+            Ok(rep) => write_report(solver, x, out, rep),
             Err(e) => status_from_error(&e),
         }
     })) {
@@ -2383,7 +2419,7 @@ pub unsafe extern "C" fn rgmin_solver_step_hvp(
         let obj = c_oracle_hvp(eval, grad, hvp, user, n);
         let mut pos = Array1::from(init);
         match unsafe { (*solver).solver.step_hvp(&obj, &mut pos) } {
-            Ok(rep) => write_report(x, out, &rep),
+            Ok(rep) => write_report(solver, x, out, rep),
             Err(e) => status_from_error(&e),
         }
     })) {
@@ -2428,7 +2464,7 @@ pub unsafe extern "C" fn rgmin_solver_step_fg(
         let obj = c_oracle_fg(evalgrad, user, n);
         let mut pos = Array1::from(init);
         match unsafe { (*solver).solver.step(&obj, &mut pos) } {
-            Ok(rep) => write_report(x, out, &rep),
+            Ok(rep) => write_report(solver, x, out, rep),
             Err(e) => status_from_error(&e),
         }
     })) {
@@ -2505,6 +2541,34 @@ pub unsafe extern "C" fn rgmin_solver_pair_count(solver: *const rgmin_solver_t) 
     unsafe { (*solver).solver.pair_count() }
 }
 
+/// Copy the gradient behind the last successful step report into `out`.
+/// `n` must equal the session dimension. ABI minor 29.
+///
+/// # Safety
+/// A non-null `out` must hold `n` writable doubles.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_report_gradient(
+    solver: *const rgmin_solver_t,
+    out: *mut f64,
+    n: usize,
+) -> rgmin_status_t {
+    if solver.is_null() || out.is_null() {
+        set_last_error("rgmin_solver_report_gradient: null argument");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let Some(grad) = (unsafe { &(*solver).grad }) else {
+        set_last_error("rgmin_solver_report_gradient: no step report yet");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    };
+    if n != grad.len() {
+        set_last_error("rgmin_solver_report_gradient: n does not match session dim");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    unsafe { slice::from_raw_parts_mut(out, n) }
+        .copy_from_slice(grad.as_slice().expect("contiguous"));
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
 /// Two-loop `d = -H g`. No evaluation and no push.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_search_direction(
@@ -2578,7 +2642,7 @@ pub unsafe extern "C" fn rgmin_solver_step_hess_fg(
         let obj = c_oracle_hess_fg(evalgrad, hess, user, n);
         let mut pos = Array1::from(init);
         match unsafe { (*solver).solver.step_hess(&obj, &mut pos) } {
-            Ok(rep) => write_report(x, out, &rep),
+            Ok(rep) => write_report(solver, x, out, rep),
             Err(e) => status_from_error(&e),
         }
     })) {
@@ -2807,9 +2871,10 @@ fn c_oracle_hess_fg(
 }
 
 fn write_report(
+    solver: *mut rgmin_solver_t,
     x: *mut DLManagedTensorVersioned,
     out: *mut rgmin_report_t,
-    rep: &crate::Report,
+    rep: crate::Report,
 ) -> rgmin_status_t {
     let dest = match cpu_f64_slice_mut(x, "x") {
         Ok(s) => s,
@@ -2822,6 +2887,7 @@ fn write_report(
             steps: rep.steps,
             grad_norm: rep.grad_norm,
         };
+        (*solver).grad = rep.grad;
     }
     rgmin_status_t::RGMIN_SUCCESS
 }

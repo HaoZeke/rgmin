@@ -800,9 +800,80 @@ fn lowest_eigenpair_elpa_is_unavailable() {
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 28);
+    assert_eq!(stamp.abi_minor, 29);
     assert_eq!(stamp.layout_revision, 4);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
+}
+
+/// Two atoms at force 0.9 each: max-atom 0.9, two-norm 1.27. At gtol 1
+/// the max-atom session stops at the start and the default session
+/// moves. Both hand back the gradient their report measured.
+#[test]
+fn c_abi_stop_norm_and_report_gradient() {
+    use rgmin::ffi::{rgmin_solver_report_gradient, rgmin_solver_set_stop_norm, rgmin_stop_norm_t};
+    let ctrl = rgmin_control_t {
+        maxiter: 10,
+        gtol: 1.0,
+        istep: 0.1,
+        memory: 0,
+        maxmove: 0.0,
+    };
+    let max_atom = rgmin_stop_norm_t::RGMIN_STOP_NORM_MAX_ATOM as i32;
+    assert_eq!(
+        unsafe { rgmin_solver_set_stop_norm(std::ptr::null_mut(), max_atom) },
+        1
+    );
+    let mut probe = [0.0; 6];
+    let st = unsafe { rgmin_solver_report_gradient(std::ptr::null(), probe.as_mut_ptr(), 6) };
+    assert_eq!(st, rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    for norm in [Some(max_atom), None] {
+        let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_LBFGS, &ctrl, 6) };
+        assert!(!session.is_null());
+        let mut g = [f64::NAN; 6];
+        let st = unsafe { rgmin_solver_report_gradient(session, g.as_mut_ptr(), 6) };
+        assert_eq!(st, rgmin_status_t::RGMIN_INVALID_PARAMETER);
+        assert_eq!(unsafe { rgmin_solver_set_stop_norm(session, 3) }, 1);
+        if let Some(norm) = norm {
+            assert_eq!(unsafe { rgmin_solver_set_stop_norm(session, norm) }, 0);
+        }
+        let start = [0.45, 0.0, 0.0, 0.45, 0.0, 0.0];
+        let mut x = start;
+        let mut out = rgmin_report_t {
+            value: 0.0,
+            steps: 0,
+            grad_norm: 0.0,
+        };
+        let xt = unsafe { rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), 6) };
+        let st = unsafe {
+            rgmin_solver_step(
+                session,
+                Some(quad_eval),
+                Some(quad_grad),
+                std::ptr::null_mut(),
+                xt,
+                &mut out,
+            )
+        };
+        unsafe { rgmin_tensor_free(xt) };
+        assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+        let st = unsafe { rgmin_solver_report_gradient(session, g.as_mut_ptr(), 5) };
+        assert_eq!(st, rgmin_status_t::RGMIN_INVALID_PARAMETER);
+        let st = unsafe { rgmin_solver_report_gradient(session, g.as_mut_ptr(), 6) };
+        assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+        for i in 0..6 {
+            assert_eq!(g[i], 2.0 * x[i]);
+        }
+        if norm.is_some() {
+            assert_eq!(x, start);
+            assert_eq!(out.steps, 0);
+            assert_eq!(out.grad_norm, 0.9);
+        } else {
+            assert_ne!(x, start);
+            assert_eq!(out.steps, 1);
+            assert_eq!(out.grad_norm, g.iter().map(|v| v * v).sum::<f64>().sqrt());
+        }
+        unsafe { rgmin_solver_free(session) };
+    }
 }
 
 #[test]

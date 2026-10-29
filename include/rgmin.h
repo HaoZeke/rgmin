@@ -58,7 +58,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 28
+#define RGMIN_ABI_VERSION_MINOR 29
 #define RGMIN_ABI_LAYOUT_REVISION 4
 
 /** Solver selector. \c RGMIN_LBFGS is the production unconstrained method. */
@@ -250,6 +250,22 @@ typedef enum rgmin_accept_t {
     RGMIN_ACCEPT_NONMONOTONE = 2
 } rgmin_accept_t;
 void rgmin_solver_set_accept(rgmin_solver_t *solver, rgmin_accept_t accept);
+/** Gradient norm a session compares to \c gtol and writes to
+ *  \c rgmin_report_t.grad_norm. MAX_ATOM is the largest norm over
+ *  (x, y, z) triples (ASE fmax, eOn max_atom, LAMMPS max). INF is the
+ *  largest absolute component (eOn max_component, LAMMPS inf). */
+typedef enum rgmin_stop_norm_t {
+    RGMIN_STOP_NORM_TWO = 0,
+    RGMIN_STOP_NORM_MAX_ATOM = 1,
+    RGMIN_STOP_NORM_INF = 2
+} rgmin_stop_norm_t;
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(rgmin_stop_norm_t) == sizeof(int32_t),
+               "rgmin_stop_norm_t is i32-wide; do not build this header with -fshort-enums");
+#endif
+/** Select the stop norm. TWO is the default. Returns 0, or 1 on a null
+ *  session or an unknown integer. ABI minor 29. */
+int32_t rgmin_solver_set_stop_norm(rgmin_solver_t *solver, rgmin_stop_norm_t norm);
 /** Per-atom cap (eOn \c maxAtomMotionAppliedV). On Euclidean L-BFGS
  *  this selects the geometry step and ignores \ref rgmin_solver_set_accept.
  *  A nominal steepest trial at least 64 times the cap takes one
@@ -432,6 +448,11 @@ size_t rgmin_solver_gradient_calls(const rgmin_solver_t *solver);
 size_t rgmin_solver_hvp_calls(const rgmin_solver_t *solver);
 /** Number of accepted L-BFGS pairs. Null and other methods return zero. */
 size_t rgmin_solver_pair_count(const rgmin_solver_t *solver);
+/** Copy the gradient behind the last successful step report into
+ *  \a out. \a n must equal the session dimension. Fails before the
+ *  first step. ABI minor 29. */
+rgmin_status_t rgmin_solver_report_gradient(const rgmin_solver_t *solver,
+                                            double *out, size_t n);
 /** Two-loop `d = -H g` with no evaluation and no push. Empty memory
  *  is steepest descent (`-g`). Writes \a n entries to \a dir. */
 rgmin_status_t rgmin_solver_search_direction(rgmin_solver_t *solver,
