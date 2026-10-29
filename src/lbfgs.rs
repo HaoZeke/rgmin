@@ -709,6 +709,7 @@ impl Lbfgs {
                     coords: pos,
                     steps: step,
                     grad_norm: gnorm,
+                    grad: None,
                 });
             }
             self.step_objective(
@@ -720,6 +721,7 @@ impl Lbfgs {
             coords: pos,
             steps: control.maxiter,
             grad_norm: l2(&grad),
+            grad: None,
         })
     }
 

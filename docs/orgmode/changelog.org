@@ -22,6 +22,15 @@ still wins. C: ~rgmin_exp_t~, ~rgmin_solver_set_exp~,
 wraps those three as ~set_exp~, ~clear_exp~, and ~exp_mu~.
 ~abi_minor~ 28.
 
+~Solver::set_stop_norm~ selects the norm that every session stop
+test and ~Report::grad_norm~ use. ~StopNorm::Two~ is the default.
+~StopNorm::MaxAtom~ is the largest per-atom norm (ASE ~fmax~, eOn
+~max_atom~, LAMMPS ~max~). ~StopNorm::Inf~ is the largest absolute
+component (eOn ~max_component~, LAMMPS ~inf~). ~Report::grad~
+carries the gradient behind a session report. C:
+~rgmin_solver_set_stop_norm~ and ~rgmin_solver_report_gradient~.
+~abi_minor~ 29.
+
 Newton and dogleg leave a first-order saddle. When the force is
 already under ~gtol~, the report reads the analytic Hessian. The
 floor is max(abs(gtol), 1e-6, 1e-8 times the Frobenius norm of H).

@@ -234,6 +234,7 @@ fn done(value: f64, coords: Array1<f64>, steps: usize, grad_norm: f64) -> Report
         coords,
         steps,
         grad_norm,
+        grad: None,
     }
 }
 

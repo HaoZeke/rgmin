@@ -235,6 +235,12 @@ public:
     /// Energy scale, or NaN when none is installed.
     double exp_mu() const noexcept { return rgmin_solver_exp_mu(ptr_); }
     void set_accept(rgmin_accept_t accept) { rgmin_solver_set_accept(ptr_, accept); }
+    /// Stop norm for gtol and Report::grad_norm. Returns 0, or 1 on an unknown norm.
+    int set_stop_norm(rgmin_stop_norm_t norm) { return rgmin_solver_set_stop_norm(ptr_, norm); }
+    /// Copy the gradient behind the last step report. n is the session dimension.
+    rgmin_status_t report_gradient(double* out, std::size_t n) const {
+        return rgmin_solver_report_gradient(ptr_, out, n);
+    }
     /// Per-atom cap. Euclidean L-BFGS selects the geometry step and
     /// ignores set_accept. A nominal steepest trial at least 64 times
     /// the cap takes one finite-difference curvature probe, clipped to

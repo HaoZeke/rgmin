@@ -151,6 +151,7 @@ where
                 coords: pos,
                 steps: step,
                 grad_norm: gnorm,
+                grad: None,
             });
         }
         let hess = obj.hessian(pos.view());
@@ -178,6 +179,7 @@ where
         coords: pos,
         steps: control.maxiter,
         grad_norm: l2(&grad),
+        grad: None,
     })
 }
 

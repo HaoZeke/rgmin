@@ -55,6 +55,7 @@ where
                 coords: pos,
                 steps: step,
                 grad_norm: gnorm,
+                grad: None,
             });
         }
         let dir = adam_direction(&mut m, &mut v, &grad, beta1, beta2, b1p, b2p, eps);
@@ -73,6 +74,7 @@ where
         coords: pos,
         steps: control.maxiter,
         grad_norm: l2(&grad),
+        grad: None,
     })
 }
 

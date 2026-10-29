@@ -194,6 +194,7 @@ where
                 coords: w,
                 steps: step,
                 grad_norm: gnorm,
+                grad: None,
             });
         }
 
@@ -212,6 +213,7 @@ where
                     coords: w,
                     steps: step,
                     grad_norm: gnorm,
+                    grad: None,
                 });
             }
 
@@ -291,6 +293,7 @@ where
                     coords: w,
                     steps: step + 1,
                     grad_norm: l2(&grad_new),
+                    grad: None,
                 });
             }
             f_old = f_new;
@@ -301,6 +304,7 @@ where
                     coords: w,
                     steps: step + 1,
                     grad_norm: l2(&grad),
+                    grad: None,
                 });
             }
         }
@@ -341,5 +345,6 @@ where
         grad_norm: l2(&grad),
         coords: w,
         steps: control.maxiter,
+        grad: None,
     })
 }

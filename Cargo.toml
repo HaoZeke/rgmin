@@ -74,6 +74,10 @@ required-features = ["highs"]
 name = "ffi_throughput"
 required-features = ["capi"]
 
+[[bench]]
+name = "stop_norm"
+harness = false
+
 
 [profile.release]
 lto = "thin"
