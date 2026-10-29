@@ -90,6 +90,7 @@ where
         coords: pos.clone(),
         steps: 0,
         grad_norm: f64::INFINITY,
+        grad: None,
     };
     for _ in 0..control.maxiter {
         last = solver.step(obj, &mut pos)?;
@@ -134,6 +135,7 @@ where
         coords: pos.clone(),
         steps: 0,
         grad_norm: f64::INFINITY,
+        grad: None,
     };
     for _ in 0..control.maxiter {
         last = solver.step_hess(obj, &mut pos)?;
@@ -179,6 +181,7 @@ where
         coords: pos.clone(),
         steps: 0,
         grad_norm: f64::INFINITY,
+        grad: None,
     };
     for _ in 0..control.maxiter {
         last = solver.step_hvp(obj, &mut pos)?;
@@ -222,6 +225,7 @@ where
                 coords: pos,
                 steps: step,
                 grad_norm: gnorm,
+                grad: None,
             });
         }
         let (npos, _, lsstep, _) =
@@ -249,5 +253,6 @@ where
         coords: pos,
         steps: control.maxiter,
         grad_norm: l2(&grad),
+        grad: None,
     })
 }

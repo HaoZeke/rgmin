@@ -117,6 +117,7 @@ where
         coords: gbest_position,
         steps: iteration,
         grad_norm: l2(&grad),
+        grad: None,
     })
 }
 

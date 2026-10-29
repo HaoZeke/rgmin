@@ -79,7 +79,7 @@ pub mod vecops;
 
 pub use accept::Accept;
 pub use adam::minimize_adam;
-pub use control::Control;
+pub use control::{Control, StopNorm};
 pub use error::{Error, Result};
 pub use fire::FireKind;
 pub use highs_kind::{HighsCCallback, HighsCallbackKind, HighsCrossover, HighsSolverKind};

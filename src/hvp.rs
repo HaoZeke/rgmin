@@ -821,6 +821,7 @@ where
                 coords: pos,
                 steps: step,
                 grad_norm: gnorm,
+                grad: None,
             });
         }
         // Inexact-Newton forcing keeps early CG cheap and the tail
@@ -859,5 +860,6 @@ where
         coords: pos,
         steps: control.maxiter,
         grad_norm: nrm2(grad.view()),
+        grad: None,
     })
 }

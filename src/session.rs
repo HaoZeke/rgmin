@@ -12,7 +12,7 @@ use crate::accept::accept_step_with_fallback;
 use crate::accept::{Accept, accept_step};
 use crate::adam::adam_direction;
 use crate::bb::bb_direction;
-use crate::control::Control;
+use crate::control::{Control, StopNorm};
 use crate::error::{Error, Result};
 use crate::fire::{
     FireKind, FireMix, FirePreparation, FireState, fire_after_v1, fire_after_v1_metric,
@@ -117,6 +117,7 @@ pub struct Solver {
     hvp_calls: usize,
     /// Negative-curvature kicks already taken in this solve.
     saddle_kicks: u8,
+    stop_norm: StopNorm,
     inner: Inner,
 }
 
@@ -239,6 +240,7 @@ impl Solver {
             hvp_calls: 0,
             exp: None,
             saddle_kicks: 0,
+            stop_norm: StopNorm::Two,
             inner,
         }
     }
@@ -322,6 +324,17 @@ impl Solver {
     /// eOn `lbfgs_accept`. Default is take the clipped step.
     pub fn set_accept(&mut self, accept: Accept) {
         self.accept = accept;
+    }
+
+    /// Norm that every stop test and [`Report::grad_norm`] apply to the
+    /// gradient. [`StopNorm::Two`] is the default.
+    pub fn set_stop_norm(&mut self, norm: StopNorm) {
+        self.stop_norm = norm;
+    }
+
+    /// Norm selected by [`Self::set_stop_norm`].
+    pub fn stop_norm(&self) -> StopNorm {
+        self.stop_norm
     }
 
     /// Line search stored on the session. First-order `step` uses
@@ -728,6 +741,7 @@ impl Solver {
         {
             use crate::lbfgs_qp::side_at;
             let mut norm = 0.0_f64;
+            let mut projected = Array1::zeros(x.len());
             for k in 0..x.len() {
                 let lo = side_at(self.box_lo.as_deref(), k).unwrap_or(f64::NEG_INFINITY);
                 let hi = side_at(self.box_hi.as_deref(), k).unwrap_or(f64::INFINITY);
@@ -736,12 +750,26 @@ impl Solver {
                 }
                 // x - clip(x-g, lo, hi) = clip(g, x-hi, x-lo).
                 // Distance clipping preserves gradients smaller than an ulp of x.
-                norm = norm.hypot(grad[k].clamp(x[k] - hi, x[k] - lo));
+                projected[k] = grad[k].clamp(x[k] - hi, x[k] - lo);
+                norm = norm.hypot(projected[k]);
             }
-            return norm;
+            return match self.stop_norm {
+                StopNorm::Two => norm,
+                other => other.of(projected.view()),
+            };
         }
         let _ = x;
-        l2(grad)
+        self.stop_norm.of(grad.view())
+    }
+
+    fn report(&self, value: f64, x: &Array1<f64>, grad: &Array1<f64>) -> Report {
+        Report {
+            value,
+            coords: x.clone(),
+            steps: self.steps,
+            grad_norm: self.stationarity_norm(x, grad),
+            grad: Some(grad.clone()),
+        }
     }
 
     /// Record `s = x+ - x`, `y = g+ - g` from the caller's previous outer.
@@ -952,12 +980,7 @@ impl Solver {
         }
         if gnorm < self.control.gtol {
             self.remember(x, value, &raw_grad);
-            return Ok(Report {
-                value,
-                coords: x.clone(),
-                steps: self.steps,
-                grad_norm: gnorm,
-            });
+            return Ok(self.report(value, x, &grad));
         }
         let (radius, precondition) = match &self.inner {
             Inner::NewtonCg { radius } => (*radius, false),
@@ -1005,12 +1028,7 @@ impl Solver {
         };
         self.remember(x, taken.value, &raw_out);
         self.steps += 1;
-        Ok(Report {
-            value: taken.value,
-            coords: x.clone(),
-            steps: self.steps,
-            grad_norm: self.stationarity_norm(x, &report_grad),
-        })
+        Ok(self.report(taken.value, x, &report_grad))
     }
 
     /// `P^{-1} force` when an exponential preconditioner is installed.
@@ -1252,12 +1270,7 @@ impl Solver {
         }
         self.remember(x, tval, &grad);
         self.steps += 1;
-        Ok(Report {
-            value: tval,
-            coords: x.clone(),
-            steps: self.steps,
-            grad_norm: self.stationarity_norm(x, &grad),
-        })
+        Ok(self.report(tval, x, &grad))
     }
 
     fn saddle_escape_enabled(&self) -> bool {
@@ -1364,12 +1377,7 @@ impl Solver {
         if self.saddle_escape_enabled() && self.stationarity_norm(x, &grad) <= self.control.gtol {
             self.leave_saddle(obj, x, &mut value, &mut grad);
         }
-        Ok(Report {
-            value,
-            coords: x.clone(),
-            steps: self.steps,
-            grad_norm: self.stationarity_norm(x, &grad),
-        })
+        Ok(self.report(value, x, &grad))
     }
 
     fn step_hess_inner<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
@@ -1479,12 +1487,7 @@ impl Solver {
                 solver.push_pair(s, y, Some(gn));
             }
             self.steps += 1;
-            return Ok(Report {
-                value,
-                coords: x.clone(),
-                steps: self.steps,
-                grad_norm: self.stationarity_norm(x, &grad),
-            });
+            return Ok(self.report(value, x, &grad));
         }
         let mut dir = if let Some(kind) = newton_kind {
             match kind {
@@ -1629,12 +1632,7 @@ impl Solver {
         grad = self.horizontal_grad(x, &grad);
         let gnorm = self.stationarity_norm(x, &grad);
         if gnorm < self.control.gtol {
-            return Ok(Report {
-                value,
-                coords: x.clone(),
-                steps: self.steps,
-                grad_norm: gnorm,
-            });
+            return Ok(self.report(value, x, &grad));
         }
         self.refresh_exp(obj, x, &grad)?;
 
@@ -1667,12 +1665,7 @@ impl Solver {
             }
             self.remember(x, value, &grad);
             self.steps += 1;
-            return Ok(Report {
-                value,
-                coords: x.clone(),
-                steps: self.steps,
-                grad_norm: self.stationarity_norm(x, &grad),
-            });
+            return Ok(self.report(value, x, &grad));
         }
 
         if self.use_geometry_lbfgs() {
@@ -2049,12 +2042,7 @@ impl Solver {
 
         self.remember(x, value, &grad);
         self.steps += 1;
-        Ok(Report {
-            value,
-            coords: x.clone(),
-            steps: self.steps,
-            grad_norm: self.stationarity_norm(x, &grad),
-        })
+        Ok(self.report(value, x, &grad))
     }
 
     fn step_pso<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
@@ -2133,12 +2121,7 @@ impl Solver {
             *x = state.gbest_position.clone();
             let (value, grad) = obj.value_and_gradient(x.view());
             self.steps += 1;
-            return Ok(Report {
-                value,
-                coords: x.clone(),
-                steps: self.steps,
-                grad_norm: self.stationarity_norm(x, &grad),
-            });
+            return Ok(self.report(value, x, &grad));
         }
         unreachable!("PSO slot populated above")
     }
