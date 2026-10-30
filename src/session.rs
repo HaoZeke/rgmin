@@ -1833,6 +1833,10 @@ impl Solver {
                     }
                     g_old.assign(&grad);
                     d_old.assign(dir);
+                } else if self.accept != Accept::None {
+                    // The refused direction would be retried from the same
+                    // point on every later call.
+                    *initialized = false;
                 }
             }
             Inner::Bfgs { h } => {
