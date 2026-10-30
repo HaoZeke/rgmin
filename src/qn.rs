@@ -238,6 +238,14 @@ fn done(value: f64, coords: Array1<f64>, steps: usize, grad_norm: f64) -> Report
     }
 }
 
+/// Nocedal-Wright 6.20: `s·y / y·y`, the inverse-Hessian scale of a
+/// pair. `None` when the curvature is not safely positive.
+pub(crate) fn secant_scale(s: &Array1<f64>, y: &Array1<f64>) -> Option<f64> {
+    let sy = s.dot(y);
+    let yy = y.dot(y);
+    (sy > CURVATURE && yy > 0.0).then(|| sy / yy)
+}
+
 /// Inverse BFGS, Nocedal-Wright 6.17:
 /// `H+ = (I - ρ s y^T) H (I - ρ y s^T) + ρ s s^T`, `ρ = 1/(y·s)`.
 pub(crate) fn bfgs_inverse_update(h: &mut Array2<f64>, s: &Array1<f64>, y: &Array1<f64>) {

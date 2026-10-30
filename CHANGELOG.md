@@ -214,6 +214,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   length used to be retried from the same point. On boxed Rosenbrock
   2D from `(-1.2, 1.0)` the energy stayed at `f = 0.116646`.
   `Accept::None` is unchanged.
+- Session BFGS and SR1 under `Accept::Energy` or
+  `Accept::Nonmonotone` take `istep` along the starting identity and
+  rescale it by `s·y / y·y` (Nocedal-Wright 6.20) before the first
+  update, as L-BFGS does with an empty memory. The raw `-g` step rose
+  on all ten halvings, so on boxed Rosenbrock 2D from `(-1.2, 1.0)`
+  they stayed at `f = 24.2`. `Accept::None` is unchanged.
 - Failed C callbacks return NaN-filled gradients and Hessians rather
   than fabricated zeros or identity matrices.
 - The FFI waist reuses standing DLPack shells per solve instead of
