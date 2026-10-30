@@ -267,3 +267,41 @@ fn a_refused_first_step_leaves_the_session_new() {
         assert_eq!(run(true), run(false), "{token}");
     }
 }
+
+/// A slope too shallow to move `x` in floating point keeps every FIRE 2.0
+/// power test at zero, so the session counts uphill steps until it stops
+/// at its limit. Non-finite trials just before that limit must not count:
+/// the session stops after the same finite steps as one that never saw
+/// them, and each refusal is [`Error::Oracle`], not [`Error::FireStalled`].
+#[test]
+fn a_refused_trial_does_not_count_toward_the_fire2_stall() {
+    let open = AtomicBool::new(true);
+    let fg = |x: ArrayView1<f64>| {
+        let f = 1e-7 * x[0];
+        let f = if open.load(SeqCst) { f } else { f64::NAN };
+        (f, array![1e-7])
+    };
+    let obj = Oracle::unbounded(1, &fg);
+    let run = |refuse: bool| {
+        let mut solver = Solver::new(Method::from_name("fire2").unwrap(), CONTROL, 1);
+        let mut x = array![1e10];
+        let mut steps = 0;
+        let stop = loop {
+            if steps == 1999 && refuse {
+                open.store(false, SeqCst);
+                for _ in 0..3 {
+                    let out = solver.step(&obj, &mut x);
+                    assert!(matches!(out, Err(Error::Oracle { .. })), "{out:?}");
+                }
+                open.store(true, SeqCst);
+            }
+            match solver.step(&obj, &mut x) {
+                Ok(_) => steps += 1,
+                Err(e) => break e,
+            }
+        };
+        assert!(matches!(stop, Error::FireStalled { .. }), "{stop}");
+        (steps, format!("{stop:?}"), x)
+    };
+    assert_eq!(run(true), run(false));
+}
