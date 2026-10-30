@@ -42,10 +42,18 @@ pub enum Method {
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
     Sr1,
-    /// SR2 Hessian update (`rgmin` `sr2.hpp`).
+    /// SR2: Powell symmetrization of the rank-one secant map on a dense
+    /// Hessian `B`, with `c = y + Bs`.
+    ///
+    /// With `a = s·y` and `b = s·Bs` both nonzero, it is the Broyden class
+    /// member with `φ = a (a - b) / (a + b)^2` (Nocedal-Wright 6.32). It is
+    /// not the `sr2.hpp` rank-one map `B += δ c^T / (δ·s)`, `δ = y - Bs`,
+    /// and not Powell symmetric Broyden (`c = s`).
     ///
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    /// Dennis and Moré, *Quasi-Newton methods, motivation and theory*,
+    /// <https://doi.org/10.1137/1019005>.
     Sr2,
     /// Kingma and Ba Adam, with a line search along the preconditioned step.
     ///

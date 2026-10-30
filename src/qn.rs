@@ -138,9 +138,11 @@ where
 /// Symmetric rank-two secant update on a dense Hessian `B`.
 ///
 /// `B` starts as `I` and the search direction is `-B^{-1} g`. After a
-/// move, [`sr2_hessian_update`] applies Powell's symmetrization of the
-/// rank-one secant map `B + δ c^T / (c·s)`, with `δ = y - Bs` and
-/// `c = y + Bs`. The result is a Broyden class member (Nocedal-Wright 6.32).
+/// move, [`sr2_hessian_update`] symmetrizes the rank-one secant map
+/// `B + δ c^T / (c·s)`, with `δ = y - Bs` and `c = y + Bs`. When `s·y`
+/// and `s·Bs` are nonzero, the result is a Broyden class member
+/// (Nocedal-Wright 6.32). Powell (1970) symmetrizes with `c = s`, the
+/// PSB update. Dennis and Moré (1977) give the symmetrization for any `c`.
 ///
 /// Powell, *A new algorithm for unconstrained optimization*, in
 /// *Nonlinear Programming* (1970),
@@ -280,11 +282,12 @@ pub(crate) fn bfgs_inverse_update(h: &mut Array2<f64>, s: &Array1<f64>, y: &Arra
 /// `B += (δ c^T + c δ^T) / (c·s) - (δ·s) c c^T / (c·s)^2`, with
 /// `δ = y - Bs` and `c = y + Bs`.
 ///
-/// `B+ s = y` (Nocedal-Wright 6.6), and `B+` is the Broyden class (6.32)
-/// with `φ = a (a - b) / (a + b)^2`, `a = s·y`, `b = s·Bs`. The `sr2.hpp`
-/// map `δ c^T / (δ·s)` has `B+ s - y = 2 b δ / (δ·s)`, so it doubles `B`
-/// along `s` once `b` dominates `a`. Skip when
-/// `|c·s| < 1e-8 ||c|| ||s||`, the 6.26 rule on `c`.
+/// `B+ s = y` (Nocedal-Wright 6.6). With `a = s·y` and `b = s·Bs` both
+/// nonzero, `B+` is the Broyden class (6.32) with
+/// `φ = a (a - b) / (a + b)^2`. The `sr2.hpp` map `δ c^T / (δ·s)` has
+/// `B+ s - y = 2 b δ / (δ·s)`, so it doubles `B` along `s` once `b`
+/// dominates `a`. Skip when `|c·s| < 1e-8 ||c|| ||s||`, the form of the
+/// SR1 rule 6.26 with `c` in place of `y - Bs`, or when `|c·s| <= 1e-12`.
 pub(crate) fn sr2_hessian_update(b: &mut Array2<f64>, s: &Array1<f64>, y: &Array1<f64>) {
     let bs = b.dot(s);
     let delta = y - &bs;

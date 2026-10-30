@@ -229,10 +229,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `s·y`, it doubled `B` along `s` on every step, so the steps halved
   and SR2 stalled away from a stationary point. SR2 now applies
   Powell's symmetrization with `c = y + Bs`:
-  `B += (δ c^T + c δ^T) / (c·s) - (δ·s) c c^T / (c·s)^2`. That is the
-  Broyden class (6.32) with `φ = a (a - b) / (a + b)^2`, where
-  `a = s·y` and `b = s·Bs`.
-  A symmetric `B` stays exactly symmetric in floating point.
+  `B += (δ c^T + c δ^T) / (c·s) - (δ·s) c c^T / (c·s)^2`. With
+  `a = s·y` and `b = s·Bs` both nonzero, that is the Broyden class
+  (6.32) with `φ = a (a - b) / (a + b)^2`. It is not Powell symmetric
+  Broyden (`c = s`). A symmetric `B` stays exactly symmetric in
+  floating point.
 - Session SR2 under `Accept::Energy` or `Accept::Nonmonotone` starts
   as BFGS and SR1 do. It takes `istep` along `B = I`, sets
   `B = I y·y / s·y` before the first update, and resets `B` to `I`
