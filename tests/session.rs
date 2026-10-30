@@ -1596,6 +1596,45 @@ fn bb_energy_accept_drops_the_pair_after_a_refused_step() {
     assert!(last < 1e-3, "BB froze at {last} {x:?}");
 }
 
+/// From (-1.2, 1.0) the unscaled identity step `-g` rises on all ten
+/// halvings and on the steepest fallback, so BFGS and SR1 stayed at
+/// f = 24.2. The first energy step takes `istep` along the identity and
+/// reaches the point of the first CG step. Both then reach the minimum
+/// at (1, 1). `Accept::None` still takes the raw step, which the box
+/// clips to its corner.
+#[test]
+fn bfgs_and_sr1_energy_accept_leave_the_start() {
+    let obj = Rosenbrock::<2>::new();
+    for method in [Method::Bfgs, Method::Sr1] {
+        let mut x = array![-1.2, 1.0];
+        let mut solver = Solver::new(method.clone(), control(), 2);
+        solver.set_accept(rgmin::Accept::Energy);
+        let first = solver.step(&obj, &mut x).unwrap();
+        assert!(
+            (first.value - 3.742860).abs() < 1e-6,
+            "{method:?} stayed at {}",
+            first.value
+        );
+        assert_eq!(x[1], 2.048);
+        let mut last = first;
+        for _ in 0..79 {
+            last = solver.step(&obj, &mut x).unwrap();
+        }
+        let miss = (x[0] - 1.0).abs().max((x[1] - 1.0).abs());
+        assert!(
+            last.grad_norm < 1e-6 && miss < 1e-6,
+            "{method:?} stalled at f = {} |g| = {} {x:?}",
+            last.value,
+            last.grad_norm
+        );
+    }
+    let mut x = array![-1.2, 1.0];
+    let mut solver = Solver::new(Method::Bfgs, control(), 2);
+    solver.set_accept(rgmin::Accept::None);
+    solver.step(&obj, &mut x).unwrap();
+    assert_eq!(x, array![2.048, 2.048]);
+}
+
 #[test]
 fn fire_and_bb_kill_a_sphere() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
