@@ -1635,6 +1635,35 @@ fn bfgs_and_sr1_energy_accept_leave_the_start() {
     assert_eq!(x, array![2.048, 2.048]);
 }
 
+/// SR2 takes the same first energy step as BFGS and SR1. A non-secant
+/// update used to double `B` along `s` on every step, so the steps
+/// halved and SR2 stopped short of the minimum.
+#[test]
+fn sr2_energy_accept_reaches_the_minimum() {
+    let obj = Rosenbrock::<2>::new();
+    let mut x = array![-1.2, 1.0];
+    let mut solver = Solver::new(Method::Sr2, control(), 2);
+    solver.set_accept(rgmin::Accept::Energy);
+    let first = solver.step(&obj, &mut x).unwrap();
+    assert!(
+        (first.value - 3.742860).abs() < 1e-6,
+        "Sr2 stayed at {}",
+        first.value
+    );
+    assert_eq!(x[1], 2.048);
+    let mut last = first;
+    for _ in 0..79 {
+        last = solver.step(&obj, &mut x).unwrap();
+    }
+    let miss = (x[0] - 1.0).abs().max((x[1] - 1.0).abs());
+    assert!(
+        last.grad_norm < 1e-6 && miss < 1e-6,
+        "Sr2 stalled at f = {} |g| = {} {x:?}",
+        last.value,
+        last.grad_norm
+    );
+}
+
 #[test]
 fn fire_and_bb_kill_a_sphere() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
