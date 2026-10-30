@@ -31,7 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every first-order method, BB and FIRE included. Energy and
   nonmonotone acceptance require a finite trial. FIRE and the
   geometry L-BFGS fallback return `Error::Oracle` instead of stepping
-  into a non-finite answer. Through the C ABI these errors arrive as
+  into a non-finite answer. They leave `x`, the FIRE integrator and the
+  L-BFGS curvature as they were, so a retry probes the same trial.
+  Through the C ABI these errors arrive as
   `RGMIN_INTERNAL_ERROR` with no NaN or clipped-to-the-bound
   coordinate sent to the callback.
 
