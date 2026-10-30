@@ -136,8 +136,8 @@ enum Inner {
         d_old: Array1<f64>,
         initialized: bool,
     },
-    /// `fresh`: no secant pair has reached the matrix since construction
-    /// or `forget`.
+    /// `fresh`: no secant pair has reached the matrix since construction,
+    /// `forget`, or a refused energy step.
     Bfgs {
         h: Array2<f64>,
         fresh: bool,
@@ -1884,6 +1884,11 @@ impl Solver {
                         *fresh = false;
                         bfgs_inverse_update(h, &s, &y);
                     }
+                } else if self.accept != Accept::None {
+                    // The refused direction would be retried from the same
+                    // point on every later call.
+                    *h = Array2::<f64>::eye(self.dim);
+                    *fresh = true;
                 }
             }
             Inner::Sr1 { h, fresh } => {
@@ -1919,6 +1924,11 @@ impl Solver {
                         *fresh = false;
                         sr1_inverse_update(h, &s, &y);
                     }
+                } else if self.accept != Accept::None {
+                    // The refused direction would be retried from the same
+                    // point on every later call.
+                    *h = Array2::<f64>::eye(self.dim);
+                    *fresh = true;
                 }
             }
             Inner::Sr2 { b } => {

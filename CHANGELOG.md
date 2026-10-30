@@ -219,7 +219,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rescale it by `s·y / y·y` (Nocedal-Wright 6.20) before the first
   update, as L-BFGS does with an empty memory. The raw `-g` step rose
   on all ten halvings, so on boxed Rosenbrock 2D from `(-1.2, 1.0)`
-  they stayed at `f = 24.2`. `Accept::None` is unchanged.
+  they stayed at `f = 24.2`. A refused step resets the matrix to
+  that identity, so SR1 no longer retries an uphill direction from
+  the same point. `Accept::None` is unchanged.
 - Failed C callbacks return NaN-filled gradients and Hessians rather
   than fabricated zeros or identity matrices.
 - The FFI waist reuses standing DLPack shells per solve instead of
