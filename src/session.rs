@@ -2013,6 +2013,11 @@ impl Solver {
                 if moved {
                     *prev_s = Some(&*x - &old);
                     *prev_y = Some(&grad - &gold);
+                } else if self.accept != Accept::None {
+                    // The refused spectral length would be retried from the
+                    // same point on every later call.
+                    *prev_s = None;
+                    *prev_y = None;
                 }
             }
             Inner::Pso { .. }

@@ -208,6 +208,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused direction used to be retried from the same point.
   Polak-Ribiere on boxed Rosenbrock 2D from `(-1.2, 1.0)` stayed at
   `f = 3.742860`. `Accept::None` is unchanged.
+- Session Barzilai-Borwein drops its stored `(s, y)` pair after
+  `Accept::Energy` or `Accept::Nonmonotone` refuses a step, so the
+  next call starts from the `istep` length. The refused spectral
+  length used to be retried from the same point. On boxed Rosenbrock
+  2D from `(-1.2, 1.0)` the energy stayed at `f = 0.116646`.
+  `Accept::None` is unchanged.
 - Failed C callbacks return NaN-filled gradients and Hessians rather
   than fabricated zeros or identity matrices.
 - The FFI waist reuses standing DLPack shells per solve instead of
