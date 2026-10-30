@@ -1556,6 +1556,26 @@ fn nlcg_second_step_is_not_steepest() {
     );
 }
 
+/// The first step clips y onto the 2.048 box face at f = 3.742860. The
+/// next conjugate direction leaves the box, its clipped step rises, and
+/// the energy test refuses it. A refused step restarts the recurrence
+/// from steepest descent instead of retrying the same direction.
+#[test]
+fn nlcg_energy_accept_restarts_after_a_refused_step() {
+    let obj = Rosenbrock::<2>::new();
+    let mut x = array![-1.2, 1.0];
+    let mut solver = Solver::new(Method::polak_ribiere(), control(), 2);
+    solver.set_accept(rgmin::Accept::Energy);
+    let first = solver.step(&obj, &mut x).unwrap();
+    assert!((first.value - 3.742860).abs() < 1e-6, "{}", first.value);
+    assert_eq!(x[1], 2.048);
+    let mut last = first.value;
+    for _ in 0..79 {
+        last = solver.step(&obj, &mut x).unwrap().value;
+    }
+    assert!(last < 0.5, "PR froze at {last} {x:?}");
+}
+
 #[test]
 fn fire_and_bb_kill_a_sphere() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
