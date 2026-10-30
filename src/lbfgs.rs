@@ -22,7 +22,7 @@ use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
 use crate::qn::solve_dense;
 use crate::report::Report;
-use crate::step::{finite, l2, next_istep, take_step};
+use crate::step::{finite, l2, next_istep, start_answer, take_step};
 use eindir_core::{DifferentiableObjective, Objective};
 
 /// How [`Lbfgs`] compares the gradient to [`Lbfgs::gtol`].
@@ -725,7 +725,7 @@ impl Lbfgs {
             });
         }
         pos = obj.bounds().clip(pos.view());
-        let (mut value, mut grad) = obj.value_and_gradient(pos.view());
+        let (mut value, mut grad) = start_answer(obj, &pos)?;
         let mut istep = control.istep;
 
         for step in 0..control.maxiter {
