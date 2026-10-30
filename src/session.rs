@@ -906,10 +906,10 @@ impl Solver {
     }
 
     /// One outer iteration. `x` is the iterate and is overwritten in place.
-    /// A first-order step whose start, or whose FIRE or geometry fallback
-    /// trial, answers with a non-finite value or gradient returns
-    /// [`Error::Oracle`] with `x` and the solver as they were, so a retry
-    /// probes the same trial.
+    /// A first-order step whose start, or whose FIRE, geometry fallback or
+    /// L-BFGS [`Accept::None`] trial, answers with a non-finite value or
+    /// gradient returns [`Error::Oracle`] with `x` and the solver as they
+    /// were, so a retry probes the same trial.
     pub fn step<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,
@@ -1718,10 +1718,16 @@ impl Solver {
         // An external displacement has a measured gradient at both ends.
         // Its secant updates the retained inverse Hessian at the supplied
         // point, using the same vector transport as accepted solver steps.
+        // A refused Accept::None trial takes the pair back: `last_pos`
+        // still names the old point, so a retry records the move again.
+        let mut before_move = None;
         if !cached {
             if let Some(previous) = &self.last_pos {
                 let (s, y) = self.lbfgs_sy(previous, x, &self.last_grad, &grad);
                 if let Inner::Lbfgs(solver) = &mut self.inner {
+                    if self.accept == Accept::None {
+                        before_move = Some(solver.curvature());
+                    }
                     solver.push_pair(s, y, Some(l2(&grad)));
                 }
             }
@@ -1770,6 +1776,9 @@ impl Solver {
                         self.manifold,
                     );
                     if !moved {
+                        if let Some(saved) = before_move {
+                            solver.restore(saved);
+                        }
                         return Err(Error::Oracle {
                             what: "non-finite value or gradient",
                         });

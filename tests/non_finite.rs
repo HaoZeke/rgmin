@@ -305,3 +305,37 @@ fn a_refused_trial_does_not_count_toward_the_fire2_stall() {
     };
     assert_eq!(run(true), run(false));
 }
+
+/// An L-BFGS session under [`Accept::None`] records the caller's move as a
+/// curvature pair before its one trial. A refused trial must take that
+/// pair back, or each retry from the moved point records it again.
+#[test]
+fn a_refused_trial_after_a_move_records_the_move_once() {
+    let open = AtomicBool::new(true);
+    let moved = array![0.25, 0.38, 0.63];
+    let fg = |x: ArrayView1<f64>| {
+        let w = array![0.1, 0.2, 0.3];
+        let f = (&w * &x.mapv(|v| (v - 1.0) * (v - 1.0))).sum();
+        let answered = open.load(SeqCst) || x == moved;
+        let f = if answered { f } else { f64::NAN };
+        (f, 2.0 * &w * &x.mapv(|v| v - 1.0))
+    };
+    let obj = Oracle::unbounded(3, &fg);
+    let run = |refuse: bool| {
+        let mut solver = Solver::new(Method::lbfgs(), CONTROL, 3);
+        let mut x = Array1::zeros(3);
+        solver.step(&obj, &mut x).unwrap();
+        let pairs = solver.pair_count();
+        x.assign(&moved);
+        open.store(!refuse, SeqCst);
+        for _ in 0..2 * usize::from(refuse) {
+            let out = solver.step(&obj, &mut x);
+            assert!(matches!(out, Err(Error::Oracle { .. })), "{out:?}");
+            assert_eq!((solver.pair_count(), &x), (pairs, &moved));
+        }
+        open.store(true, SeqCst);
+        let r = solver.step(&obj, &mut x).unwrap();
+        (r.value, r.coords, solver.pair_count())
+    };
+    assert_eq!(run(true), run(false));
+}
