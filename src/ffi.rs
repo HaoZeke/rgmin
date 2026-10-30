@@ -165,7 +165,10 @@ pub struct rgmin_control_t {
     pub maxiter: usize,
     /// Stop when `||g||_2 < gtol`.
     pub gtol: f64,
-    /// Initial line-search step.
+    /// Initial line-search step. Non-positive selects 1. An energy-tested
+    /// steepest, BFGS, SR1, SR2, BB or unpreconditioned CG session then
+    /// takes `min(1, 1/||g||)` at its first step as the step scale, until
+    /// `forget` or `rebase`.
     pub istep: f64,
     /// L-BFGS correction pairs; 0 selects 10.
     pub memory: usize,
@@ -1433,6 +1436,9 @@ pub unsafe extern "C" fn rgmin_solver_create(
     };
     let mut solver = Solver::new(method_from_c(method, c.memory), control, dim).with_gtol(c.gtol);
     solver.set_accept(Accept::Energy);
+    if c.istep <= 0.0 {
+        solver.set_unit_first_step();
+    }
     Box::into_raw(Box::new(rgmin_solver_t { solver, grad: None }))
 }
 

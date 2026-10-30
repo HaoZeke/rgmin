@@ -239,6 +239,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `B = I y·y / s·y` before the first update, and resets `B` to `I`
   after a refused step. On boxed Rosenbrock 2D from `(-1.2, 1.0)` it
   used to stay at `f = 24.2`. `Accept::None` is unchanged.
+- A C session created with `istep = 0` sets its step scale to
+  `min(1, 1/||g||)` at the first energy-tested steepest, BFGS, SR1,
+  SR2, BB, or unpreconditioned CG step. The scale lasts until `forget`
+  or `rebase`, not only for that step. Steepest descent and CG multiply
+  every later gradient term by it, so the cap shortens all their steps.
+  BFGS, SR1, and SR2 use it while the matrix is the starting identity,
+  and BB when it has no pair or no positive curvature. SciPy BFGS starts
+  its search at `min(1, 1.01/||g||)`, and L-BFGS-B at `1/||d||`. The
+  raw `-g` step rose on every energy halving, so from `(-1.2, 1.0)` on
+  Rosenbrock 2D these sessions stayed at `f = 24.2`. A positive
+  `istep` and `Accept::None` are unchanged.
 - Failed C callbacks return NaN-filled gradients and Hessians rather
   than fabricated zeros or identity matrices.
 - The FFI waist reuses standing DLPack shells per solve instead of

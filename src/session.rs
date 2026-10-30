@@ -76,6 +76,9 @@ pub struct Solver {
     control: Control,
     linesearch: LineSearch,
     istep: f64,
+    /// Scale raw gradient steps to unit length at the first step after
+    /// construction, `forget`, or `rebase`. The C default.
+    unit_first_step: bool,
     steps: usize,
     qn_step: QnStep,
     accept: Accept,
@@ -212,6 +215,7 @@ impl Solver {
             control,
             linesearch,
             istep,
+            unit_first_step: false,
             steps: 0,
             qn_step: QnStep::TwoLoop,
             accept: Accept::None,
@@ -331,6 +335,16 @@ impl Solver {
     /// eOn `lbfgs_accept`. Default is take the clipped step.
     pub fn set_accept(&mut self, accept: Accept) {
         self.accept = accept;
+    }
+
+    /// Under `Accept::Energy` or `Accept::Nonmonotone`, set the step
+    /// scale of steepest descent, BFGS, SR1, SR2, BB, and unpreconditioned CG
+    /// to `min(istep, 1 / ||g||)` at the first step after construction,
+    /// `forget`, or `rebase`. The scale stays until the next `forget` or
+    /// `rebase`. SciPy BFGS and L-BFGS-B begin at about unit length.
+    #[cfg(feature = "capi")]
+    pub(crate) fn set_unit_first_step(&mut self) {
+        self.unit_first_step = true;
     }
 
     /// Norm that every stop test and [`Report::grad_norm`] apply to the
@@ -1690,6 +1704,23 @@ impl Solver {
                     solver.push_pair(s, y, Some(l2(&grad)));
                 }
             }
+        }
+
+        let raw_gradient = match self.inner {
+            Inner::Steepest
+            | Inner::Bfgs { .. }
+            | Inner::Sr1 { .. }
+            | Inner::Sr2 { .. }
+            | Inner::Bb { .. } => true,
+            Inner::Nlcg { .. } => self.exp.is_none(),
+            _ => false,
+        };
+        if self.unit_first_step
+            && raw_gradient
+            && self.accept != Accept::None
+            && self.last_pos.is_none()
+        {
+            self.istep = self.control.istep.min(1.0 / l2(&grad));
         }
 
         let start = x.clone();
