@@ -297,7 +297,7 @@ pub(crate) fn sr2_hessian_update(b: &mut Array2<f64>, s: &Array1<f64>, y: &Array
     let n = s.len();
     for i in 0..n {
         for j in 0..n {
-            b[(i, j)] += (delta[i] * c[j] + c[i] * delta[j] - ds * c[i] * c[j]) / cs;
+            b[(i, j)] += (delta[i] * c[j] + c[i] * delta[j] - ds * (c[i] * c[j])) / cs;
         }
     }
 }
@@ -378,15 +378,32 @@ mod tests {
     use ndarray::array;
 
     /// `s·Bs = 0.0175` is above `s·y = 0.004`, where the `δ·s`
-    /// denominator moved `B s` to `y - 2 b δ / (δ·s)`.
+    /// denominator moved `B s` to `y - 2 b δ / (δ·s)`. The second pair
+    /// gives `B[0][1] - B[1][0] = 2^-52` if `ds c_i c_j` rounds left to right.
     #[test]
     fn sr2_update_is_symmetric_and_secant() {
-        let mut b = array![[2.0, 0.5], [0.5, 1.0]];
-        let s = array![0.1, -0.05];
-        let y = array![0.05, 0.02];
-        sr2_hessian_update(&mut b, &s, &y);
-        let res = &b.dot(&s) - &y;
-        assert!(l2(&res) < 1e-14, "B+ s - y = {res}");
-        assert!((b[(0, 1)] - b[(1, 0)]).abs() < 1e-14, "{b}");
+        for (s, y) in [
+            (array![0.1, -0.05], array![0.05, 0.02]),
+            (array![0.67, -0.05], array![0.28, -0.7]),
+        ] {
+            let mut b = array![[2.0, 0.5], [0.5, 1.0]];
+            sr2_hessian_update(&mut b, &s, &y);
+            let res = &b.dot(&s) - &y;
+            assert!(l2(&res) < 1e-14, "B+ s - y = {res}");
+            assert_eq!(b[(0, 1)], b[(1, 0)], "{b}");
+        }
+    }
+
+    /// `B = I`, `s = e1`, so `c·s = y[0] + 1`. The first `y` gives `c`
+    /// parallel to `s` and trips only the `1e-12` floor. The second trips
+    /// only the relative `1e-8` test.
+    #[test]
+    fn sr2_update_skips_a_small_c_dot_s() {
+        let s = array![1.0, 0.0];
+        for y in [array![-1.0 + 1e-13, 0.0], array![-1.0 + 1e-10, 1.0]] {
+            let mut b = Array2::<f64>::eye(2);
+            sr2_hessian_update(&mut b, &s, &y);
+            assert_eq!(b, Array2::<f64>::eye(2), "y = {y}");
+        }
     }
 }

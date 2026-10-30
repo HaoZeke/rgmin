@@ -1664,6 +1664,38 @@ fn sr2_energy_accept_reaches_the_minimum() {
     );
 }
 
+/// The SR2 update can be indefinite. From `(1, 0.2)` the fifth direction
+/// has `g·d = 7.68`, so the energy test refuses it and its steepest
+/// fallback. `B` then resets as SR1 does, and the next step is `-istep g`.
+#[test]
+fn sr2_energy_accept_resets_after_an_uphill_direction() {
+    use eindir_core::DifferentiableObjective;
+    let obj = Rosenbrock::<2>::new();
+    let mut x = array![1.0, 0.2];
+    let mut solver = Solver::new(Method::Sr2, control(), 2);
+    solver.set_accept(rgmin::Accept::Energy);
+    let mut value = obj.value_and_gradient(x.view()).0;
+    for k in 0..4 {
+        let rep = solver.step(&obj, &mut x).unwrap();
+        assert!(rep.value < value, "step {k} did not descend");
+        value = rep.value;
+    }
+    let stuck = x.clone();
+    let (_, g) = obj.value_and_gradient(x.view());
+    let rep = solver.step(&obj, &mut x).unwrap();
+    assert_eq!(x, stuck);
+    assert_eq!(rep.value, value);
+    solver.step(&obj, &mut x).unwrap();
+    let dx = &x - &stuck;
+    let t = -dx[0] / g[0];
+    assert!(t > 0.0 && (dx[1] + t * g[1]).abs() < 1e-15, "{dx:?} {g:?}");
+    for _ in 0..74 {
+        solver.step(&obj, &mut x).unwrap();
+    }
+    let miss = (x[0] - 1.0).abs().max((x[1] - 1.0).abs());
+    assert!(miss < 1e-6, "Sr2 stalled at {x:?}");
+}
+
 #[test]
 fn fire_and_bb_kill_a_sphere() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
