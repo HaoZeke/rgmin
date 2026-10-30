@@ -22,7 +22,7 @@ use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
 use crate::qn::solve_dense;
 use crate::report::Report;
-use crate::step::{l2, next_istep, take_step};
+use crate::step::{finite, l2, next_istep, take_step};
 use eindir_core::{DifferentiableObjective, Objective};
 
 /// How [`Lbfgs`] compares the gradient to [`Lbfgs::gtol`].
@@ -32,6 +32,17 @@ pub enum GradNorm {
     Euclidean,
     /// Infinity `||g||_∞`. Matches SciPy L-BFGS-B and hopping polish.
     Infinity,
+}
+
+/// The value and slope of a line-search probe, `(+inf, NaN)` when the
+/// objective answered with a non-finite value or gradient. Every comparison
+/// against NaN is false, so a raw NaN would fail no decrease test.
+fn probed(f: f64, d: &Array1<f64>, g: &Array1<f64>) -> (f64, f64) {
+    if finite(f, g.view()) {
+        (f, d.dot(g))
+    } else {
+        (f64::INFINITY, f64::NAN)
+    }
 }
 
 /// Stored curvature pair from one accepted step.
@@ -374,7 +385,9 @@ impl Lbfgs {
     /// Strong Wolfe line search by bracketing then cubic-interpolated zoom.
     ///
     /// Nocedal and Wright algorithms 3.5 and 3.6. Returns whether a step
-    /// was accepted and how many evaluations it cost.
+    /// was accepted and how many evaluations it cost. A probe answered with
+    /// a non-finite value or gradient fails the decrease test, so it caps
+    /// the bracket and the zoom bisects back toward the accepted end.
     fn line_search<F>(
         &mut self,
         x: &mut Array1<f64>,
@@ -428,7 +441,7 @@ impl Lbfgs {
                 Some(v) => v,
                 None => return (false, evals),
             };
-            let slope_a = d.dot(&ga);
+            let (fa, slope_a) = probed(fa, d, &ga);
             if fa > f0 + self.armijo * a * slope || (i > 0 && fa >= f_prev) {
                 lo = a_prev;
                 f_lo = f_prev;
@@ -501,7 +514,7 @@ impl Lbfgs {
                 Some(v) => v,
                 None => return (false, evals),
             };
-            let slope_t = d.dot(&gt);
+            let (ft, slope_t) = probed(ft, d, &gt);
             if ft > f0 + self.armijo * trial * slope || ft >= f_lo {
                 hi = trial;
                 f_hi = ft;
@@ -551,7 +564,9 @@ impl Lbfgs {
     ///
     /// `fg` returns `None` when the caller's budget is spent, which ends the
     /// relaxation where it stands. Returns the value, the point, and the
-    /// number of evaluations used.
+    /// number of evaluations used. A non-finite value or gradient at a
+    /// trial step shortens the step; at `x0` it ends the relaxation there
+    /// with value `+inf`, as a spent budget does.
     pub fn minimize<F>(
         &mut self,
         x0: ArrayView1<f64>,
@@ -587,6 +602,9 @@ impl Lbfgs {
             None => return (f64::INFINITY, x, evals),
         };
         evals += 1;
+        if !finite(f, g.view()) {
+            return (f64::INFINITY, x, evals);
+        }
 
         for it in 0..max_iter {
             if !watch(it, f) {
@@ -597,7 +615,10 @@ impl Lbfgs {
             }
             let d = self.search_direction(x.view(), g.view());
             let slope = d.dot(&g);
-            if slope >= 0.0 {
+            if !slope.is_finite() && self.memory.is_empty() {
+                break;
+            }
+            if slope >= 0.0 || !slope.is_finite() {
                 self.forget();
                 continue;
             }
@@ -650,6 +671,9 @@ impl Lbfgs {
             None => return (f64::INFINITY, x, evals, false),
         };
         evals += 1;
+        if !finite(f, g.view()) {
+            return (f64::INFINITY, x, evals, false);
+        }
 
         for it in 0..max_iter {
             if let Some((f_known, x_known)) = recognise(it, f, x.view()) {
@@ -660,7 +684,10 @@ impl Lbfgs {
             }
             let d = self.search_direction(x.view(), g.view());
             let slope = d.dot(&g);
-            if slope >= 0.0 {
+            if !slope.is_finite() && self.memory.is_empty() {
+                break;
+            }
+            if slope >= 0.0 || !slope.is_finite() {
                 self.forget();
                 continue;
             }

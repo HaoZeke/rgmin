@@ -10,6 +10,11 @@ pub(crate) fn l2(g: &Array1<f64>) -> f64 {
     crate::vecops::nrm2(g.view())
 }
 
+/// An answer a decrease test may compare: value and gradient finite.
+pub(crate) fn finite(f: f64, g: ArrayView1<'_, f64>) -> bool {
+    f.is_finite() && g.iter().all(|v| v.is_finite())
+}
+
 pub(crate) fn scale_step(origin: &Array1<f64>, trial: &mut Array1<f64>, cap: f64) {
     let mut n2 = 0.0;
     for i in 0..trial.len() {
