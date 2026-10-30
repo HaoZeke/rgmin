@@ -1944,6 +1944,49 @@ fn bb_drops_the_pair_after_a_refusal_under_energy_and_nonmonotone() {
     assert!((values[1] - 12.461354).abs() < 1e-6, "{}", values[1]);
 }
 
+/// With `istep = 1` every energy halving of the raw `-g` step from
+/// (-1.2, 1.0) rises. The first call is refused and restarts from
+/// steepest descent. The second call refuses that restart, which every
+/// later call would repeat, so it reports a stall.
+#[test]
+fn a_refused_steepest_restart_is_a_stall() {
+    use rgmin::{Accept, Error};
+    let obj = Rosenbrock::<2>::new();
+    let ctrl = Control {
+        istep: 1.0,
+        ..control()
+    };
+    let methods = [
+        Method::Steepest,
+        Method::polak_ribiere(),
+        Method::Bb,
+        Method::Bfgs,
+        Method::Sr1,
+        Method::Sr2,
+    ];
+    for method in methods {
+        for accept in [Accept::Energy, Accept::Nonmonotone] {
+            let mut x = array![-1.2, 1.0];
+            let mut solver = Solver::new(method.clone(), ctrl.clone(), 2);
+            solver.set_accept(accept);
+            let first = solver.step(&obj, &mut x).unwrap();
+            assert!((first.value - 24.2).abs() < 1e-9, "{method:?} {accept:?}");
+            assert_eq!(x, array![-1.2, 1.0]);
+            let second = solver.step(&obj, &mut x);
+            assert!(
+                matches!(second, Err(Error::AcceptStalled { steps: 1 })),
+                "{method:?} {accept:?} {second:?}"
+            );
+        }
+        let mut x = array![-1.2, 1.0];
+        let mut solver = Solver::new(method.clone(), ctrl.clone(), 2);
+        solver.set_accept(Accept::None);
+        for _ in 0..2 {
+            solver.step(&obj, &mut x).unwrap();
+        }
+    }
+}
+
 #[test]
 fn one_eval_outer_pairs_reach_the_quadratic_bowl() {
     // Dimer translation supplies one gradient per outer and cannot
