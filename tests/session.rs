@@ -1576,6 +1576,26 @@ fn nlcg_energy_accept_restarts_after_a_refused_step() {
     assert!(last < 0.5, "PR froze at {last} {x:?}");
 }
 
+/// Seven steps reach f = 0.116646. The eighth spectral length is refused
+/// by the energy test, and the stored pair used to replay it on every
+/// later call. A refused step drops the pair, so the next call takes the
+/// `istep` length from the same point.
+#[test]
+fn bb_energy_accept_drops_the_pair_after_a_refused_step() {
+    let obj = Rosenbrock::<2>::new();
+    let mut x = array![-1.2, 1.0];
+    let mut solver = Solver::new(Method::Bb, control(), 2);
+    solver.set_accept(rgmin::Accept::Energy);
+    let mut values = Vec::new();
+    for _ in 0..80 {
+        values.push(solver.step(&obj, &mut x).unwrap().value);
+    }
+    assert!((values[6] - 0.116646).abs() < 1e-6, "{}", values[6]);
+    assert!(values.windows(2).all(|w| w[1] <= w[0] + 1e-8), "{values:?}");
+    let last = values[79];
+    assert!(last < 1e-3, "BB froze at {last} {x:?}");
+}
+
 #[test]
 fn fire_and_bb_kill_a_sphere() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
