@@ -1,6 +1,7 @@
 //! A non-finite value or gradient refuses a trial step; it never passes one.
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 
 use ndarray::{Array1, ArrayView1, array};
 use rgmin::{Accept, Control, Error, Lbfgs, LineSearch, Method, Oracle, Report, Solver};
@@ -166,4 +167,54 @@ fn a_nan_start_gradient_sends_no_nan_coordinate() {
     refused_start(&array![1.0, 1.0], |v| {
         (1.0, Array1::from_elem(v.len(), f64::NAN))
     });
+}
+
+/// An engine whose answers fail partway through a relaxation, after two
+/// good steps. Each refused step must leave the session as it was: a retry
+/// probes the same trials, and once the engine answers again the next step
+/// matches a session that never saw the refusals.
+#[test]
+fn a_refused_step_leaves_the_session_as_it_was() {
+    let open = AtomicBool::new(true);
+    let probed = Mutex::new(Vec::new());
+    let fg = |x: ArrayView1<f64>| {
+        probed.lock().unwrap().push(x.to_owned());
+        let w = array![0.1, 0.2, 0.3];
+        let f = (&w * &x.mapv(|v| (v - 1.0) * (v - 1.0))).sum();
+        let f = if open.load(SeqCst) { f } else { f64::NAN };
+        (f, 2.0 * &w * &x.mapv(|v| v - 1.0))
+    };
+    let obj = Oracle::unbounded(3, &fg);
+    for (token, cap) in [("fire", None), ("fire2", None), ("lbfgs", Some(0.1))] {
+        let run = |refuse: bool| {
+            let mut solver = Solver::new(Method::from_name(token).unwrap(), CONTROL, 3);
+            if let Some(cap) = cap {
+                solver.set_atom_maxmove(cap);
+            }
+            let mut x = Array1::zeros(3);
+            for _ in 0..2 {
+                solver.step(&obj, &mut x).unwrap();
+            }
+            open.store(!refuse, SeqCst);
+            let start = x.clone();
+            let mut tries = Vec::new();
+            for _ in 0..2 * usize::from(refuse) {
+                probed.lock().unwrap().clear();
+                let out = solver.step(&obj, &mut x);
+                assert!(matches!(out, Err(Error::Oracle { .. })), "{token}: {out:?}");
+                assert_eq!(x, start, "{token}");
+                tries.push(std::mem::take(&mut *probed.lock().unwrap()));
+            }
+            if refuse {
+                assert!(
+                    !tries[0].is_empty() && tries[0] == tries[1],
+                    "{token}: {tries:?}"
+                );
+            }
+            open.store(true, SeqCst);
+            let r = solver.step(&obj, &mut x).unwrap();
+            (r.value, r.coords)
+        };
+        assert_eq!(run(true), run(false), "{token}");
+    }
 }

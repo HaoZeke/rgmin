@@ -46,10 +46,17 @@ fn probed(f: f64, d: &Array1<f64>, g: &Array1<f64>) -> (f64, f64) {
 }
 
 /// Stored curvature pair from one accepted step.
+#[derive(Clone)]
 struct Pair {
     s: Array1<f64>,
     y: Array1<f64>,
     rho: f64,
+}
+
+/// Curvature saved by [`Lbfgs::curvature`].
+pub(crate) struct Curvature {
+    memory: Vec<Pair>,
+    last: (f64, f64, bool),
 }
 
 /// L-BFGS whose curvature pairs survive between calls.
@@ -137,6 +144,20 @@ impl Lbfgs {
         self.last_sy = 0.0;
         self.last_yy = 0.0;
         self.have_curvature = false;
+    }
+
+    /// The pairs and latest geometry curvature, for [`Self::restore`].
+    pub(crate) fn curvature(&self) -> Curvature {
+        Curvature {
+            memory: self.memory.clone(),
+            last: (self.last_sy, self.last_yy, self.have_curvature),
+        }
+    }
+
+    /// Puts back what [`Self::curvature`] saved.
+    pub(crate) fn restore(&mut self, saved: Curvature) {
+        self.memory = saved.memory;
+        (self.last_sy, self.last_yy, self.have_curvature) = saved.last;
     }
 
     /// Pairs currently held.
