@@ -222,6 +222,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they stayed at `f = 24.2`. A refused step resets the matrix to
   that identity, so SR1 no longer retries an uphill direction from
   the same point. `Accept::None` is unchanged.
+- SR2 is a symmetric secant update. The `sr2.hpp` map
+  `B += δ (y + Bs)^T / (δ·s)`, with `δ = y - Bs`, gives
+  `B+ s - y = 2 (s·Bs) δ / (δ·s)`. It broke the secant equation
+  (Nocedal-Wright 6.6) and left `B` asymmetric. Once `s·Bs` exceeded
+  `s·y`, it doubled `B` along `s` on every step, so the steps halved
+  and SR2 stalled away from a stationary point. SR2 now applies
+  Powell's symmetrization with `c = y + Bs`:
+  `B += (δ c^T + c δ^T) / (c·s) - (δ·s) c c^T / (c·s)^2`. That is the
+  Broyden class (6.32) with `φ = a (a - b) / (a + b)^2`, where
+  `a = s·y` and `b = s·Bs`.
 - Failed C callbacks return NaN-filled gradients and Hessians rather
   than fabricated zeros or identity matrices.
 - The FFI waist reuses standing DLPack shells per solve instead of

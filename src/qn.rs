@@ -135,12 +135,18 @@ where
     Ok(done(value, pos, control.maxiter, l2(&grad)))
 }
 
-/// SR2 Hessian update from rgmin `sr2.hpp`.
+/// Symmetric rank-two secant update on a dense Hessian `B`.
 ///
-/// Maintains a dense Hessian `B` (starts as `I`). The search direction is
-/// `-B^{-1} g`. After a move, `B += δ(y + Bs)^T / (δ^T s)` with `δ = y - Bs`.
-/// This rank-1 map is the C++ `sr2.hpp` formula; it is not a Nocedal-Wright
-/// numbered update.
+/// `B` starts as `I` and the search direction is `-B^{-1} g`. After a
+/// move, [`sr2_hessian_update`] applies Powell's symmetrization of the
+/// rank-one secant map `B + δ c^T / (c·s)`, with `δ = y - Bs` and
+/// `c = y + Bs`. The result is a Broyden class member (Nocedal-Wright 6.32).
+///
+/// Powell, *A new algorithm for unconstrained optimization*, in
+/// *Nonlinear Programming* (1970),
+/// <https://doi.org/10.1016/B978-0-12-597050-1.50006-3>.
+/// Dennis and Moré, *Quasi-Newton methods, motivation and theory*,
+/// <https://doi.org/10.1137/1019005>.
 pub fn minimize_sr2<O>(
     obj: &O,
     init: impl Into<Array1<f64>>,
@@ -271,21 +277,27 @@ pub(crate) fn bfgs_inverse_update(h: &mut Array2<f64>, s: &Array1<f64>, y: &Arra
     *h = hp;
 }
 
-/// `B += δ (y + Bs)^T / (δ·s)`, `δ = y - Bs` (`sr2.hpp`).
+/// `B += (δ c^T + c δ^T) / (c·s) - (δ·s) c c^T / (c·s)^2`, with
+/// `δ = y - Bs` and `c = y + Bs`.
+///
+/// `B+ s = y` (Nocedal-Wright 6.6), and `B+` is the Broyden class (6.32)
+/// with `φ = a (a - b) / (a + b)^2`, `a = s·y`, `b = s·Bs`. The `sr2.hpp`
+/// map `δ c^T / (δ·s)` has `B+ s - y = 2 b δ / (δ·s)`, so it doubles `B`
+/// along `s` once `b` dominates `a`. Skip when
+/// `|c·s| < 1e-8 ||c|| ||s||`, the 6.26 rule on `c`.
 pub(crate) fn sr2_hessian_update(b: &mut Array2<f64>, s: &Array1<f64>, y: &Array1<f64>) {
     let bs = b.dot(s);
     let delta = y - &bs;
-    let ybs = y + &bs;
-    let denom = delta.dot(s);
-    let dn = l2(&delta);
-    let sn = l2(s);
-    if denom.abs() < SR1_SKIP * dn * sn || denom.abs() <= CURVATURE {
+    let c = y + &bs;
+    let cs = c.dot(s);
+    if cs.abs() < SR1_SKIP * l2(&c) * l2(s) || cs.abs() <= CURVATURE {
         return;
     }
+    let ds = delta.dot(s) / cs;
     let n = s.len();
     for i in 0..n {
         for j in 0..n {
-            b[(i, j)] += delta[i] * ybs[j] / denom;
+            b[(i, j)] += (delta[i] * c[j] + c[i] * delta[j] - ds * c[i] * c[j]) / cs;
         }
     }
 }
@@ -357,5 +369,24 @@ pub(crate) fn sr1_inverse_update(h: &mut Array2<f64>, s: &Array1<f64>, y: &Array
         for j in 0..n {
             h[(i, j)] += u[i] * u[j] / uy;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::array;
+
+    /// `s·Bs = 0.0175` is above `s·y = 0.004`, where the `δ·s`
+    /// denominator moved `B s` to `y - 2 b δ / (δ·s)`.
+    #[test]
+    fn sr2_update_is_symmetric_and_secant() {
+        let mut b = array![[2.0, 0.5], [0.5, 1.0]];
+        let s = array![0.1, -0.05];
+        let y = array![0.05, 0.02];
+        sr2_hessian_update(&mut b, &s, &y);
+        let res = &b.dot(&s) - &y;
+        assert!(l2(&res) < 1e-14, "B+ s - y = {res}");
+        assert!((b[(0, 1)] - b[(1, 0)]).abs() < 1e-14, "{b}");
     }
 }
