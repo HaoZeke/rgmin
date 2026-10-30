@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Recoverable minimization failure.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Initial point length does not match the objective dimension.
     #[error("init length {got} != objective dim {dim}")]
@@ -38,6 +39,14 @@ pub enum Error {
     #[error("FIRE 2.0 stalled after {steps} steps")]
     FireStalled {
         /// Outer iterations completed before the limit was exceeded.
+        steps: usize,
+    },
+    /// `Accept::Energy` or `Accept::Nonmonotone` refused the steepest
+    /// restart that followed a refused step. Every later call would
+    /// retry it from the same point.
+    #[error("energy test refused the steepest restart after {steps} steps")]
+    AcceptStalled {
+        /// Outer iterations completed before the second refusal.
         steps: usize,
     },
     /// The trust region collapsed without an acceptable step: a

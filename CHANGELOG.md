@@ -75,6 +75,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Report` gains `grad: Option<Array1<f64>>`, the gradient that
   `grad_norm` measures. Sessions fill it and one-shot drivers leave it
   `None`. Code that builds a `Report` literal must set the field.
+- `Error` is `#[non_exhaustive]` and gains `AcceptStalled`. That
+  breaks code outside the crate that matches `Error` without a
+  wildcard arm. Add a `_` arm, and later variants need no change.
 - Newton and dogleg leave a first-order saddle. When the force is
   already under `gtol`, the report reads the analytic Hessian. The
   floor is `max(|gtol|, 1e-6, 1e-8 ||H||_F)`. A lowest eigenvalue
@@ -250,6 +253,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw `-g` step rose on every energy halving, so from `(-1.2, 1.0)` on
   Rosenbrock 2D these sessions stayed at `f = 24.2`. A positive
   `istep` and `Accept::None` are unchanged.
+- Session steepest descent, nonlinear CG, BB, BFGS, SR1, and SR2 return
+  `Error::AcceptStalled` when `Accept::Energy` or
+  `Accept::Nonmonotone` refuses the steepest restart that follows a
+  refused step. Each later call would retry that restart from the same
+  point, at eleven oracle calls per step. C sessions report
+  `RGMIN_INTERNAL_ERROR`. `Accept::None` is unchanged.
 - Failed C callbacks return NaN-filled gradients and Hessians rather
   than fabricated zeros or identity matrices.
 - The FFI waist reuses standing DLPack shells per solve instead of

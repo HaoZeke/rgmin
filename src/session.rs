@@ -83,6 +83,8 @@ pub struct Solver {
     qn_step: QnStep,
     accept: Accept,
     e_hist: VecDeque<f64>,
+    /// The acceptance test refused the last first-order step.
+    refused: bool,
     atom_maxmove: Option<f64>,
     /// Whether geometry L-BFGS needs a finite-difference stiffness probe.
     geometry_lbfgs_stiff: Option<bool>,
@@ -220,6 +222,7 @@ impl Solver {
             qn_step: QnStep::TwoLoop,
             accept: Accept::None,
             e_hist: VecDeque::new(),
+            refused: false,
             atom_maxmove: None,
             geometry_lbfgs_stiff: None,
             project_rigid: false,
@@ -1725,6 +1728,7 @@ impl Solver {
 
         let start = x.clone();
         let gold = grad.clone();
+        let mut refused = false;
         match &mut self.inner {
             Inner::Lbfgs(solver) => {
                 // Accept::None: take the clipped two-loop step. The NEB
@@ -1770,7 +1774,7 @@ impl Solver {
             }
             Inner::Steepest => {
                 let dir = grad.mapv(|g| -g * self.istep);
-                let (npos, nval, ngrad, _) = accept_step(
+                let (npos, nval, ngrad, moved) = accept_step(
                     obj,
                     x,
                     value,
@@ -1785,6 +1789,7 @@ impl Solver {
                 *x = npos;
                 value = nval;
                 grad = ngrad;
+                refused = !moved && self.accept != Accept::None;
             }
             Inner::Nlcg {
                 conjugacy,
@@ -1876,6 +1881,7 @@ impl Solver {
                     // The refused direction would be retried from the same
                     // point on every later call.
                     *initialized = false;
+                    refused = true;
                 }
             }
             Inner::Bfgs { h, fresh } => {
@@ -1920,6 +1926,7 @@ impl Solver {
                     // point on every later call.
                     *h = Array2::<f64>::eye(self.dim);
                     *fresh = true;
+                    refused = true;
                 }
             }
             Inner::Sr1 { h, fresh } => {
@@ -1960,6 +1967,7 @@ impl Solver {
                     // point on every later call.
                     *h = Array2::<f64>::eye(self.dim);
                     *fresh = true;
+                    refused = true;
                 }
             }
             Inner::Sr2 { b, fresh } => {
@@ -1999,6 +2007,7 @@ impl Solver {
                 } else if self.accept != Accept::None {
                     *b = Array2::<f64>::eye(self.dim);
                     *fresh = true;
+                    refused = true;
                 }
             }
             Inner::Adam {
@@ -2110,6 +2119,7 @@ impl Solver {
                     // same point on every later call.
                     *prev_s = None;
                     *prev_y = None;
+                    refused = true;
                 }
             }
             Inner::Pso { .. }
@@ -2118,6 +2128,13 @@ impl Solver {
             | Inner::NewtonCg { .. }
             | Inner::NewtonPcg { .. } => unreachable!(),
         }
+        // Each refusal restarts from steepest descent. A second refusal
+        // at the same point refused that restart, and every later call
+        // would repeat it.
+        if refused && self.refused && cached {
+            return Err(Error::AcceptStalled { steps: self.steps });
+        }
+        self.refused = refused;
 
         let delta = &*x - &start;
         let y = self.manifold.retract(&start, &delta);
