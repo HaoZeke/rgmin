@@ -113,7 +113,11 @@ _Static_assert(sizeof(rgmin_conjugacy_t) == sizeof(int32_t),
                "rgmin_conjugacy_t is i32-wide; do not build this header with -fshort-enums");
 #endif
 
-/** Outer-loop controls. \c memory is the L-BFGS pair cap. */
+/** Outer-loop controls. \c memory is the L-BFGS pair cap. \c istep <= 0
+ *  selects 1. An energy-tested steepest, BFGS, SR1, SR2, BB or
+ *  unpreconditioned CG session then takes min(1, 1/||g||) at its first
+ *  step as the step scale, until rgmin_solver_forget or
+ *  rgmin_solver_rebase. */
 typedef struct rgmin_control_t {
     size_t maxiter;
     double gtol;

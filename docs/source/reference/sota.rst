@@ -168,7 +168,7 @@ Do not beat rematch (100/100 unless noted):
     +---------------------------------------------+------------------------+-----------------------------------------------------------------------------------------+
     | xtsci SR1                                   | 46440 (13 fail)        | 32040 (38 fail)                                                                         |
     +---------------------------------------------+------------------------+-----------------------------------------------------------------------------------------+
-    | xtsci SR2                                   | fail 100/100           | 15079 (67 fail)                                                                         |
+    | xtsci SR2 (old map)                         | fail 100/100           | 15079 (67 fail)                                                                         |
     +---------------------------------------------+------------------------+-----------------------------------------------------------------------------------------+
     | xtsci Adam                                  | 437284 (23 fail)       | 20727 (1 fail)                                                                          |
     +---------------------------------------------+------------------------+-----------------------------------------------------------------------------------------+
@@ -213,7 +213,7 @@ tokens do not converge on these cluster / bulk geometries.
     +----------------+-----------------------+--------------------------------------+-------------------------------------------------------------+
     | PSO            | 10/12 wrong tool      | swarm on ``[-1e12,1e12]``            | ``oracle.rs`` unbounded; ``230021 = 10000 x ~23``           |
     +----------------+-----------------------+--------------------------------------+-------------------------------------------------------------+
-    | SR2            | 8/12 bad update       | non-secant rank-1                    | ``qn.rs:265-281`` ``B += δ(y+Bs)^T / (δ·s)``                |
+    | SR2 (old map)  | 8/12 bad update       | non-secant rank-1                    | ``sr2.hpp`` ``B += δ(y+Bs)^T / (δ·s)``                      |
     +----------------+-----------------------+--------------------------------------+-------------------------------------------------------------+
     | model Hessians | 11/12 wrong chemistry | covalent ``B^T k B`` vs pair         | pair is the rematch ``P``                                   |
     +----------------+-----------------------+--------------------------------------+-------------------------------------------------------------+
@@ -222,8 +222,16 @@ SO(3) and SE(3) reject a 3N cluster. Sphere/Stiefel on 3N stay
 on ``S^{3N-1}`` and die on maxiter. Isolated molecules use
 ``rigid_quotient`` or ``mw_rigid``. PSO force
 counts match ``max_iterations`` (10000 LJ38 / 1000 Morse) times
-swarm work, not a 230x230 product. SR2 has a denom skip; the
-update still fails the secant condition.
+swarm work, not a 230x230 product.
+
+SR2 was the ``sr2.hpp`` rank-1 map ``B += δ (y + Bs)^T / (δ·s)``. That
+map failed the secant condition. SR2 is now Powell's symmetrization
+with ``c = y + Bs``, so ``B+ s = y`` and ``B+`` is symmetric. With
+``a = s·y`` and ``b = s·Bs`` both nonzero, it is the Broyden class
+(Nocedal-Wright 6.32) with ``φ = a(a-b)/(a+b)^2``. It is not Powell
+symmetric Broyden (``c = s``). The LJ38 row ``fail 100/100`` and the
+Morse row ``15079 (67 fail)`` are the old map. The new update is
+``sr2_hessian_update`` in ``qn.rs:291-306``.
 
 FIRE, Barzilai–Borwein, and dogleg
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

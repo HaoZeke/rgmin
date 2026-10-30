@@ -31,7 +31,9 @@ use crate::newton::{HessianObjective, NewtonKind, rfo_direction, shifted_newton}
 use crate::nlcg::{Conjugacy, ConjugacyContext, Restart};
 use crate::precon::{ExpParams, ExpState, Neighbours};
 use crate::pso::{Particle, RNG_SEED, random_velocity, update_swarm};
-use crate::qn::{bfgs_inverse_update, solve_dense, sr1_inverse_update, sr2_hessian_update};
+use crate::qn::{
+    bfgs_inverse_update, secant_scale, solve_dense, sr1_inverse_update, sr2_hessian_update,
+};
 use crate::qn_step::QnStep;
 use crate::report::Report;
 use crate::rigid::{project_horizontal, project_out_rot_trans};
@@ -74,6 +76,9 @@ pub struct Solver {
     control: Control,
     linesearch: LineSearch,
     istep: f64,
+    /// Scale raw gradient steps to unit length at the first step after
+    /// construction, `forget`, or `rebase`. The C default.
+    unit_first_step: bool,
     steps: usize,
     qn_step: QnStep,
     accept: Accept,
@@ -134,14 +139,19 @@ enum Inner {
         d_old: Array1<f64>,
         initialized: bool,
     },
+    /// `fresh`: no secant pair has reached the matrix since construction,
+    /// `forget`, or a refused energy step.
     Bfgs {
         h: Array2<f64>,
+        fresh: bool,
     },
     Sr1 {
         h: Array2<f64>,
+        fresh: bool,
     },
     Sr2 {
         b: Array2<f64>,
+        fresh: bool,
     },
     Adam {
         m: Array1<f64>,
@@ -205,6 +215,7 @@ impl Solver {
             control,
             linesearch,
             istep,
+            unit_first_step: false,
             steps: 0,
             qn_step: QnStep::TwoLoop,
             accept: Accept::None,
@@ -324,6 +335,16 @@ impl Solver {
     /// eOn `lbfgs_accept`. Default is take the clipped step.
     pub fn set_accept(&mut self, accept: Accept) {
         self.accept = accept;
+    }
+
+    /// Under `Accept::Energy` or `Accept::Nonmonotone`, set the step
+    /// scale of steepest descent, BFGS, SR1, SR2, BB, and unpreconditioned CG
+    /// to `min(istep, 1 / ||g||)` at the first step after construction,
+    /// `forget`, or `rebase`. The scale stays until the next `forget` or
+    /// `rebase`. SciPy BFGS and L-BFGS-B begin at about unit length.
+    #[cfg(feature = "capi")]
+    pub(crate) fn set_unit_first_step(&mut self) {
+        self.unit_first_step = true;
     }
 
     /// Norm that every stop test and [`Report::grad_norm`] apply to the
@@ -849,9 +870,10 @@ impl Solver {
         match &mut self.inner {
             Inner::Lbfgs(solver) => solver.forget(),
             Inner::Nlcg { initialized, .. } => *initialized = false,
-            Inner::Bfgs { h } => *h = Array2::<f64>::eye(self.dim),
-            Inner::Sr1 { h } => *h = Array2::<f64>::eye(self.dim),
-            Inner::Sr2 { b } => *b = Array2::<f64>::eye(self.dim),
+            Inner::Bfgs { h, fresh } | Inner::Sr1 { h, fresh } | Inner::Sr2 { b: h, fresh } => {
+                *h = Array2::<f64>::eye(self.dim);
+                *fresh = true;
+            }
             Inner::Adam {
                 m,
                 v,
@@ -1684,6 +1706,23 @@ impl Solver {
             }
         }
 
+        let raw_gradient = match self.inner {
+            Inner::Steepest
+            | Inner::Bfgs { .. }
+            | Inner::Sr1 { .. }
+            | Inner::Sr2 { .. }
+            | Inner::Bb { .. } => true,
+            Inner::Nlcg { .. } => self.exp.is_none(),
+            _ => false,
+        };
+        if self.unit_first_step
+            && raw_gradient
+            && self.accept != Accept::None
+            && self.last_pos.is_none()
+        {
+            self.istep = self.control.istep.min(1.0 / l2(&grad));
+        }
+
         let start = x.clone();
         let gold = grad.clone();
         match &mut self.inner {
@@ -1833,10 +1872,22 @@ impl Solver {
                     }
                     g_old.assign(&grad);
                     d_old.assign(dir);
+                } else if self.accept != Accept::None {
+                    // The refused direction would be retried from the same
+                    // point on every later call.
+                    *initialized = false;
                 }
             }
-            Inner::Bfgs { h } => {
-                let direction = -h.dot(&grad);
+            Inner::Bfgs { h, fresh } => {
+                // The identity carries no length scale, and the energy test
+                // allows ten halvings. Take `istep` along it, as L-BFGS does
+                // with an empty memory, then rescale it by Nocedal-Wright
+                // 6.20 before the first update. SR1 and SR2 do the same.
+                let seed = *fresh && self.accept != Accept::None;
+                let mut direction = -h.dot(&grad);
+                if seed {
+                    direction *= self.istep;
+                }
                 let old = x.clone();
                 let gold = grad.clone();
                 let (npos, nval, ngrad, moved) = accept_step(
@@ -1855,11 +1906,28 @@ impl Solver {
                 value = nval;
                 grad = ngrad;
                 if moved {
-                    bfgs_inverse_update(h, &(&*x - &old), &(&grad - &gold));
+                    let (s, y) = (&*x - &old, &grad - &gold);
+                    if !seed {
+                        bfgs_inverse_update(h, &s, &y);
+                        *fresh = false;
+                    } else if let Some(gamma) = secant_scale(&s, &y) {
+                        *h = Array2::<f64>::eye(self.dim) * gamma;
+                        *fresh = false;
+                        bfgs_inverse_update(h, &s, &y);
+                    }
+                } else if self.accept != Accept::None {
+                    // The refused direction would be retried from the same
+                    // point on every later call.
+                    *h = Array2::<f64>::eye(self.dim);
+                    *fresh = true;
                 }
             }
-            Inner::Sr1 { h } => {
-                let direction = -h.dot(&grad);
+            Inner::Sr1 { h, fresh } => {
+                let seed = *fresh && self.accept != Accept::None;
+                let mut direction = -h.dot(&grad);
+                if seed {
+                    direction *= self.istep;
+                }
                 let old = x.clone();
                 let gold = grad.clone();
                 let (npos, nval, ngrad, moved) = accept_step(
@@ -1878,12 +1946,29 @@ impl Solver {
                 value = nval;
                 grad = ngrad;
                 if moved {
-                    sr1_inverse_update(h, &(&*x - &old), &(&grad - &gold));
+                    let (s, y) = (&*x - &old, &grad - &gold);
+                    if !seed {
+                        sr1_inverse_update(h, &s, &y);
+                        *fresh = false;
+                    } else if let Some(gamma) = secant_scale(&s, &y) {
+                        *h = Array2::<f64>::eye(self.dim) * gamma;
+                        *fresh = false;
+                        sr1_inverse_update(h, &s, &y);
+                    }
+                } else if self.accept != Accept::None {
+                    // The refused direction would be retried from the same
+                    // point on every later call.
+                    *h = Array2::<f64>::eye(self.dim);
+                    *fresh = true;
                 }
             }
-            Inner::Sr2 { b } => {
+            Inner::Sr2 { b, fresh } => {
+                let seed = *fresh && self.accept != Accept::None;
                 let rhs = grad.mapv(|g| -g);
-                let direction = solve_dense(b, &rhs).unwrap_or_else(|| rhs);
+                let mut direction = solve_dense(b, &rhs).unwrap_or_else(|| rhs);
+                if seed {
+                    direction *= self.istep;
+                }
                 let old = x.clone();
                 let gold = grad.clone();
                 let (npos, nval, ngrad, moved) = accept_step(
@@ -1902,7 +1987,18 @@ impl Solver {
                 value = nval;
                 grad = ngrad;
                 if moved {
-                    sr2_hessian_update(b, &(&*x - &old), &(&grad - &gold));
+                    let (s, y) = (&*x - &old, &grad - &gold);
+                    if !seed {
+                        sr2_hessian_update(b, &s, &y);
+                        *fresh = false;
+                    } else if let Some(gamma) = secant_scale(&s, &y) {
+                        *b = Array2::<f64>::eye(self.dim) / gamma;
+                        *fresh = false;
+                        sr2_hessian_update(b, &s, &y);
+                    }
+                } else if self.accept != Accept::None {
+                    *b = Array2::<f64>::eye(self.dim);
+                    *fresh = true;
                 }
             }
             Inner::Adam {
@@ -2009,6 +2105,11 @@ impl Solver {
                 if moved {
                     *prev_s = Some(&*x - &old);
                     *prev_y = Some(&grad - &gold);
+                } else if self.accept != Accept::None {
+                    // The refused spectral length would be retried from the
+                    // same point on every later call.
+                    *prev_s = None;
+                    *prev_y = None;
                 }
             }
             Inner::Pso { .. }
@@ -2146,12 +2247,15 @@ impl Inner {
             },
             Method::Bfgs => Inner::Bfgs {
                 h: Array2::<f64>::eye(dim),
+                fresh: true,
             },
             Method::Sr1 => Inner::Sr1 {
                 h: Array2::<f64>::eye(dim),
+                fresh: true,
             },
             Method::Sr2 => Inner::Sr2 {
                 b: Array2::<f64>::eye(dim),
+                fresh: true,
             },
             Method::Adam { beta1, beta2, eps } => Inner::Adam {
                 m: Array1::zeros(dim),

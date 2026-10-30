@@ -1556,6 +1556,146 @@ fn nlcg_second_step_is_not_steepest() {
     );
 }
 
+/// The first step clips y onto the 2.048 box face at f = 3.742860. The
+/// next conjugate direction leaves the box, its clipped step rises, and
+/// the energy test refuses it. A refused step restarts the recurrence
+/// from steepest descent instead of retrying the same direction.
+#[test]
+fn nlcg_energy_accept_restarts_after_a_refused_step() {
+    let obj = Rosenbrock::<2>::new();
+    let mut x = array![-1.2, 1.0];
+    let mut solver = Solver::new(Method::polak_ribiere(), control(), 2);
+    solver.set_accept(rgmin::Accept::Energy);
+    let first = solver.step(&obj, &mut x).unwrap();
+    assert!((first.value - 3.742860).abs() < 1e-6, "{}", first.value);
+    assert_eq!(x[1], 2.048);
+    let mut last = first.value;
+    for _ in 0..79 {
+        last = solver.step(&obj, &mut x).unwrap().value;
+    }
+    assert!(last < 0.5, "PR froze at {last} {x:?}");
+}
+
+/// Seven steps reach f = 0.116646. The eighth spectral length is refused
+/// by the energy test, and the stored pair used to replay it on every
+/// later call. A refused step drops the pair, so the next call takes the
+/// `istep` length from the same point.
+#[test]
+fn bb_energy_accept_drops_the_pair_after_a_refused_step() {
+    let obj = Rosenbrock::<2>::new();
+    let mut x = array![-1.2, 1.0];
+    let mut solver = Solver::new(Method::Bb, control(), 2);
+    solver.set_accept(rgmin::Accept::Energy);
+    let mut values = Vec::new();
+    for _ in 0..80 {
+        values.push(solver.step(&obj, &mut x).unwrap().value);
+    }
+    assert!((values[6] - 0.116646).abs() < 1e-6, "{}", values[6]);
+    assert!(values.windows(2).all(|w| w[1] <= w[0] + 1e-8), "{values:?}");
+    let last = values[79];
+    assert!(last < 1e-3, "BB froze at {last} {x:?}");
+}
+
+/// From (-1.2, 1.0) the unscaled identity step `-g` rises on all ten
+/// halvings and on the steepest fallback, so BFGS and SR1 stayed at
+/// f = 24.2. The first energy step takes `istep` along the identity and
+/// reaches the point of the first CG step. Both then reach the minimum
+/// at (1, 1). `Accept::None` still takes the raw step, which the box
+/// clips to its corner.
+#[test]
+fn bfgs_and_sr1_energy_accept_leave_the_start() {
+    let obj = Rosenbrock::<2>::new();
+    for method in [Method::Bfgs, Method::Sr1] {
+        let mut x = array![-1.2, 1.0];
+        let mut solver = Solver::new(method.clone(), control(), 2);
+        solver.set_accept(rgmin::Accept::Energy);
+        let first = solver.step(&obj, &mut x).unwrap();
+        assert!(
+            (first.value - 3.742860).abs() < 1e-6,
+            "{method:?} stayed at {}",
+            first.value
+        );
+        assert_eq!(x[1], 2.048);
+        let mut last = first;
+        for _ in 0..79 {
+            last = solver.step(&obj, &mut x).unwrap();
+        }
+        let miss = (x[0] - 1.0).abs().max((x[1] - 1.0).abs());
+        assert!(
+            last.grad_norm < 1e-6 && miss < 1e-6,
+            "{method:?} stalled at f = {} |g| = {} {x:?}",
+            last.value,
+            last.grad_norm
+        );
+    }
+    let mut x = array![-1.2, 1.0];
+    let mut solver = Solver::new(Method::Bfgs, control(), 2);
+    solver.set_accept(rgmin::Accept::None);
+    solver.step(&obj, &mut x).unwrap();
+    assert_eq!(x, array![2.048, 2.048]);
+}
+
+/// SR2 takes the same first energy step as BFGS and SR1. A non-secant
+/// update used to double `B` along `s` on every step, so the steps
+/// halved and SR2 stopped short of the minimum.
+#[test]
+fn sr2_energy_accept_reaches_the_minimum() {
+    let obj = Rosenbrock::<2>::new();
+    let mut x = array![-1.2, 1.0];
+    let mut solver = Solver::new(Method::Sr2, control(), 2);
+    solver.set_accept(rgmin::Accept::Energy);
+    let first = solver.step(&obj, &mut x).unwrap();
+    assert!(
+        (first.value - 3.742860).abs() < 1e-6,
+        "Sr2 stayed at {}",
+        first.value
+    );
+    assert_eq!(x[1], 2.048);
+    let mut last = first;
+    for _ in 0..79 {
+        last = solver.step(&obj, &mut x).unwrap();
+    }
+    let miss = (x[0] - 1.0).abs().max((x[1] - 1.0).abs());
+    assert!(
+        last.grad_norm < 1e-6 && miss < 1e-6,
+        "Sr2 stalled at f = {} |g| = {} {x:?}",
+        last.value,
+        last.grad_norm
+    );
+}
+
+/// The SR2 update can be indefinite. From `(1, 0.2)` the fifth direction
+/// has `g·d = 7.68`, so the energy test refuses it and its steepest
+/// fallback. `B` then resets as SR1 does, and the next step is `-istep g`.
+#[test]
+fn sr2_energy_accept_resets_after_an_uphill_direction() {
+    use eindir_core::DifferentiableObjective;
+    let obj = Rosenbrock::<2>::new();
+    let mut x = array![1.0, 0.2];
+    let mut solver = Solver::new(Method::Sr2, control(), 2);
+    solver.set_accept(rgmin::Accept::Energy);
+    let mut value = obj.value_and_gradient(x.view()).0;
+    for k in 0..4 {
+        let rep = solver.step(&obj, &mut x).unwrap();
+        assert!(rep.value < value, "step {k} did not descend");
+        value = rep.value;
+    }
+    let stuck = x.clone();
+    let (_, g) = obj.value_and_gradient(x.view());
+    let rep = solver.step(&obj, &mut x).unwrap();
+    assert_eq!(x, stuck);
+    assert_eq!(rep.value, value);
+    solver.step(&obj, &mut x).unwrap();
+    let dx = &x - &stuck;
+    let t = -dx[0] / g[0];
+    assert!(t > 0.0 && (dx[1] + t * g[1]).abs() < 1e-15, "{dx:?} {g:?}");
+    for _ in 0..74 {
+        solver.step(&obj, &mut x).unwrap();
+    }
+    let miss = (x[0] - 1.0).abs().max((x[1] - 1.0).abs());
+    assert!(miss < 1e-6, "Sr2 stalled at {x:?}");
+}
+
 #[test]
 fn fire_and_bb_kill_a_sphere() {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};

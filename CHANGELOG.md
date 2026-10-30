@@ -203,6 +203,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under either gradient norm.
 - The energy-accept fallback faces the same test as the step it
   replaces; a fallback that also fails reports the position unmoved.
+- Session nonlinear CG restarts from steepest descent after
+  `Accept::Energy` or `Accept::Nonmonotone` refuses a step. The
+  refused direction used to be retried from the same point.
+  Polak-Ribiere on boxed Rosenbrock 2D from `(-1.2, 1.0)` stayed at
+  `f = 3.742860`. `Accept::None` is unchanged.
+- Session Barzilai-Borwein drops its stored `(s, y)` pair after
+  `Accept::Energy` or `Accept::Nonmonotone` refuses a step, so the
+  next call starts from the `istep` length. The refused spectral
+  length used to be retried from the same point. On boxed Rosenbrock
+  2D from `(-1.2, 1.0)` the energy stayed at `f = 0.116646`.
+  `Accept::None` is unchanged.
+- Session BFGS and SR1 under `Accept::Energy` or
+  `Accept::Nonmonotone` take `istep` along the starting identity and
+  rescale it by `s·y / y·y` (Nocedal-Wright 6.20) before the first
+  update, as L-BFGS does with an empty memory. The raw `-g` step rose
+  on all ten halvings, so on boxed Rosenbrock 2D from `(-1.2, 1.0)`
+  they stayed at `f = 24.2`. A refused step resets the matrix to
+  that identity, so SR1 no longer retries an uphill direction from
+  the same point. `Accept::None` is unchanged.
+- SR2 is a symmetric secant update. The `sr2.hpp` map
+  `B += δ (y + Bs)^T / (δ·s)`, with `δ = y - Bs`, gives
+  `B+ s - y = 2 (s·Bs) δ / (δ·s)`. It broke the secant equation
+  (Nocedal-Wright 6.6) and left `B` asymmetric. Once `s·Bs` exceeded
+  `s·y`, it doubled `B` along `s` on every step, so the steps halved
+  and SR2 stalled away from a stationary point. SR2 now applies
+  Powell's symmetrization with `c = y + Bs`:
+  `B += (δ c^T + c δ^T) / (c·s) - (δ·s) c c^T / (c·s)^2`. With
+  `a = s·y` and `b = s·Bs` both nonzero, that is the Broyden class
+  (6.32) with `φ = a (a - b) / (a + b)^2`. It is not Powell symmetric
+  Broyden (`c = s`). A symmetric `B` stays exactly symmetric in
+  floating point.
+- Session SR2 under `Accept::Energy` or `Accept::Nonmonotone` starts
+  as BFGS and SR1 do. It takes `istep` along `B = I`, sets
+  `B = I y·y / s·y` before the first update, and resets `B` to `I`
+  after a refused step. On boxed Rosenbrock 2D from `(-1.2, 1.0)` it
+  used to stay at `f = 24.2`. `Accept::None` is unchanged.
+- A C session created with `istep = 0` sets its step scale to
+  `min(1, 1/||g||)` at the first energy-tested steepest, BFGS, SR1,
+  SR2, BB, or unpreconditioned CG step. The scale lasts until `forget`
+  or `rebase`, not only for that step. Steepest descent and CG multiply
+  every later gradient term by it, so the cap shortens all their steps.
+  BFGS, SR1, and SR2 use it while the matrix is the starting identity,
+  and BB when it has no pair or no positive curvature. SciPy BFGS starts
+  its search at `min(1, 1.01/||g||)`, and L-BFGS-B at `1/||d||`. The
+  raw `-g` step rose on every energy halving, so from `(-1.2, 1.0)` on
+  Rosenbrock 2D these sessions stayed at `f = 24.2`. A positive
+  `istep` and `Accept::None` are unchanged.
 - Failed C callbacks return NaN-filled gradients and Hessians rather
   than fabricated zeros or identity matrices.
 - The FFI waist reuses standing DLPack shells per solve instead of

@@ -655,6 +655,71 @@ fn c_abi_solver_step_keeps_lbfgs_history() {
     );
 }
 
+/// `istep = 0` used to mean a raw `-g` first step. From `(-1.2, 1.0)`
+/// every energy halving of it rises, so these sessions stayed at
+/// `f = 24.2`. A unit first step accepts on its third trial, the
+/// second halving, at `f = 6.321495`.
+#[test]
+fn c_abi_default_istep_leaves_the_rosenbrock_start() {
+    let ctrl = rgmin_control_t {
+        maxiter: 80,
+        gtol: 1e-10,
+        istep: 0.0,
+        memory: 0,
+        maxmove: 0.0,
+    };
+    for method in [
+        rgmin_method_t::RGMIN_BFGS,
+        rgmin_method_t::RGMIN_SR1,
+        rgmin_method_t::RGMIN_SR2,
+        rgmin_method_t::RGMIN_BB,
+    ] {
+        let mut x = [-1.2, 1.0];
+        let session = unsafe { rgmin_solver_create(method, &ctrl, 2) };
+        assert!(!session.is_null());
+        let mut out = rgmin_report_t {
+            value: 0.0,
+            steps: 0,
+            grad_norm: 0.0,
+        };
+        let mut first = f64::NAN;
+        for k in 0..80 {
+            let xt = unsafe { rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), 2) };
+            let st = unsafe {
+                rgmin_solver_step(
+                    session,
+                    Some(rosen_eval),
+                    Some(rosen_grad),
+                    std::ptr::null_mut(),
+                    xt,
+                    &mut out,
+                )
+            };
+            unsafe { rgmin_tensor_free(xt) };
+            assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+            if k == 0 {
+                first = out.value;
+            }
+            if out.grad_norm < 1e-8 {
+                break;
+            }
+        }
+        unsafe { rgmin_solver_free(session) };
+        assert!(
+            (first - 6.321495).abs() < 1e-6,
+            "{method:?} first step f = {first}"
+        );
+        assert!(out.value < 1e-6, "{method:?} ended at f = {}", out.value);
+        if method != rgmin_method_t::RGMIN_BB {
+            assert!(out.grad_norm < 1e-6, "{method:?} |g| = {}", out.grad_norm);
+            assert!(
+                (x[0] - 1.0).abs() < 1e-6 && (x[1] - 1.0).abs() < 1e-6,
+                "{method:?} ended at {x:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn version_is_nul_terminated() {
     let p = rgmin::ffi::rgmin_version();
