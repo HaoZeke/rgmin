@@ -218,3 +218,52 @@ fn a_refused_step_leaves_the_session_as_it_was() {
         assert_eq!(run(true), run(false), "{token}");
     }
 }
+
+/// A refusal on the very first step leaves nothing behind either. The
+/// steep start makes the geometry L-BFGS session choose its stiff seed.
+/// After the refusal the caller moves to a shallow point, where the next
+/// step must match a new session's, stiffness choice included.
+#[test]
+fn a_refused_first_step_leaves_the_session_new() {
+    let open = AtomicBool::new(true);
+    let probed = Mutex::new(Vec::new());
+    let x0 = Array1::<f64>::zeros(3);
+    let fg = |x: ArrayView1<f64>| {
+        probed.lock().unwrap().push(x.to_owned());
+        let f = 50.0 * x.mapv(|v| (v - 1.0) * (v - 1.0)).sum();
+        let answered = open.load(SeqCst) || x == x0;
+        let f = if answered { f } else { f64::NAN };
+        (f, x.mapv(|v| 100.0 * (v - 1.0)))
+    };
+    let obj = Oracle::unbounded(3, &fg);
+    for (token, cap) in [("fire", None), ("fire2", None), ("lbfgs", Some(0.1))] {
+        let run = |refuse: bool| {
+            let mut solver = Solver::new(Method::from_name(token).unwrap(), CONTROL, 3);
+            if let Some(cap) = cap {
+                solver.set_atom_maxmove(cap);
+            }
+            open.store(!refuse, SeqCst);
+            let mut tries = Vec::new();
+            for _ in 0..2 * usize::from(refuse) {
+                let mut x = x0.clone();
+                probed.lock().unwrap().clear();
+                let out = solver.step(&obj, &mut x);
+                assert!(matches!(out, Err(Error::Oracle { .. })), "{token}: {out:?}");
+                assert_eq!(x, x0, "{token}");
+                tries.push(std::mem::take(&mut *probed.lock().unwrap()));
+            }
+            if refuse {
+                assert!(
+                    tries[0].len() > 1 && tries[0] == tries[1],
+                    "{token}: {tries:?}"
+                );
+            }
+            open.store(true, SeqCst);
+            let mut x = Array1::from_elem(3, 0.99);
+            probed.lock().unwrap().clear();
+            let r = solver.step(&obj, &mut x).unwrap();
+            (r.value, r.coords, r.steps, probed.lock().unwrap().clone())
+        };
+        assert_eq!(run(true), run(false), "{token}");
+    }
+}
