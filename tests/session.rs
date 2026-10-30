@@ -1868,6 +1868,82 @@ fn an_uphill_everywhere_oracle_is_refused_not_moved() {
     );
 }
 
+/// Polak-Ribiere from (-1.2, 1.0). Under `Accept::Energy` and
+/// `Accept::Nonmonotone` the energy test refuses the second step, and the
+/// third is the steepest restart to f = 0.638469. `Accept::None` refuses
+/// nothing and keeps the recurrence, which the box clips to its corners.
+#[test]
+fn nlcg_restarts_after_a_refusal_under_energy_and_nonmonotone() {
+    use rgmin::Accept;
+    let obj = Rosenbrock::<2>::new();
+    for (accept, bound) in [(Accept::Energy, 1e-4), (Accept::Nonmonotone, 0.5)] {
+        let mut x = array![-1.2, 1.0];
+        let mut solver = Solver::new(Method::polak_ribiere(), control(), 2);
+        solver.set_accept(accept);
+        let mut values = Vec::new();
+        let mut points = Vec::new();
+        for _ in 0..80 {
+            values.push(solver.step(&obj, &mut x).unwrap().value);
+            points.push(x.clone());
+        }
+        assert!((values[0] - 3.742860).abs() < 1e-6, "{accept:?} {values:?}");
+        assert_eq!(points[1], points[0], "{accept:?} took the second step");
+        assert!(
+            (values[2] - 0.638469).abs() < 1e-6,
+            "{accept:?} {}",
+            values[2]
+        );
+        assert!(values[79] < bound, "{accept:?} ended at {}", values[79]);
+    }
+    let mut x = array![-1.2, 1.0];
+    let mut solver = Solver::new(Method::polak_ribiere(), control(), 2);
+    solver.set_accept(Accept::None);
+    solver.step(&obj, &mut x).unwrap();
+    assert_eq!(x, array![2.048, 2.048]);
+    solver.step(&obj, &mut x).unwrap();
+    solver.step(&obj, &mut x).unwrap();
+    assert_eq!(x, array![-2.048, 2.048]);
+}
+
+/// Barzilai-Borwein from (-1.2, 1.0). Under `Accept::Energy` the eighth
+/// step is refused and the ninth takes `istep` to f = 0.075584. Under
+/// `Accept::Nonmonotone` the seventh step rises to f = 0.692147, the
+/// first refusal is step 24, and step 25 moves. `Accept::None` keeps
+/// the pair.
+#[test]
+fn bb_drops_the_pair_after_a_refusal_under_energy_and_nonmonotone() {
+    use rgmin::Accept;
+    let obj = Rosenbrock::<2>::new();
+    let run = |accept: Accept| {
+        let mut x = array![-1.2, 1.0];
+        let mut solver = Solver::new(Method::Bb, control(), 2);
+        solver.set_accept(accept);
+        let mut values = Vec::new();
+        let mut points = Vec::new();
+        for _ in 0..80 {
+            values.push(solver.step(&obj, &mut x).unwrap().value);
+            points.push(x.clone());
+        }
+        (values, points)
+    };
+    let (values, points) = run(Accept::Energy);
+    assert_eq!(points[7], points[6]);
+    assert!((values[8] - 0.075584).abs() < 1e-6, "{}", values[8]);
+    assert!(values[79] < 1e-3, "{}", values[79]);
+
+    let (values, points) = run(Accept::Nonmonotone);
+    assert!((values[6] - 0.692147).abs() < 1e-6, "{}", values[6]);
+    assert!(values[6] > values[5]);
+    let first = (1..80).find(|&k| points[k] == points[k - 1]);
+    assert_eq!(first, Some(23), "{values:?}");
+    assert_ne!(points[24], points[23]);
+    assert!(values[79] < 1e-12, "{}", values[79]);
+
+    let (values, points) = run(Accept::None);
+    assert_eq!(points[0], array![2.048, 2.048]);
+    assert!((values[1] - 12.461354).abs() < 1e-6, "{}", values[1]);
+}
+
 #[test]
 fn one_eval_outer_pairs_reach_the_quadratic_bowl() {
     // Dimer translation supplies one gradient per outer and cannot
