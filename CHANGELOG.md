@@ -232,6 +232,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `B += (δ c^T + c δ^T) / (c·s) - (δ·s) c c^T / (c·s)^2`. That is the
   Broyden class (6.32) with `φ = a (a - b) / (a + b)^2`, where
   `a = s·y` and `b = s·Bs`.
+- Session SR2 under `Accept::Energy` or `Accept::Nonmonotone` starts
+  as BFGS and SR1 do. It takes `istep` along `B = I`, sets
+  `B = I y·y / s·y` before the first update, and resets `B` to `I`
+  after a refused step. On boxed Rosenbrock 2D from `(-1.2, 1.0)` it
+  used to stay at `f = 24.2`. `Accept::None` is unchanged.
 - Failed C callbacks return NaN-filled gradients and Hessians rather
   than fabricated zeros or identity matrices.
 - The FFI waist reuses standing DLPack shells per solve instead of

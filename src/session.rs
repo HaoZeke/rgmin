@@ -148,6 +148,7 @@ enum Inner {
     },
     Sr2 {
         b: Array2<f64>,
+        fresh: bool,
     },
     Adam {
         m: Array1<f64>,
@@ -855,11 +856,10 @@ impl Solver {
         match &mut self.inner {
             Inner::Lbfgs(solver) => solver.forget(),
             Inner::Nlcg { initialized, .. } => *initialized = false,
-            Inner::Bfgs { h, fresh } | Inner::Sr1 { h, fresh } => {
+            Inner::Bfgs { h, fresh } | Inner::Sr1 { h, fresh } | Inner::Sr2 { b: h, fresh } => {
                 *h = Array2::<f64>::eye(self.dim);
                 *fresh = true;
             }
-            Inner::Sr2 { b } => *b = Array2::<f64>::eye(self.dim),
             Inner::Adam {
                 m,
                 v,
@@ -1851,7 +1851,7 @@ impl Solver {
                 // The identity carries no length scale, and the energy test
                 // allows ten halvings. Take `istep` along it, as L-BFGS does
                 // with an empty memory, then rescale it by Nocedal-Wright
-                // 6.20 before the first update. SR1 does the same.
+                // 6.20 before the first update. SR1 and SR2 do the same.
                 let seed = *fresh && self.accept != Accept::None;
                 let mut direction = -h.dot(&grad);
                 if seed {
@@ -1931,9 +1931,13 @@ impl Solver {
                     *fresh = true;
                 }
             }
-            Inner::Sr2 { b } => {
+            Inner::Sr2 { b, fresh } => {
+                let seed = *fresh && self.accept != Accept::None;
                 let rhs = grad.mapv(|g| -g);
-                let direction = solve_dense(b, &rhs).unwrap_or_else(|| rhs);
+                let mut direction = solve_dense(b, &rhs).unwrap_or_else(|| rhs);
+                if seed {
+                    direction *= self.istep;
+                }
                 let old = x.clone();
                 let gold = grad.clone();
                 let (npos, nval, ngrad, moved) = accept_step(
@@ -1952,7 +1956,18 @@ impl Solver {
                 value = nval;
                 grad = ngrad;
                 if moved {
-                    sr2_hessian_update(b, &(&*x - &old), &(&grad - &gold));
+                    let (s, y) = (&*x - &old, &grad - &gold);
+                    if !seed {
+                        sr2_hessian_update(b, &s, &y);
+                        *fresh = false;
+                    } else if let Some(gamma) = secant_scale(&s, &y) {
+                        *b = Array2::<f64>::eye(self.dim) / gamma;
+                        *fresh = false;
+                        sr2_hessian_update(b, &s, &y);
+                    }
+                } else if self.accept != Accept::None {
+                    *b = Array2::<f64>::eye(self.dim);
+                    *fresh = true;
                 }
             }
             Inner::Adam {
@@ -2209,6 +2224,7 @@ impl Inner {
             },
             Method::Sr2 => Inner::Sr2 {
                 b: Array2::<f64>::eye(dim),
+                fresh: true,
             },
             Method::Adam { beta1, beta2, eps } => Inner::Adam {
                 m: Array1::zeros(dim),
