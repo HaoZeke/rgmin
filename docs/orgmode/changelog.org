@@ -73,6 +73,8 @@ A non-positive, NaN or infinite radius turns it off.
 A step whose direction is not downhill or not finite returns ~RGMIN_INTERNAL_ERROR~.
 The C++ session wraps them as ~set_lbfgs_trust~ and ~lbfgs_trust_radius~.
 ~abi_minor~ 37.
+~benches/stop_norm.rs~ prints a second table of five L-BFGS step rules, with budget hits and errors per arm.
+With the cap, the radius-on arm runs the trust step in place of geometry L-BFGS, so the two capped arms compare two step rules.
 
 The exponential preconditioner of Packwood et al., J. Chem. Phys. 144, 164109 (2016) ([[https://doi.org/10.1063/1.4947024][10.1063/1.4947024]]) is ~Solver::set_exp~.
 The caller supplies the neighbour list.

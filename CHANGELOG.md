@@ -76,6 +76,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   The C++ session wraps them as `set_lbfgs_trust` and `lbfgs_trust_radius`.
   xts aliases follow.
   `abi_minor` 37.
+  `benches/stop_norm.rs` prints a second table of five L-BFGS step rules, with budget hits and errors per arm.
+  With the cap, the radius-on arm runs the trust step in place of geometry L-BFGS, so the two capped arms compare two step rules.
 - Opt-in session stop norm.
   `Solver::set_stop_norm` takes a `StopNorm`: `Two` (the default, `||g||_2`), `MaxAtom` (the largest norm over `(x, y, z)` triples: ASE `fmax`, eOn `max_atom`, LAMMPS `max`), or `Inf` (the largest absolute component: eOn `max_component`, LAMMPS `inf`).
   Every session stop test and `Report::grad_norm` use it.
