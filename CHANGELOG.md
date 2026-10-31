@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Through the C ABI these errors arrive as
   `RGMIN_INTERNAL_ERROR` with no NaN or clipped-to-the-bound
   coordinate sent to the callback.
+- An L-BFGS `Solver` step under `Accept::None` records the caller's
+  move as a curvature pair before its one trial. A non-finite trial
+  now takes that pair back, so `Error::Oracle` leaves the memory as it
+  was. Before, each retry from the moved point recorded the same pair
+  again.
 
 ### Added
 
