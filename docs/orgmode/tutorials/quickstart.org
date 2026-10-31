@@ -4,17 +4,17 @@
 
 * Quickstart
 
-This tutorial minimizes the 2-D Rosenbrock banana from the classic start
-~(-1.2, 1.0)~ with L-BFGS and the strong Wolfe line search.
+This tutorial minimizes the 2-D Rosenbrock banana from the classic start ~(-1.2, 1.0)~ with L-BFGS and the strong Wolfe line search.
 
 ** What you will need
 
-A checkout of ~rgmin~. Build on the remote builder, not a laptop.
+A checkout of ~rgmin~.
+Build on the remote builder, not a laptop.
 
 ** Rust
 
-A closure is enough. The stepper does not care who owns the
-potential.
+A closure is enough.
+The stepper does not care who owns the potential.
 
 #+begin_src rust
 use ndarray::array;
@@ -37,26 +37,29 @@ assert!(x[0] > 0.9);
 
 ** Session
 
-Hosts that already own an outer loop hold a ~Solver~ and call
-~step~ once per iteration:
+Hosts that already own an outer loop hold a ~Solver~ and call ~step~ once per iteration:
 
 #+begin_src rust
+use eindir_core::objectives::Rosenbrock;
+use ndarray::array;
 use rgmin::{Control, Method, Solver};
 
+let obj = Rosenbrock::<2>::new();
+let mut x = array![-1.2, 1.0];
 let mut solver = Solver::new(Method::lbfgs(), Control::default(), 2);
 let rep = solver.step(&obj, &mut x).unwrap();
+assert!(rep.value.is_finite());
 #+end_src
 
-~set_manifold~ retracts that step. Isolated molecules use
-~RigidQuotient~ (~R^{3N}/SE(3)~) or ~MwRigid~ (mass-weighted
-Eckart). Sphere, SO(3), Stiefel, and SE(3) are matrix-manifold
-embeddings. Euclidean is the default.
+@@rst::doc:`Relax a platinum crystal <relax-morse>`@@ runs that loop to convergence on a 256-atom system.
+
+~set_manifold~ retracts that step.
+Isolated molecules use ~RigidQuotient~ (~R^{3N}/SE(3)~) or ~MwRigid~ (mass-weighted Eckart).
+Sphere, SO(3), Stiefel, and SE(3) are matrix-manifold embeddings.
+Euclidean is the default.
 
 ** What just happened
 
-1. ~Lbfgs::minimize~ ran the two-loop recursion on the Rosenbrock
-   banana from ~(-1.2, 1.0)~.
-2. The closure returned ~(f, g)~; the crate never needed a
-   named potential type.
-3. A host that already owns an outer loop uses ~Solver::step~
-   instead, and ~set_manifold~ if the geometry is not Euclidean.
+1. ~Lbfgs::minimize~ ran the two-loop recursion on the Rosenbrock banana from ~(-1.2, 1.0)~.
+2. The closure returned ~(f, g)~; the crate never needed a named potential type.
+3. A host that already owns an outer loop uses ~Solver::step~ instead, and ~set_manifold~ if the geometry is not Euclidean.
