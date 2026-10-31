@@ -1,0 +1,19 @@
+// dot -Tpng -Gdpi=150 session_loop.dot -o session_loop.png
+digraph session_loop {
+    rankdir=LR;
+    node [shape=box, style="rounded", fontname="Helvetica", fontsize=11];
+    edge [fontname="Helvetica", fontsize=10];
+
+    setup [label="Solver::new(method, control, 3N)\nset_atom_maxmove(0.2)\nset_stop_norm(MaxAtom)"];
+    step  [label="solver.step(&obj, &mut x)"];
+    oracle [label="host closure\nx -> (E, gradient)", shape=ellipse];
+    report [label="Report\nvalue, grad_norm"];
+    done  [label="relaxed x", shape=ellipse];
+
+    setup -> step;
+    step -> oracle [label="one or more\nforce calls"];
+    oracle -> step;
+    step -> report [label="x moved in place"];
+    report -> step [label="grad_norm >= 0.01"];
+    report -> done [label="grad_norm < 0.01"];
+}

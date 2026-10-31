@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tutorial `docs/orgmode/tutorials/relax-morse.org`: relax the
+  Pt256 Morse fixture with L-BFGS, FIRE and FIRE 2.0 through a
+  `Solver` session. `examples/relax_morse.rs` is the program it runs,
+  and `docs/figures/relax-morse/` holds the force-trace plot and the
+  session diagram with the scripts that draw them.
 - Opt-in session stop norm. `Solver::set_stop_norm` takes a
   `StopNorm`: `Two` (the default, `||g||_2`), `MaxAtom` (the largest
   norm over `(x, y, z)` triples: ASE `fmax`, eOn `max_atom`, LAMMPS

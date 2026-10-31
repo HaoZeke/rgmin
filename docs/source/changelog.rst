@@ -11,6 +11,9 @@ Unreleased
 macros are ``RGMIN_H_MAJOR``, ``RGMIN_H_MINOR``, and ``RGMIN_H_PATCH``.
 ``HighsInt`` stays out of the public header.
 
+The tutorial :doc:`Relax a platinum crystal <tutorials/relax-morse>` relaxes the Pt256 Morse fixture with L-BFGS, FIRE and FIRE 2.0 through a ``Solver`` session.
+``examples/relax_morse.rs`` is the program it runs, and ``docs/figures/relax-morse/`` holds the force-trace plot and the session diagram with the scripts that draw them.
+
 The exponential preconditioner of Packwood et al., J. Chem. Phys.
 144, 164109 (2016)
 (`10.1063/1.4947024 <https://doi.org/10.1063/1.4947024>`_)

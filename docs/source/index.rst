@@ -56,6 +56,7 @@ crate's ``Solver``; they do not grow a second optimizer.
    :caption: Tutorials
 
    tutorials/quickstart
+   tutorials/relax-morse
 
 .. toctree::
    :maxdepth: 2
