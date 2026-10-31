@@ -69,6 +69,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   A finite slope `g^T d` that is not negative after the pairs are dropped returns the new `Error::NoDescent`, and a NaN or infinite slope returns the non-finite direction error.
   On Euclidean L-BFGS without HiGHS the radius replaces the acceptance test and the geometry step.
   It is off by default.
+  In the C application binary interface (ABI), `rgmin_solver_set_lbfgs_trust` sets the radius.
+  A non-positive, NaN or infinite radius turns it off, and a null session returns 1.
+  `rgmin_solver_lbfgs_trust_radius` reads it, or 0 when off.
+  A step whose direction is not downhill or not finite returns `RGMIN_INTERNAL_ERROR`.
+  The C++ session wraps them as `set_lbfgs_trust` and `lbfgs_trust_radius`.
+  xts aliases follow.
+  `abi_minor` 37.
 - Opt-in session stop norm.
   `Solver::set_stop_norm` takes a `StopNorm`: `Two` (the default, `||g||_2`), `MaxAtom` (the largest norm over `(x, y, z)` triples: ASE `fmax`, eOn `max_atom`, LAMMPS `max`), or `Inf` (the largest absolute component: eOn `max_component`, LAMMPS `inf`).
   Every session stop test and `Report::grad_norm` use it.
