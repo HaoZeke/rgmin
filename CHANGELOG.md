@@ -90,6 +90,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   On the 75-atom Lennard-Jones (LJ75) protocol, which has no bounds, it needs 371.0 evaluations per relaxation against 371.2 for `Lbfgs::minimize`, so it does not close the gap to SciPy that `reference/sota` records.
   That gap comes from the end of each relaxation, where line searches fail at the rounding floor of the energy.
   `examples/lbfgsb_bench.rs` and `docs/figures/lbfgsb/` contain the benchmark, its SciPy counterpart and the plot.
+- Opt-in `Lbfgs::approx_wolfe` stops the strong Wolfe search of `Lbfgs::minimize` and `Lbfgs::minimize_box` at the rounding floor of the value.
+  With a positive value the search accepts a trial at most `approx_wolfe` times `abs(f)` above the start when the trial meets the strong curvature test, the approximate Wolfe stop of Hager and Zhang 2005.
+  Otherwise it places that trial by the sign of its slope.
+  At the default of zero the search is strict, and every entry point returns bit for bit what it returned before.
+  On LJ75, `approx_wolfe = 1e-12` ends all 400 relaxations on the `gtol` test, against 6 without it, and they need 278.6 evaluations per relaxation against 371.2.
+  SciPy 1.18.1, with the same memory and tolerance and `ftol = 0`, needs 278.5 and ends 116 runs with the largest gradient component at or above 1e-6.
+  With the test on, a run keeps its pairs.
+  A reused solver can then take a much too long first step after a large perturbation, so the test is off by default (`explanation/linesearch`).
 - Opt-in holonomic distance constraints on every `Solver` method except particle swarm, under every `Accept` rule.
   `DistanceConstraints::at` fixes atom pairs at their lengths in a geometry, and `DistanceConstraints::new` takes the lengths as given.
   `with_masses` sets one mass per atom, and masses are one until it is called.
