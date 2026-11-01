@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cargo cinstall` installs the hand-written `include/rgmin.h` and
   `dlpack/dlpack.h`. The header compiles as C and as C++. Version
   macros are `RGMIN_H_MAJOR`, `RGMIN_H_MINOR`, and `RGMIN_H_PATCH`.
-  `HighsInt` stays out of the public header. CI installs into a
+  `HighsInt` stays out of the public header. Continuous integration (CI) installs into a
   prefix and compiles a C program and a C++ program against that
   header and the `rgmin` pkg-config file.
 - The docs index and `reference/architecture` define the hourglass and its waist, the C ABI that C and C++ callers go through.
@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Solver` session. `examples/relax_morse.rs` is the program it runs,
   and `docs/figures/relax-morse/` holds the force-trace plot and the
   session diagram with the scripts that draw them.
+- `CONTRIBUTING.md` names the issue tracker, the `develop` branch and the checks that CI runs.
+  It points to the contributing page for the rest.
 - Opt-in session stop norm. `Solver::set_stop_norm` takes a
   `StopNorm`: `Two` (the default, `||g||_2`), `MaxAtom` (the largest
   norm over `(x, y, z)` triples: ASE `fmax`, eOn `max_atom`, LAMMPS
