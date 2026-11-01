@@ -11,6 +11,20 @@ Unreleased
 macros are ``RGMIN_H_MAJOR``, ``RGMIN_H_MINOR``, and ``RGMIN_H_PATCH``.
 ``HighsInt`` stays out of the public header.
 
+How-to samples that did not compile now do.
+The manifold sample defines its objective.
+The HiGHS sample fills the rest of ``HighsStep`` from ``Default``.
+The intrinsic reaction coordinate (IRC) sample imports only what it uses.
+The C++ sample calls ``rgmin::minimize_fn`` from ``rgmin/optimize.hpp``.
+The C samples include ``rgmin.h``.
+
+:doc:`Install rgmin <howto/install>` shows how to install the 0.5.2 release from crates.io or the ``develop`` branch.
+It gives the dependencies and features of each route, the C library through cargo-c, and the SciPy the HiGHS tests need.
+The README, the index and the quickstart point to it.
+
+The README opens with what rgmin does.
+It spells out each method name on first use, along with IRC and the C application binary interface (ABI) terms.
+
 The tutorial :doc:`Relax a platinum crystal <tutorials/relax-morse>` relaxes the Pt256 Morse fixture with L-BFGS, FIRE and FIRE 2.0 through a ``Solver`` session.
 ``examples/relax_morse.rs`` is the program it runs, and ``docs/figures/relax-morse/`` holds the force-trace plot and the session diagram with the scripts that draw them.
 

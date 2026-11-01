@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- How-to samples that did not compile now do.
+  The manifold sample defines its objective.
+  The HiGHS sample fills the rest of `HighsStep` from `Default`.
+  The intrinsic reaction coordinate (IRC) sample imports only what it uses.
+  The C++ sample calls `rgmin::minimize_fn` from `rgmin/optimize.hpp`.
+  The C samples include `rgmin.h`.
 - `cargo cinstall` installs the hand-written `include/rgmin.h` and
   `dlpack/dlpack.h`. The header compiles as C and as C++. Version
   macros are `RGMIN_H_MAJOR`, `RGMIN_H_MINOR`, and `RGMIN_H_PATCH`.
@@ -44,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- How-to `docs/orgmode/howto/install.org` shows how to install the 0.5.2 release from crates.io or the `develop` branch.
+  It gives the dependencies and features of each route, the C library through cargo-c, and the SciPy the HiGHS tests need.
+  The README, the index and the quickstart point to it.
 - Tutorial `docs/orgmode/tutorials/relax-morse.org`: relax the
   Pt256 Morse fixture with L-BFGS, FIRE and FIRE 2.0 through a
   `Solver` session. `examples/relax_morse.rs` is the program it runs,
@@ -103,6 +112,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The README opens with what rgmin does.
+  It spells out each method name on first use, along with IRC and the C application binary interface (ABI) terms.
 - `Report` gains `grad: Option<Array1<f64>>`, the gradient that
   `grad_norm` measures. Sessions fill it and one-shot drivers leave it
   `None`. Code that builds a `Report` literal must set the field.
