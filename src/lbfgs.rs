@@ -97,6 +97,18 @@ pub struct Lbfgs {
     pub curvature: f64,
     /// Line-search evaluations attempted before the direction is abandoned.
     pub max_line_evals: usize,
+    /// Relative error `ε` of a computed value, zero by default. A
+    /// line-search trial at most `ε |f|` above the start is within that
+    /// error. It is accepted when it meets the strong curvature test, the
+    /// approximate Wolfe test of Hager and Zhang 2005, and otherwise
+    /// bracketed by the sign of its slope. Zero turns both off and leaves
+    /// the strict strong Wolfe search.
+    ///
+    /// With the test on, most relaxations end with their pairs. On the next
+    /// call the first trial is a full step along the direction they give.
+    /// Far from the last minimum that step can be much too long, so call
+    /// [`Self::forget`] before reusing a solver after a large change.
+    pub approx_wolfe: f64,
     /// Norm used against [`Lbfgs::gtol`].
     pub norm: GradNorm,
     /// Relative-decrease stop of the L-BFGS-B code (Zhu, Byrd, Lu and
@@ -148,6 +160,7 @@ impl Lbfgs {
             armijo: 1e-4,
             curvature: 0.9,
             max_line_evals: 20,
+            approx_wolfe: 0.0,
             norm: GradNorm::Infinity,
             ftol: 0.0,
             extra_updates: 0,
@@ -494,6 +507,18 @@ impl Lbfgs {
     /// the bracket and the zoom bisects back toward the accepted end.
     /// No trial exceeds `a_max`; a decrease at `a_max` that has not
     /// bracketed is accepted there, as `dcsrch` does at `stpmax`.
+    ///
+    /// Near a minimum the decrease test can fail on rounding alone, since
+    /// the values it compares differ only in their last bits. The slope is
+    /// still accurate there. A value at most [`Self::approx_wolfe`] times
+    /// `|f|` above the start is within the value error. A trial there that
+    /// meets the strong curvature test is
+    /// accepted: the approximate Wolfe stop T2 of Hager and Zhang 2005,
+    /// with `c1` and `c2` for their `δ` and `σ`. A trial there that fails
+    /// it is placed by the sign of its slope, not by its value, as in their
+    /// interval update U1 and U2: the bracket keeps growing while the slope
+    /// is negative, and the zoom moves its low end to a trial whose slope
+    /// still points down toward the high end.
     fn line_search<F>(
         &mut self,
         x: &mut Array1<f64>,
@@ -542,6 +567,10 @@ impl Lbfgs {
 
         let bracket_cap = self.max_line_evals;
         let total_cap = 2 * self.max_line_evals;
+        let f_err = self.approx_wolfe * f0.abs();
+        let flat = -self.curvature * slope;
+        let in_error = |fa: f64| f_err > 0.0 && fa <= f0 + f_err;
+        let approx_wolfe = |fa: f64, slope_a: f64| in_error(fa) && slope_a.abs() <= flat;
 
         for i in 0..bracket_cap {
             let (fa, ga) = match probe(a, fg, &mut evals, &mut scratch) {
@@ -549,7 +578,12 @@ impl Lbfgs {
                 None => return (false, evals),
             };
             let (fa, slope_a) = probed(fa, d, &ga);
-            if fa > f0 + self.armijo * a * slope || (i > 0 && fa >= f_prev) {
+            let descending = slope_a < 0.0 && in_error(fa);
+            if (fa > f0 + self.armijo * a * slope || (i > 0 && fa >= f_prev)) && !descending {
+                if approx_wolfe(fa, slope_a) {
+                    self.accept(x, f, g, d, a, (fa, ga));
+                    return (true, evals);
+                }
                 lo = a_prev;
                 f_lo = f_prev;
                 slope_lo = slope_prev;
@@ -627,9 +661,19 @@ impl Lbfgs {
             };
             let (ft, slope_t) = probed(ft, d, &gt);
             if ft > f0 + self.armijo * trial * slope || ft >= f_lo {
-                hi = trial;
-                f_hi = ft;
-                slope_hi = slope_t;
+                if approx_wolfe(ft, slope_t) {
+                    self.accept(x, f, g, d, trial, (ft, gt));
+                    return (true, evals);
+                }
+                if slope_t * (hi - lo) < 0.0 && in_error(ft) {
+                    lo = trial;
+                    f_lo = ft;
+                    slope_lo = slope_t;
+                } else {
+                    hi = trial;
+                    f_hi = ft;
+                    slope_hi = slope_t;
+                }
             } else {
                 if slope_t.abs() <= -self.curvature * slope {
                     self.accept(x, f, g, d, trial, (ft, gt));
