@@ -68,11 +68,19 @@ Equal revisions do not run a comparison.
 ## The library build
 
 This section describes the library that the timings call and how it is built.
-This tree has a C minimize entry and no Python extension module.
-The asv build step runs `benchflow/build_library.py`.
-That script compiles the shared library with meson and feature `capi`, using gcc and g++.
-It then links `benchmarks/asv_quadratic.c` into `build/librgmin_asv.so`.
+The timed call is `rgmin_minimize` in the installed `librgmin.so`.
+Meson configures that library with `--buildtype=release` and `-Drgmin_features=capi`.
+The project default buildtype is debugoptimized.
+Meson's own default is debug.
+A configure without the release flag would time a different build.
+The build selects Cargo's release profile when the buildtype is not debug.
+The build tree is the commit cache.
+The output of `meson introspect --buildoptions` goes beside that tree.
 
-Once that library is loaded, each timed call allocates its own start vector and borrows it for that call.
+After the build, `meson install` puts two files into the environment `lib` directory.
+They are `librgmin.so` and the thin `librgmin_asv` helper.
+The helper is off unless `-Dwith_asv_helper=true`.
+Benchmarks load those installed files and fail if either is missing.
+Once those files are loaded, each timed call allocates its own start vector and borrows it for that call.
 `warmup_time` uses the same entry.
 Those calls are not samples.
