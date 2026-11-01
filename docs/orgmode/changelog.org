@@ -28,6 +28,9 @@ It spells out each method name on first use, along with IRC and the C applicatio
 The tutorial @@rst::doc:`Relax a platinum crystal <tutorials/relax-morse>`@@ relaxes the Pt256 Morse fixture with L-BFGS, FIRE and FIRE 2.0 through a ~Solver~ session.
 ~examples/relax_morse.rs~ is the program it runs, and ~docs/figures/relax-morse/~ holds the force-trace plot and the session diagram with the scripts that draw them.
 
+@@rst::doc:`Contributing <contributing/index>`@@ now gives the docs export command that the workflow runs, ~cd docs && emacs --batch -l export.el~.
+Of the two commands it gave before, one failed and the other wrote nothing.
+
 The exponential preconditioner of Packwood et al., J. Chem. Phys.
 144, 164109 (2016)
 ([[https://doi.org/10.1063/1.4947024][10.1063/1.4947024]])

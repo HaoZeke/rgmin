@@ -51,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now takes that pair back, so `Error::Oracle` leaves the memory as it
   was. Before, each retry from the moved point recorded the same pair
   again.
+- The contributing page now gives the docs export command that the workflow runs, `cd docs && emacs --batch -l export.el`.
+  Of the two commands it gave before, one failed and the other wrote nothing.
 
 ### Added
 
