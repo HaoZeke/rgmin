@@ -53,6 +53,14 @@ struct Pair {
     rho: f64,
 }
 
+/// The line along which [`Lbfgs::line_search`] steps: direction `d`,
+/// slope `d·g` at the start, and the largest step `a_max`.
+struct Ray<'a> {
+    d: &'a Array1<f64>,
+    slope: f64,
+    a_max: f64,
+}
+
 /// Curvature saved by [`Lbfgs::curvature`].
 pub(crate) struct Curvature {
     memory: Vec<Pair>,
@@ -409,18 +417,20 @@ impl Lbfgs {
     /// was accepted and how many evaluations it cost. A probe answered with
     /// a non-finite value or gradient fails the decrease test, so it caps
     /// the bracket and the zoom bisects back toward the accepted end.
+    /// No trial exceeds `a_max`; a decrease at `a_max` that has not
+    /// bracketed is accepted there, as `dcsrch` does at `stpmax`.
     fn line_search<F>(
         &mut self,
         x: &mut Array1<f64>,
         f: &mut f64,
         g: &mut Array1<f64>,
-        d: &Array1<f64>,
-        slope: f64,
+        ray: Ray<'_>,
         fg: &mut F,
     ) -> (bool, usize)
     where
         F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
     {
+        let Ray { d, slope, a_max } = ray;
         let f0 = *f;
         let mut evals = 0usize;
         let mut scratch = x.clone();
@@ -445,7 +455,8 @@ impl Lbfgs {
             if dnorm > 1.0 { 1.0 / dnorm } else { 1.0 }
         } else {
             1.0
-        };
+        }
+        .min(a_max);
         let mut lo = 0.0;
         let mut f_lo = f0;
         let mut slope_lo = slope;
@@ -487,10 +498,14 @@ impl Lbfgs {
                 bracketed = true;
                 break;
             }
+            if a >= a_max {
+                self.accept(x, f, g, d, a, fa, ga);
+                return (true, evals);
+            }
             a_prev = a;
             f_prev = fa;
             slope_prev = slope_a;
-            a *= 2.0;
+            a = (2.0 * a).min(a_max);
         }
 
         if !bracketed {
@@ -643,7 +658,12 @@ impl Lbfgs {
                 self.forget();
                 continue;
             }
-            let (ok, evals_used) = self.line_search(&mut x, &mut f, &mut g, &d, slope, &mut fg);
+            let ray = Ray {
+                d: &d,
+                slope,
+                a_max: f64::INFINITY,
+            };
+            let (ok, evals_used) = self.line_search(&mut x, &mut f, &mut g, ray, &mut fg);
             evals += evals_used;
             if !ok {
                 if self.memory.is_empty() {
@@ -712,7 +732,12 @@ impl Lbfgs {
                 self.forget();
                 continue;
             }
-            let (ok, evals_used) = self.line_search(&mut x, &mut f, &mut g, &d, slope, &mut fg);
+            let ray = Ray {
+                d: &d,
+                slope,
+                a_max: f64::INFINITY,
+            };
+            let (ok, evals_used) = self.line_search(&mut x, &mut f, &mut g, ray, &mut fg);
             evals += evals_used;
             if !ok {
                 if self.memory.is_empty() {
