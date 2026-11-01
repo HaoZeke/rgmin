@@ -4,20 +4,70 @@
 
 * Contributing
 
+Report a bug or ask a question on the [[https://github.com/OmniPotentRPC/rgmin/issues][issue tracker]].
+Report a vulnerability as the [[https://github.com/OmniPotentRPC/rgmin/blob/develop/SECURITY.md][security policy]] says, not in a public issue.
+Everyone who takes part follows the [[https://github.com/OmniPotentRPC/rgmin/blob/develop/CODE_OF_CONDUCT.md][code of conduct]], in issues and pull requests alike.
+
+Pull requests go to the ~develop~ branch.
+Commit subjects take the form ~type(scope): summary~, as in ~fix(session): report a stall when the energy test refuses a restart~.
+A change that users can see adds an entry under ~[Unreleased]~ in ~CHANGELOG.md~, in the section that fits it.
+
 ** Build
 
-Never compile on a laptop. rsync the checkout to the remote builder
-and run ~cargo test --features capi~ there. ~eindir-core~ is a
-pinned git dependency.
+Continuous integration (CI) runs these checks with Rust 1.88.0 on every push and pull request to ~main~ and ~develop~.
+Run them before you open a pull request.
+
+#+begin_export rst
+..
+   #skip_lint_start
+#+end_export
+#+begin_src bash
+rustup toolchain install 1.88.0 --profile minimal -c rustfmt
+python3 -m pip install numpy scipy
+cargo +1.88.0 fmt --all -- --check
+cargo +1.88.0 test --locked
+cargo +1.88.0 test --locked --features capi
+cargo +1.88.0 test --locked --features highs
+cargo +1.88.0 test --locked --all-features
+#+end_src
+#+begin_export rst
+..
+   #skip_lint_end
+#+end_export
+
+These checks need network access on their first run, since cargo fetches two git dependencies pinned to a commit: ~eindir-core~ and, for the tests, ~rgpot-core~.
+The ~highs~ tests check against SciPy through ~python3~, or through the interpreter that ~PYTHON~ names.
+The ~highs~ feature builds HiGHS from source, which needs CMake and a C++ compiler.
+
+CI also installs the C library with cargo-c and compiles a C program and a C++ program against it.
+cargo-c 0.10.17 needs Rust 1.89 or newer, so CI installs it with Rust 1.89.0 and then builds rgmin with 1.88.0.
+cargo-c links against OpenSSL, the Transport Layer Security (TLS) and Secure Sockets Layer (SSL) library.
+CI therefore installs ~libssl-dev~ and ~pkg-config~ first.
+Without ~libssl-dev~, ~cargo install cargo-c~ exits 101, and the smoke script calls ~pkg-config~ itself.
+On Ubuntu, as on the CI runner:
+
+#+begin_export rst
+..
+   #skip_lint_start
+#+end_export
+#+begin_src bash
+sudo apt-get update
+sudo apt-get install -y libssl-dev pkg-config
+rustup toolchain install 1.89.0 --profile minimal
+cargo +1.89.0 install cargo-c --locked --version 0.10.17+cargo-0.92.0
+RUSTUP_TOOLCHAIN=1.88.0 tests/cinstall/smoke.sh
+#+end_src
+#+begin_export rst
+..
+   #skip_lint_end
+#+end_export
 
 ** Citations
 
-Narrative pages cite through ~sphinxcontrib-bibtex~ (~:cite:`key`~)
-against ~docs/source/references.bib~. That file is the ~rgmin-docs~
-ookcite collection (~export_collection~). Add a DOI with
-~validate_doi~ then ~add_to_collection~; never edit the .bib, never
-invent keys, never keep a markdown citation table. The rendered
-list is [[file:../reference/bibliography.org][reference/bibliography]].
+Narrative pages cite through ~sphinxcontrib-bibtex~ (~:cite:`key`~) against ~docs/source/references.bib~.
+That file is the ~rgmin-docs~ ookcite collection (~export_collection~).
+Add a digital object identifier (DOI) with ~validate_doi~ then ~add_to_collection~; never edit the .bib, never invent keys, never keep a markdown citation table.
+The rendered list is @@rst::doc:`reference/bibliography <../reference/bibliography>`@@.
 
 ** Formulae
 
@@ -32,31 +82,40 @@ Nocedal-Wright equation numbers are the contract:
 
 ** Docs
 
-Narrative docs live in ~docs/orgmode/~ (Diataxis: tutorials, howto,
-reference). Export to RST with ~emacs --script docs/export.el~ from
-~docs/~. The export needs Org 9.7 or newer from GNU ELPA: ox-rst
-calls ~org-element-type-p~, which that release added, and the Emacs
-on the docs runner ships Org 9.6. ~docs/export.el~ installs the ELPA
-release and puts it ahead of the built-in Org. Sphinx (Shibuya)
-reads ~docs/source/~; logos live in ~branding/logo/~ and are copied
-into ~docs/source/_static/~.
-The C ABI HTML is Doxygen plus doxyYoda; see
-[[file:../howto/doxygen.org][howto/doxygen]].
+Narrative pages live in ~docs/orgmode/~, sorted by Diataxis into tutorials, how-to guides, explanation and reference.
+Edit the ~.org~ page.
+Sphinx reads its reStructuredText export from ~docs/source/~.
+The docs workflow runs these steps, and you can run them from the top of the checkout:
 
-Pull requests run the Org export and the Sphinx build. The Pages
-deploy runs on a push to ~main~ whose paths touch ~docs/~ or the
-workflow, and on ~workflow_dispatch~. A pull request has its own
-concurrency group, so it does not cancel a deploy.
+#+begin_export rst
+..
+   #skip_lint_start
+#+end_export
+#+begin_src bash
+python3 -m pip install "sphinx>=8,<8.1" shibuya sphinxcontrib-bibtex myst-parser
+(cd docs && emacs --batch -l export.el)
+sphinx-build -b html -n docs/source docs/build
+#+end_src
+#+begin_export rst
+..
+   #skip_lint_end
+#+end_export
 
-* Building the docs
+Run the export inside ~docs/~.
+~export.el~ reads ~./orgmode/~ and writes ~./source/~, so run from anywhere else it writes nothing and still exits 0.
+The export needs Org 9.7 or newer: ox-rst calls ~org-element-type-p~, which that release added, and the Emacs on the docs runner comes with Org 9.6.
+~export.el~ installs a missing Org from the Emacs Lisp Package Archive (ELPA) of the GNU's Not Unix (GNU) project, and a missing ox-rst from Milkypostman's ELPA.
+Its first run therefore needs network access.
+It rewrites every page under ~docs/source/~, including pages whose committed copy has drifted from the Org source.
+Commit the export of the pages you edit, and leave the others out.
 
-Export the orgmode tree to rst with =emacs --batch -l docs/export.el=.
-That script installs Org 9.7 or newer from GNU ELPA before ox-rst.
-Then build =docs/source= with Sphinx. Pull requests run the export
-and the Sphinx build; the Pages deploy does not. The build needs =shibuya=,
-=myst-parser=, and =sphinxcontrib-bibtex=; the bibliography comes from
-=docs/source/references.bib=, which is generated from the
-=rgmin-docs= ookcite collection (=export_collection=), never edited by
-hand. New citations enter through ookcite (=validate_doi= first, then
-=add_to_collection=). Pages cite with =:cite:`key`=; Sphinx
-renders them via =sphinxcontrib-bibtex=.
+Link to another page with ~@@rst::doc:`text <path>`@@~.
+A ~file:~ link would point at the ~.rst~ file, which the built site does not have.
+
+The site uses the Shibuya theme; logos live in ~branding/logo/~ and are copied into ~docs/source/_static/~.
+The pages for the C application binary interface (ABI) are built with Doxygen plus doxyYoda; see @@rst::doc:`howto/doxygen <../howto/doxygen>`@@.
+
+No workflow runs Doxygen, so build those pages by hand with the steps in that how-to.
+Pull requests that touch ~docs/~ or the docs workflow build the narrative pages: they run the Org export and the Sphinx build.
+The Pages deploy runs on a push to ~main~ whose paths touch ~docs/~ or the workflow, and on ~workflow_dispatch~.
+A pull request has its own concurrency group, so it does not cancel a deploy.
