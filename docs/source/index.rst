@@ -73,6 +73,7 @@ It also covers the features of each route, the C library and a checkout.
    howto/highs-qp
    howto/c-abi
    howto/doxygen
+   howto/cite
 
 .. toctree::
    :maxdepth: 2
