@@ -109,6 +109,12 @@ Ask questions and report bugs on the `issue tracker <https://github.com/OmniPote
 Report a security problem privately by email to the maintainer, Rohit Goswami, at `rgoswami@ieee.org <mailto:rgoswami@ieee.org>`_, as `SECURITY.md <https://github.com/OmniPotentRPC/rgmin/blob/main/SECURITY.md>`_ describes.
 The same address takes reports under the `code of conduct <https://github.com/OmniPotentRPC/rgmin/blob/main/CODE_OF_CONDUCT.md>`_.
 
+Citation
+--------
+
+If you use rgmin in published work, cite it with ``CITATION.cff`` and add the version or commit you ran.
+:doc:`howto/cite` gives a BibTeX entry and shows where to find the version.
+
 License
 -------
 
