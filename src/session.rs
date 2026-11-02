@@ -15,8 +15,9 @@ use crate::bb::bb_direction;
 use crate::control::{Control, StopNorm};
 use crate::error::{Error, Result};
 use crate::fire::{
-    FireKind, FireMix, FirePreparation, FireState, fire_after_v1, fire_after_v1_metric,
-    fire_displacement, fire_displacement_metric, fire_prepare_v2, project_box_tangent,
+    FireKind, FireMix, FirePreparation, FirePreset, FireState, fire_after_v1, fire_after_v1_metric,
+    fire_clip_components, fire_displacement, fire_displacement_metric, fire_prepare_v2,
+    project_box_tangent,
 };
 use crate::hvp::{
     FiniteDifference, HessianVector, NewtonCgRequest, OptionalAction, newton_cg_step,
@@ -359,6 +360,33 @@ impl Solver {
     /// Norm selected by [`Self::set_stop_norm`].
     pub fn stop_norm(&self) -> StopNorm {
         self.stop_norm
+    }
+
+    /// Parameter set of a FIRE 2.0 session. The integrator restarts
+    /// from [`Control::istep`]. [`FirePreset::Default`] is what a new
+    /// session runs. Any other method returns [`Error::NeedFire2`].
+    pub fn set_fire_preset(&mut self, preset: FirePreset) -> Result<()> {
+        match &mut self.inner {
+            Inner::Fire(state) if state.kind == FireKind::V2 => {
+                state.set_preset(preset);
+                Ok(())
+            }
+            _ => Err(Error::NeedFire2),
+        }
+    }
+
+    /// ABC-FIRE on a FIRE 2.0 session, off by default. The per-atom cap,
+    /// else [`Control::maxmove`], then bounds each displacement component
+    /// in place of the norm cap. Any other method returns
+    /// [`Error::NeedFire2`].
+    pub fn set_fire_abc(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Fire(state) if state.kind == FireKind::V2 => {
+                state.abc = on;
+                Ok(())
+            }
+            _ => Err(Error::NeedFire2),
+        }
     }
 
     /// Line search stored on the session. First-order `step` uses
@@ -2101,14 +2129,25 @@ impl Solver {
                 } else {
                     fire_displacement(state, &raw)
                 };
+                let dx = match self.atom_maxmove.or(self.control.maxmove) {
+                    Some(cap) if state.abc => fire_clip_components(state, cap),
+                    _ => dx,
+                };
                 let mut trial = &*x + &dx;
-                if let Some(cap) = self.atom_maxmove {
-                    scale_step_atom(x, &mut trial, cap);
-                } else if let Some(cap) = self.control.maxmove {
-                    scale_step(x, &mut trial, cap);
+                // `(x + dx - x) / dt` rounds `v` by about `u |x| / |dx|`. The
+                // opt-in settings keep `v` unless a cap or a bound moved the trial.
+                let plain = state.preset() == FirePreset::Default && !state.abc;
+                let free = (!plain).then(|| trial.clone());
+                if !state.abc {
+                    if let Some(cap) = self.atom_maxmove {
+                        scale_step_atom(x, &mut trial, cap);
+                    } else if let Some(cap) = self.control.maxmove {
+                        scale_step(x, &mut trial, cap);
+                    }
                 }
                 trial = obj.bounds().clip(trial.view());
-                if matches!(state.kind, FireKind::V2) && state.dt > 0.0 {
+                let moved = free.is_none_or(|free| trial != free);
+                if matches!(state.kind, FireKind::V2) && state.dt > 0.0 && moved {
                     state.vel = (&trial - &forward_start) / state.dt;
                 }
                 let ev = obj.value_and_gradient(trial.view());

@@ -7,6 +7,12 @@ Unreleased
 
 ~~~~~~~~~~
 
+``Solver::set_fire_preset`` selects the FIRE 2.0 parameters of Guenole et al. 2020 Table 1 on a ``fire2`` session.
+``Solver::set_fire_abc`` turns on the accelerated bias-corrected (ABC) FIRE update of Echeverri Restrepo and Andric 2023, which ASE runs as ``FIRE2(use_abc=True)``.
+Both are opt-in, and :doc:`howto/fire` shows them.
+The C header ``include/rgmin.h`` declares ``rgmin_solver_set_fire_preset`` and ``rgmin_solver_set_fire_abc``.
+``abi_minor`` 30.
+
 ``cargo cinstall`` installs the hand-written ``include/rgmin.h`` and ``dlpack/dlpack.h``.
 The header compiles as C and as C++.
 Version macros are ``RGMIN_H_MAJOR``, ``RGMIN_H_MINOR``, and ``RGMIN_H_PATCH``.

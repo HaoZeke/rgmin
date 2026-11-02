@@ -75,5 +75,12 @@ int main() {
                      sr.grad_norm, g[0], g[1]);
         return 4;
     }
+    rgmin::Solver fire2(rgmin::Method::Fire2, stop_ctrl, 2);
+    if (stopper.set_fire_abc(true) != 1 ||
+        fire2.set_fire_preset(RGMIN_FIRE_PRESET_GUENOLE2020) != 0 ||
+        fire2.set_fire_abc(true) != 0) {
+        std::fprintf(stderr, "fire preset setup failed\n");
+        return 5;
+    }
     return 0;
 }
