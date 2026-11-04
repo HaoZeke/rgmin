@@ -129,6 +129,41 @@ fn push_energy(hist: &mut VecDeque<f64>, energy: f64) {
     }
 }
 
+/// Outcome of the one trial of [`Accept::None`].
+pub(crate) enum Trial {
+    /// Point, value and gradient of the evaluated trial.
+    Accepted(Array1<f64>, f64, Array1<f64>),
+    /// A curved kind found no trial inside the box and the cap. No oracle
+    /// call was made.
+    OffManifold,
+    /// The oracle returned a non-finite value or gradient at the trial.
+    NonFinite,
+}
+
+/// Take `dir` once, as [`Accept::None`] does, and say why a trial failed.
+pub(crate) fn single_trial<O>(
+    obj: &O,
+    pos: &Array1<f64>,
+    dir: &Array1<f64>,
+    control: &Control,
+    e_hist: &mut VecDeque<f64>,
+    atom_maxmove: Option<f64>,
+    manifold: ManifoldKind,
+) -> Trial
+where
+    O: DifferentiableObjective<f64> + ?Sized,
+{
+    let Some(trial) = trial_point(obj, pos, dir, 1.0, control, atom_maxmove, manifold) else {
+        return Trial::OffManifold;
+    };
+    let (ft, gt) = obj.value_and_gradient(trial.view());
+    if !ft.is_finite() || gt.iter().any(|g| !g.is_finite()) {
+        return Trial::NonFinite;
+    }
+    push_energy(e_hist, ft);
+    Trial::Accepted(trial, ft, gt)
+}
+
 /// Apply `dir` under `accept`. Each trial is one `value_and_gradient`.
 pub(crate) fn accept_step<O>(
     obj: &O,
@@ -181,16 +216,10 @@ where
 {
     match accept {
         Accept::None => {
-            let Some(trial) = trial_point(obj, pos, dir, 1.0, control, atom_maxmove, manifold)
-            else {
-                return (pos.clone(), value, grad.clone(), false);
-            };
-            let (ft, gt) = obj.value_and_gradient(trial.view());
-            if !ft.is_finite() || gt.iter().any(|g| !g.is_finite()) {
-                return (pos.clone(), value, grad.clone(), false);
+            match single_trial(obj, pos, dir, control, e_hist, atom_maxmove, manifold) {
+                Trial::Accepted(trial, ft, gt) => (trial, ft, gt, true),
+                Trial::OffManifold | Trial::NonFinite => (pos.clone(), value, grad.clone(), false),
             }
-            push_energy(e_hist, ft);
-            (trial, ft, gt, true)
         }
         Accept::Energy | Accept::Nonmonotone => {
             let mut ref_e = value;

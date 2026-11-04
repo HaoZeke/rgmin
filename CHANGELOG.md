@@ -160,6 +160,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Every solver's length-n algebra flows through the `vecops` seam.
   The seam carries a DLPack-device-tagged `Vector` handle.
   Construction refuses a device tag without a kernel backend and never stages it through the host.
+- Under `Accept::None`, an L-BFGS trial on a curved kind that the box refuses returns `Error::OffManifold` instead of `Error::Oracle`.
+  The message of `Error::OffManifold` now covers L-BFGS as well as `Method::Fire`.
 
 ### Added
 

@@ -9,7 +9,7 @@ use rand::rngs::StdRng;
 
 #[cfg(feature = "highs")]
 use crate::accept::accept_step_with_fallback;
-use crate::accept::{Accept, accept_step, retract_within_cap};
+use crate::accept::{Accept, Trial, accept_step, retract_within_cap, single_trial};
 use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::{Control, StopNorm};
@@ -1993,26 +1993,34 @@ impl Solver {
                     let dir = solver.search_direction(x.view(), grad.view());
                     let old = x.clone();
                     let gold = grad.clone();
-                    let (npos, nval, ngrad, moved) = accept_step(
+                    let trial = single_trial(
                         obj,
                         x,
-                        value,
-                        &gold,
                         &dir,
                         &self.control,
-                        self.accept,
                         &mut self.e_hist,
                         self.atom_maxmove,
                         self.manifold,
                     );
-                    if !moved {
-                        if let Some(saved) = before_move {
-                            solver.restore(saved);
+                    let (npos, nval, ngrad) = match trial {
+                        Trial::Accepted(npos, nval, ngrad) => (npos, nval, ngrad),
+                        Trial::OffManifold => {
+                            if let Some(saved) = before_move {
+                                solver.restore(saved);
+                            }
+                            return Err(Error::OffManifold {
+                                kind: self.manifold.as_str(),
+                            });
                         }
-                        return Err(Error::Oracle {
-                            what: "non-finite value or gradient",
-                        });
-                    }
+                        Trial::NonFinite => {
+                            if let Some(saved) = before_move {
+                                solver.restore(saved);
+                            }
+                            return Err(Error::Oracle {
+                                what: "non-finite value or gradient",
+                            });
+                        }
+                    };
                     *x = npos;
                     value = nval;
                     grad = ngrad;

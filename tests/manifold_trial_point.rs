@@ -473,3 +473,74 @@ fn newton_cg_on_the_sphere_keeps_its_endpoints_and_calls() {
         );
     }
 }
+
+/// f(x) = -x_3 where x_3 <= 0, and NaN above, inside a box that keeps
+/// every trial of the walk.
+struct Cliff {
+    bounds: Bounds<f64>,
+    energies: Mutex<usize>,
+}
+
+impl Objective<f64> for Cliff {
+    fn dim(&self) -> usize {
+        3
+    }
+    fn bounds(&self) -> &Bounds<f64> {
+        &self.bounds
+    }
+    fn eval(&self, x: ArrayView1<f64>) -> f64 {
+        *self.energies.lock().unwrap() += 1;
+        if x[2] <= 0.0 { -x[2] } else { f64::NAN }
+    }
+}
+
+impl Gradient<f64> for Cliff {
+    fn dim(&self) -> usize {
+        3
+    }
+    fn grad(&self, _x: ArrayView1<f64>) -> Array1<f64> {
+        array![0.0, 0.0, -1.0]
+    }
+}
+
+impl DifferentiableObjective<f64> for Cliff {
+    fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+        (self.eval(x), self.grad(x))
+    }
+}
+
+/// One L-BFGS trial under `Accept::None`: the walk keeps its endpoint and
+/// calls, a box refusal spends no oracle call, and a non-finite value at a
+/// trial the box keeps is an oracle error.
+#[test]
+fn lbfgs_on_the_sphere_keeps_its_endpoint_calls_and_errors() {
+    let tilt = Tilt::new(0.0);
+    let end = newton_end(Method::lbfgs(), &tilt, array![1.0, 0.0, 0.0]);
+    assert_end(&end, [0.366060826241496, 0.0, 0.930590925966610]);
+    assert_eq!(tilt.energies.into_inner().unwrap(), STEPS + 1);
+
+    let mut boxed = Tilt::new(0.0);
+    boxed.bounds = Bounds::new(Array1::from_elem(3, -1e6), array![1e6, 1e6, 0.5 * CAP], 0.0);
+    let mut solver = Solver::new(Method::lbfgs(), control(), 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    let mut x = array![1.0, 0.0, 0.0];
+    let err = solver.step(&boxed, &mut x).unwrap_err();
+    assert!(
+        matches!(err, rgmin::Error::OffManifold { kind: "sphere" }),
+        "{err:?}"
+    );
+    assert_eq!(x, array![1.0, 0.0, 0.0]);
+    assert_eq!(boxed.energies.into_inner().unwrap(), 1);
+
+    let cliff = Cliff {
+        bounds: Bounds::new(Array1::from_elem(3, -1e6), Array1::from_elem(3, 1e6), 0.0),
+        energies: Mutex::new(0),
+    };
+    let mut solver = Solver::new(Method::lbfgs(), control(), 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    let mut x = array![1.0, 0.0, 0.0];
+    let err = solver.step(&cliff, &mut x).unwrap_err();
+    assert!(matches!(err, rgmin::Error::Oracle { .. }), "{err:?}");
+    assert_eq!(x, array![1.0, 0.0, 0.0]);
+    assert_eq!(cliff.energies.into_inner().unwrap(), 2);
+}

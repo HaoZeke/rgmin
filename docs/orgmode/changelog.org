@@ -6,6 +6,8 @@
 
 ** Unreleased
 
+Under ~Accept::None~, an L-BFGS trial on a curved kind that the box refuses returns ~Error::OffManifold~ instead of ~Error::Oracle~.
+
 On a curved manifold kind, a ~fire2~ session projects its secant velocity onto the tangent space at the new point.
 
 On a curved manifold kind, Newton-CG and Newton-PCG retract their trust-region step, so every point the objective sees lies on the set.
