@@ -90,9 +90,10 @@ pub enum Error {
     /// `fire2`.
     #[error("FIRE 2.0 preset or ABC requires fire2")]
     NeedFire2,
-    /// FIRE on a curved kind found no retracted trial inside the box and
-    /// the displacement cap.
-    #[error("no FIRE trial on {kind} fits the box and the displacement cap")]
+    /// A FIRE step or an L-BFGS step under `Accept::None` on a curved
+    /// kind found no retracted trial inside the box and the displacement
+    /// cap.
+    #[error("no trial on {kind} fits the box and the displacement cap")]
     OffManifold {
         /// Manifold token.
         kind: &'static str,

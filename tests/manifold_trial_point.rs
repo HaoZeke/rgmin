@@ -287,6 +287,75 @@ fn a_sphere_dogleg_after_a_positive_dogleg_keeps_its_endpoint() {
     assert_eq!(tilt.energies.into_inner().unwrap(), STEPS + 1);
 }
 
+#[test]
+fn newton_cg_stays_on_the_sphere() {
+    let walk = walk(Method::NewtonCg, Accept::None, 1.0);
+    assert_on_sphere(&walk);
+}
+
+#[test]
+fn newton_pcg_stays_on_the_sphere() {
+    let walk = walk(Method::NewtonPcg, Accept::None, 1.0);
+    assert_on_sphere(&walk);
+}
+
+#[test]
+fn lbfgs_reports_a_trial_the_box_refuses() {
+    // The first trial climbs to x_3 = sin(atan(CAP)), above this bound.
+    let below_first_trial = 0.5 * CAP;
+    let mut objective = Tilt::new(0.0);
+    objective.bounds = Bounds::new(
+        Array1::from_elem(3, -1e6),
+        array![1e6, 1e6, below_first_trial],
+        0.0,
+    );
+    let mut solver = Solver::new(Method::lbfgs(), control(), 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    let mut x = array![1.0, 0.0, 0.0];
+    let err = solver.step(&objective, &mut x).unwrap_err();
+    assert!(
+        matches!(err, rgmin::Error::OffManifold { kind: "sphere" }),
+        "{err:?}"
+    );
+    assert_eq!(x, array![1.0, 0.0, 0.0]);
+}
+
+/// FNV-1a over the bits of every point and value, after the FNV
+/// reference of Fowler, Noll and Vo (draft-eastlake-fnv).
+fn fnv1a(hash: u64, word: f64) -> u64 {
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    word.to_bits()
+        .to_le_bytes()
+        .iter()
+        .fold(hash, |h, b| (h ^ u64::from(*b)).wrapping_mul(PRIME))
+}
+
+/// On the flat Euclidean kind the walk of each method, every point and
+/// value it returns, matches the digest recorded before the change.
+#[test]
+fn flat_walks_keep_their_digests() {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    let cases = [
+        (Method::NewtonCg, 0xf760_362d_9a91_9afa_u64),
+        (Method::NewtonPcg, 0xce41_c263_ea63_b4a1),
+        (Method::Fire { kind: FireKind::V2 }, 0x552b_a4b9_b0eb_63a9),
+        (Method::lbfgs(), 0xff05_53c8_a592_b5db),
+    ];
+    for (method, recorded) in cases {
+        let objective = Tilt::new(1.0);
+        let mut solver = Solver::new(method.clone(), control(), 3);
+        let mut x = array![1.0, 0.0, 0.0];
+        let mut hash = OFFSET_BASIS;
+        for _ in 0..STEPS {
+            let report = solver.step(&objective, &mut x).unwrap();
+            hash = x
+                .iter()
+                .fold(fnv1a(hash, report.value), |h, v| fnv1a(h, *v));
+        }
+        assert_eq!(hash, recorded, "{method:?} digest {hash:#018x}");
+    }
+}
+
 /// f(x) = -(x_1 + x_2 + x_3) on the positive orthant. Descent grows x,
 /// where the retraction x exp(v / x) moves farther than the step v.
 struct Climb {
@@ -346,4 +415,132 @@ fn an_expanding_retraction_is_shrunk_to_the_cap() {
     );
     let energies = objective.energies.into_inner().unwrap();
     assert!(energies <= STEPS + 1, "{energies} energies");
+}
+
+fn newton_end<O>(method: Method, objective: &O, start: Array1<f64>) -> Array1<f64>
+where
+    O: DifferentiableObjective<f64>,
+{
+    let mut solver = Solver::new(method, control(), 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    let mut x = start;
+    for _ in 0..STEPS {
+        solver.step(objective, &mut x).unwrap();
+    }
+    x
+}
+
+/// Newton-CG takes the product as `P H v`, and Newton-PCG applies the
+/// whole model `P H P v + (I - P) v`; both keep the walks of the model.
+#[test]
+fn newton_cg_on_the_sphere_keeps_its_endpoints_and_calls() {
+    let cases = [
+        (
+            Method::NewtonCg,
+            [0.366060826241496, 0.0, 0.930590925966610],
+            37,
+            [0.942780586410702, 0.007214251121868, 0.333335747359690],
+            33,
+        ),
+        (
+            Method::NewtonPcg,
+            [0.372687989658418, 0.036026827336441, 0.927257100310608],
+            73,
+            [0.942775413091655, 0.006550539264434, 0.333364081606288],
+            72,
+        ),
+    ];
+    for (method, tilt_end, tilt_calls, bowl_end, bowl_calls) in cases {
+        let tilt = Tilt::new(1.0);
+        let end = newton_end(method.clone(), &tilt, array![1.0, 0.0, 0.0]);
+        assert_end(&end, tilt_end);
+        assert_eq!(
+            tilt.energies.into_inner().unwrap(),
+            tilt_calls,
+            "{method:?}"
+        );
+        let bowl = Bowl {
+            bounds: Bounds::new(Array1::from_elem(3, -1e6), Array1::from_elem(3, 1e6), 0.0),
+            weights: array![1.0, 2.0, 4.0],
+            energies: Mutex::new(0),
+        };
+        let end = newton_end(method.clone(), &bowl, array![0.48, 0.6, 0.64]);
+        assert_end(&end, bowl_end);
+        assert_eq!(
+            bowl.energies.into_inner().unwrap(),
+            bowl_calls,
+            "{method:?}"
+        );
+    }
+}
+
+/// f(x) = -x_3 where x_3 <= 0, and NaN above, inside a box that keeps
+/// every trial of the walk.
+struct Cliff {
+    bounds: Bounds<f64>,
+    energies: Mutex<usize>,
+}
+
+impl Objective<f64> for Cliff {
+    fn dim(&self) -> usize {
+        3
+    }
+    fn bounds(&self) -> &Bounds<f64> {
+        &self.bounds
+    }
+    fn eval(&self, x: ArrayView1<f64>) -> f64 {
+        *self.energies.lock().unwrap() += 1;
+        if x[2] <= 0.0 { -x[2] } else { f64::NAN }
+    }
+}
+
+impl Gradient<f64> for Cliff {
+    fn dim(&self) -> usize {
+        3
+    }
+    fn grad(&self, _x: ArrayView1<f64>) -> Array1<f64> {
+        array![0.0, 0.0, -1.0]
+    }
+}
+
+impl DifferentiableObjective<f64> for Cliff {
+    fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+        (self.eval(x), self.grad(x))
+    }
+}
+
+/// One L-BFGS trial under `Accept::None`: the walk keeps its endpoint and
+/// calls, a box refusal spends no oracle call, and a non-finite value at a
+/// trial the box keeps is an oracle error.
+#[test]
+fn lbfgs_on_the_sphere_keeps_its_endpoint_calls_and_errors() {
+    let tilt = Tilt::new(0.0);
+    let end = newton_end(Method::lbfgs(), &tilt, array![1.0, 0.0, 0.0]);
+    assert_end(&end, [0.366060826241496, 0.0, 0.930590925966610]);
+    assert_eq!(tilt.energies.into_inner().unwrap(), STEPS + 1);
+
+    let mut boxed = Tilt::new(0.0);
+    boxed.bounds = Bounds::new(Array1::from_elem(3, -1e6), array![1e6, 1e6, 0.5 * CAP], 0.0);
+    let mut solver = Solver::new(Method::lbfgs(), control(), 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    let mut x = array![1.0, 0.0, 0.0];
+    let err = solver.step(&boxed, &mut x).unwrap_err();
+    assert!(
+        matches!(err, rgmin::Error::OffManifold { kind: "sphere" }),
+        "{err:?}"
+    );
+    assert_eq!(x, array![1.0, 0.0, 0.0]);
+    assert_eq!(boxed.energies.into_inner().unwrap(), 1);
+
+    let cliff = Cliff {
+        bounds: Bounds::new(Array1::from_elem(3, -1e6), Array1::from_elem(3, 1e6), 0.0),
+        energies: Mutex::new(0),
+    };
+    let mut solver = Solver::new(Method::lbfgs(), control(), 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    let mut x = array![1.0, 0.0, 0.0];
+    let err = solver.step(&cliff, &mut x).unwrap_err();
+    assert!(matches!(err, rgmin::Error::Oracle { .. }), "{err:?}");
+    assert_eq!(x, array![1.0, 0.0, 0.0]);
+    assert_eq!(cliff.energies.into_inner().unwrap(), 2);
 }

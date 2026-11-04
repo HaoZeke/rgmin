@@ -76,3 +76,8 @@ With neither cap set, ABC has no clip.
 
 The default session is unchanged by either setter until it is
 called.
+
+A ~fire2~ session can take its velocity from the secant of the step.
+On a curved kind that secant is projected onto the tangent space.
+The projection is at the new point.
+Flat kinds keep the plain secant.
