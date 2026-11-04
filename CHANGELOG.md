@@ -124,6 +124,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- A default `meson install` of rgmin as the top-level project installs `librgmin.so` into `libdir`.
+  `-Dwith_asv_helper=true` also builds and installs `librgmin_asv`, the timing helper that the asv suite loads.
 - The README opens with what rgmin does.
   It spells out each method name on first use, along with IRC and the C application binary interface (ABI) terms.
 - `Report` gains `grad: Option<Array1<f64>>`, the gradient that `grad_norm` measures.

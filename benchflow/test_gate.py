@@ -476,5 +476,55 @@ class TestSnakefile(unittest.TestCase):
                     self.assertNotIn(node, path.read_text(errors="replace"), relative)
 
 
+class TestInstalledLibrary(unittest.TestCase):
+    def test_configure_installs_a_release_build(self):
+        config = json.loads((ROOT / "asv.conf.json").read_text())
+        build = "\n".join(config["build_command"])
+        install = "\n".join(config["install_command"])
+        self.assertIn("--buildtype=release", build)
+        self.assertIn("-Dwith_asv_helper=true", build)
+        self.assertIn("meson install -C", install)
+        self.assertIn("{build_cache_dir}/meson", build)
+        self.assertFalse((ROOT / "benchflow" / "build_library.py").is_file())
+        helper = (ROOT / "benchmarks" / "minimize.py").read_text()
+        self.assertIn("ASV_ENV_DIR", helper)
+        self.assertNotIn("project/build", helper)
+        meson = (ROOT / "meson.build").read_text()
+        self.assertIn("with_asv_helper", meson)
+        self.assertIn("install:", meson)
+
+    def test_load_is_recorded_once_per_process(self):
+        import benchmarks.minimize as minimize
+
+        minimize._RECORDED = False
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            product = root / "librgmin.so"
+            helper = root / "librgmin_asv.so"
+            product.write_bytes(b"product")
+            helper.write_bytes(b"helper")
+            os.environ["ASV_ENV_DIR"] = str(root.parent)
+            os.environ["ASV_COMMIT"] = "b" * 40
+            try:
+                # The installed names live in ENV/lib. Point the env at a
+                # directory with these two files in its lib/.
+                env = root / "env"
+                lib = env / "lib"
+                lib.mkdir(parents=True)
+                (lib / "librgmin.so").write_bytes(b"product")
+                (lib / "librgmin_asv.so").write_bytes(b"helper")
+                os.environ["ASV_ENV_DIR"] = str(env)
+                minimize._record(lib / "librgmin.so", lib / "librgmin_asv.so")
+                minimize._record(lib / "librgmin.so", lib / "librgmin_asv.so")
+                lines = (env / "lib-load.log").read_text(encoding="utf-8").splitlines()
+            finally:
+                minimize._RECORDED = False
+                os.environ.pop("ASV_ENV_DIR", None)
+                os.environ.pop("ASV_COMMIT", None)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("b" * 40, lines[0])
+        self.assertIn("librgmin.so", lines[0])
+
+
 if __name__ == "__main__":
     unittest.main()

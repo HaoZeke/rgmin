@@ -44,9 +44,15 @@ The gate runs one `asv continuous --interleave-rounds` for those revisions, writ
 A row fails when its head/base median ratio is above its own factor.
 Equal revisions do not run a comparison.
 
-This tree has a C minimize entry and no Python extension module. asv's build step runs `benchflow/build_library.py`.
-That compiles the shared library with meson, feature `capi`, using gcc and g++.
-It then links `benchmarks/asv_quadratic.c` into `build/librgmin_asv.so`.
+The timed call is `rgmin_minimize` in the installed `librgmin.so`.
+Meson configures that library with `--buildtype=release` and `-Drgmin_features=capi`.
+The project default buildtype is debugoptimized, and Meson's own default is debug, so a configure that omits the flag is not this result.
+Cargo's release profile is selected when the buildtype is not debug.
+The build tree is the commit cache.
+`meson install` puts `librgmin.so` and the thin `librgmin_asv` helper into the environment `lib` directory.
+The helper is off unless `-Dwith_asv_helper=true`.
+Benchmarks load those installed files and fail if either is missing.
+`meson introspect --buildoptions` is written beside the build tree.
 Each timed call allocates its own start vector and borrows it for that call.
 `warmup_time` uses the same entry.
 Those calls are not samples.
