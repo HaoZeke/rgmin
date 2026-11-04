@@ -50,6 +50,32 @@ jobs:
       - run: cargo build --locked ${{ matrix.args }}
       - run: cargo test --locked ${{ matrix.args }}
 
+  clippy:
+    name: clippy (${{ matrix.toolchain }}, ${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [1.88.0, stable]
+        name: [default, capi, highs, all-features]
+        include:
+          - name: default
+            args: ""
+          - name: capi
+            args: --features capi
+          - name: highs
+            args: --features highs
+          - name: all-features
+            args: --all-features
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked --all-targets ${{ matrix.args }} -- -D warnings
+
   cinstall:
     name: cargo cinstall
     runs-on: ubuntu-latest
