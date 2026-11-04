@@ -9,7 +9,7 @@ use rand::rngs::StdRng;
 
 #[cfg(feature = "highs")]
 use crate::accept::accept_step_with_fallback;
-use crate::accept::{Accept, accept_step};
+use crate::accept::{Accept, accept_step, retract_within_cap};
 use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::{Control, StopNorm};
@@ -71,6 +71,16 @@ fn fire_mix(
     })
 }
 
+/// Dogleg model on a curved kind. The sphere form keeps its work vectors
+/// `H x` and `H^T x`, and other kinds keep the tangent basis `Z`.
+#[derive(Default)]
+struct TangentModel {
+    model: Array2<f64>,
+    hx: Array1<f64>,
+    htx: Array1<f64>,
+    basis: Array2<f64>,
+}
+
 /// Long-lived solver. Algorithm memory lives here; `x` stays with the caller.
 pub struct Solver {
     dim: usize,
@@ -86,6 +96,8 @@ pub struct Solver {
     e_hist: VecDeque<f64>,
     /// The acceptance test refused the last first-order step.
     refused: bool,
+    /// Dogleg model on a curved kind, rewritten in place at each step.
+    tangent: TangentModel,
     atom_maxmove: Option<f64>,
     /// Whether geometry L-BFGS needs a finite-difference stiffness probe.
     geometry_lbfgs_stiff: Option<bool>,
@@ -224,6 +236,7 @@ impl Solver {
             accept: Accept::None,
             e_hist: VecDeque::new(),
             refused: false,
+            tangent: TangentModel::default(),
             atom_maxmove: None,
             geometry_lbfgs_stiff: None,
             project_rigid: false,
@@ -456,6 +469,7 @@ impl Solver {
     pub fn set_manifold(&mut self, kind: ManifoldKind) {
         if kind != self.manifold {
             self.forget();
+            self.tangent = TangentModel::default();
         }
         self.manifold = kind;
     }
@@ -723,6 +737,164 @@ impl Solver {
             }
             other => other.project(x, v),
         }
+    }
+
+    /// Dogleg model on a curved kind, for the tangent projection `P` at `x`.
+    ///
+    /// On the sphere `P = I - x x^T` and `(I - P)^T (I - P) = (x.x) x x^T`,
+    /// so the model `P^T H P + (I - P)^T (I - P)` is
+    /// `H - x (H^T x)^T - (H x) x^T + (x^T H x + x.x) x x^T`.
+    /// That form costs O(n^2) and writes into `tangent` without building
+    /// `P` or allocating. On the unit sphere `P` is the orthogonal
+    /// projection and the second term is the identity on `span{x}`, so a
+    /// tangent gradient gives tangent Newton and Cauchy points.
+    ///
+    /// The projection of another kind can be oblique, as the Fisher
+    /// projection of the multinomial kinds is. The Newton point of the
+    /// ambient form then leaves the tangent space. Those kinds keep an
+    /// orthonormal basis `Z` of the tangent space and the model `Z^T H Z`,
+    /// which stays symmetric for the LDLT solve.
+    fn fill_tangent_model(&mut self, x: &Array1<f64>, hess: &Array2<f64>) {
+        let n = x.len();
+        if self.manifold != ManifoldKind::Sphere {
+            let z = self.tangent_basis(x);
+            self.tangent.model = z.t().dot(hess).dot(&z);
+            self.tangent.basis = z;
+            return;
+        }
+        let tm = &mut self.tangent;
+        // Another kind leaves `Z^T H Z` in `model` and no work vectors.
+        if tm.model.dim() != (n, n) || tm.hx.len() != n {
+            tm.model = Array2::zeros((n, n));
+            tm.hx = Array1::zeros(n);
+            tm.htx = Array1::zeros(n);
+        }
+        let mut scale = 0.0;
+        for i in 0..n {
+            let (mut a, mut b) = (0.0, 0.0);
+            for j in 0..n {
+                a += hess[[i, j]] * x[j];
+                b += hess[[j, i]] * x[j];
+            }
+            tm.hx[i] = a;
+            tm.htx[i] = b;
+            scale += x[i] * (a + x[i]);
+        }
+        for i in 0..n {
+            for j in 0..n {
+                tm.model[[i, j]] =
+                    hess[[i, j]] - x[i] * tm.htx[j] - tm.hx[i] * x[j] + scale * x[i] * x[j];
+            }
+        }
+    }
+
+    /// The columns `P e_j` of the tangent projection at `x`.
+    fn projection_columns(&self, x: &Array1<f64>) -> Array2<f64> {
+        let n = x.len();
+        let mut p = Array2::<f64>::zeros((n, n));
+        let mut e = Array1::<f64>::zeros(n);
+        for j in 0..n {
+            e[j] = 1.0;
+            p.column_mut(j).assign(&self.project_vec(x, &e));
+            e[j] = 0.0;
+        }
+        p
+    }
+
+    /// Orthonormal basis of the range of the tangent projection at `x`, by
+    /// Gram-Schmidt with column pivoting on its columns. A projection has
+    /// no nonzero singular value below one, so the basis stops at the first
+    /// remainder no longer than `RANK` times the longest column.
+    fn tangent_basis(&self, x: &Array1<f64>) -> Array2<f64> {
+        const RANK: f64 = 1e-8;
+        let mut cols = self.projection_columns(x);
+        let n = x.len();
+        let longest_col = (0..n)
+            .map(|j| cols.column(j).dot(&cols.column(j)).sqrt())
+            .fold(0.0, f64::max);
+        let floor = RANK * longest_col;
+        let mut left: Vec<usize> = (0..n).collect();
+        let mut basis: Vec<Array1<f64>> = Vec::with_capacity(n);
+        while !left.is_empty() {
+            let (mut pos, mut longest) = (0, -1.0);
+            for (i, &j) in left.iter().enumerate() {
+                let len = cols.column(j).dot(&cols.column(j)).sqrt();
+                if len > longest {
+                    (pos, longest) = (i, len);
+                }
+            }
+            if longest <= floor {
+                break;
+            }
+            let mut q = cols.column(left.remove(pos)).to_owned();
+            for b in &basis {
+                let c = b.dot(&q);
+                q.scaled_add(-c, b);
+            }
+            let len = l2(&q);
+            q.mapv_inplace(|v| v / len);
+            for &j in &left {
+                let mut col = cols.column_mut(j);
+                let c = q.dot(&col);
+                col.scaled_add(-c, &q);
+            }
+            basis.push(q);
+        }
+        let mut z = Array2::<f64>::zeros((n, basis.len()));
+        for (k, b) in basis.iter().enumerate() {
+            z.column_mut(k).assign(b);
+        }
+        z
+    }
+
+    /// Dogleg point at `x` within `radius`. A curved kind other than the
+    /// sphere runs the dogleg on `Z^T H Z` and `Z^T g` and maps the point
+    /// back with `Z`, so the Newton and Cauchy points are tangent and the
+    /// radius bounds `|Z u| = |u|`.
+    fn dogleg_point(
+        &mut self,
+        x: &Array1<f64>,
+        hess: &Array2<f64>,
+        grad: &Array1<f64>,
+        radius: f64,
+    ) -> Array1<f64> {
+        if self.manifold.is_flat() {
+            return dogleg_direction(hess, grad, radius);
+        }
+        self.fill_tangent_model(x, hess);
+        let tm = &self.tangent;
+        if self.manifold == ManifoldKind::Sphere {
+            return dogleg_direction(&tm.model, grad, radius);
+        }
+        let u = dogleg_direction(&tm.model, &tm.basis.t().dot(grad), radius);
+        tm.basis.dot(&u)
+    }
+
+    /// Predicted reduction of the taken step `p` on the model of
+    /// [`Self::dogleg_point`]. With `Q = Z Z^T` the basis model is
+    /// `Q H Q + (I - Q)` in ambient form, so the normal part of `p` enters
+    /// with the identity, as on the sphere.
+    fn dogleg_pred(&self, hess: &Array2<f64>, grad: &Array1<f64>, p: &Array1<f64>) -> f64 {
+        if self.manifold.is_flat() {
+            return predicted_reduction(hess, grad, p);
+        }
+        let tm = &self.tangent;
+        if self.manifold == ManifoldKind::Sphere {
+            return predicted_reduction(&tm.model, grad, p);
+        }
+        let u = tm.basis.t().dot(p);
+        let normal = p.dot(p) - u.dot(&u);
+        -grad.dot(p) - 0.5 * (u.dot(&tm.model.dot(&u)) + normal)
+    }
+
+    /// Column expansion `P^T H P + (I - P)^T (I - P)` that the sphere form
+    /// is checked against.
+    #[cfg(test)]
+    fn tangent_hessian(&self, x: &Array1<f64>, hess: &Array2<f64>) -> Array2<f64> {
+        let n = x.len();
+        let p = self.projection_columns(x);
+        let normal = Array2::<f64>::eye(n) - &p;
+        p.t().dot(hess).dot(&p) + normal.t().dot(&normal)
     }
 
     fn horizontal_grad(&self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
@@ -1632,22 +1804,51 @@ impl Solver {
         // Δ_max is the Euclidean `maxmove` when one is set, otherwise
         // eight times the current radius. The cap still limits the trial.
         let rmax = self.control.maxmove.unwrap_or(radius * 8.0).max(radius);
-        let mut dir = dogleg_direction(hess, &grad, radius);
+        // A curved kind steps in the tangent space. The dogleg point is
+        // tangent, the trial is the retracted tangent step, and the ratio
+        // compares the energy there with the tangent model.
+        let curved = !self.manifold.is_flat();
+        let mut dir = self.dogleg_point(x, hess, &grad, radius);
         if self.project_rigid {
             project_out_rot_trans(&mut dir, x.view());
         }
-        let trust_norm = l2(&dir);
-        let mut trial = &*x + &dir;
-        if let Some(cap) = self.atom_maxmove {
-            scale_step_atom(x, &mut trial, cap);
-        } else if let Some(cap) = self.control.maxmove {
-            scale_step(x, &mut trial, cap);
+        if curved {
+            self.manifold.project_in_place(x, &mut dir);
         }
-        trial = obj.bounds().clip(trial.view());
-        let p = &trial - &*x;
+        let trust_norm = l2(&dir);
+        let (trial, p) = if curved {
+            let fitted = retract_within_cap(
+                obj,
+                x,
+                &dir,
+                self.atom_maxmove,
+                self.control.maxmove,
+                self.manifold,
+            );
+            let Some(pair) = fitted else {
+                // Refused before any oracle: a failed trust step.
+                if let Inner::Dogleg { radius } = &mut self.inner {
+                    *radius = update_radius(*radius, -1.0, trust_norm, rmax);
+                }
+                self.remember(x, value, &grad);
+                self.steps += 1;
+                return self.report_or_escape(obj, x, value, grad);
+            };
+            pair
+        } else {
+            let mut trial = &*x + &dir;
+            if let Some(cap) = self.atom_maxmove {
+                scale_step_atom(x, &mut trial, cap);
+            } else if let Some(cap) = self.control.maxmove {
+                scale_step(x, &mut trial, cap);
+            }
+            trial = obj.bounds().clip(trial.view());
+            let p = &trial - &*x;
+            (trial, p)
+        };
         let taken = l2(&p);
         let (ft, gt) = obj.value_and_gradient(trial.view());
-        let pred = predicted_reduction(hess, &grad, &p);
+        let pred = self.dogleg_pred(hess, &grad, &p);
         let rho = reduction_ratio(value - ft, pred);
         // No displacement cap: the boundary length is the step after the
         // box clip, as before. With a cap, the dogleg length is the one
@@ -2101,10 +2302,26 @@ impl Solver {
                 let mut raw = grad.mapv(|g| -g);
                 project_box_tangent(obj.bounds(), x, &mut raw);
                 project_box_tangent(obj.bounds(), x, &mut state.vel);
+                let manifold = self.manifold;
+                let curved = !manifold.is_flat();
                 match fire_prepare_v2(state, &raw) {
                     FirePreparation::Ready => {}
                     FirePreparation::Rollback(correction) => {
-                        *x = obj.bounds().clip((&*x + &correction).view());
+                        if curved {
+                            let back = manifold.project(x, &correction);
+                            let Some((point, _)) =
+                                retract_within_cap(obj, x, &back, None, None, manifold)
+                            else {
+                                *state = saved;
+                                *x = start;
+                                return Err(Error::OffManifold {
+                                    kind: manifold.as_str(),
+                                });
+                            };
+                            *x = point;
+                        } else {
+                            *x = obj.bounds().clip((&*x + &correction).view());
+                        }
                         let ev = obj.value_and_gradient(x.view());
                         if !finite(ev.0, ev.1.view()) {
                             *state = saved;
@@ -2133,19 +2350,37 @@ impl Solver {
                     Some(cap) if state.abc => fire_clip_components(state, cap),
                     _ => dx,
                 };
-                let mut trial = &*x + &dx;
                 // `(x + dx - x) / dt` rounds `v` by about `u |x| / |dx|`. The
-                // opt-in settings keep `v` unless a cap or a bound moved the trial.
+                // opt-in settings keep `v` unless a cap, a bound or the
+                // retraction moved the trial.
                 let plain = state.preset() == FirePreset::Default && !state.abc;
-                let free = (!plain).then(|| trial.clone());
-                if !state.abc {
-                    if let Some(cap) = self.atom_maxmove {
+                let free = (!plain).then(|| &*x + &dx);
+                let (atom_cap, cap) = if state.abc {
+                    (None, None)
+                } else {
+                    (self.atom_maxmove, self.control.maxmove)
+                };
+                let trial = if curved {
+                    let tangent = manifold.project(x, &dx);
+                    let Some((trial, _)) =
+                        retract_within_cap(obj, x, &tangent, atom_cap, cap, manifold)
+                    else {
+                        *state = saved;
+                        *x = start;
+                        return Err(Error::OffManifold {
+                            kind: manifold.as_str(),
+                        });
+                    };
+                    trial
+                } else {
+                    let mut trial = &*x + &dx;
+                    if let Some(cap) = atom_cap {
                         scale_step_atom(x, &mut trial, cap);
-                    } else if let Some(cap) = self.control.maxmove {
+                    } else if let Some(cap) = cap {
                         scale_step(x, &mut trial, cap);
                     }
-                }
-                trial = obj.bounds().clip(trial.view());
+                    obj.bounds().clip(trial.view())
+                };
                 let moved = free.is_none_or(|free| trial != free);
                 if matches!(state.kind, FireKind::V2) && state.dt > 0.0 && moved {
                     state.vel = (&trial - &forward_start) / state.dt;
@@ -2215,13 +2450,19 @@ impl Solver {
         }
         self.refused = refused;
 
-        let delta = &*x - &start;
-        let y = self.manifold.retract(&start, &delta);
-        if y.iter().zip(x.iter()).any(|(a, b)| (*a - *b).abs() > 1e-15) {
-            *x = y;
-            let ev = obj.value_and_gradient(x.view());
-            value = ev.0;
-            grad = ev.1;
+        // On a curved kind every arm but the L-BFGS line search evaluated
+        // a retracted trial, so the energy in hand is the energy on the set.
+        let line_search = matches!(self.inner, Inner::Lbfgs(_)) && self.accept != Accept::None;
+        let retracted = !(self.manifold.is_flat() || line_search);
+        if !retracted {
+            let delta = &*x - &start;
+            let y = self.manifold.retract(&start, &delta);
+            if y.iter().zip(x.iter()).any(|(a, b)| (*a - *b).abs() > 1e-15) {
+                *x = y;
+                let ev = obj.value_and_gradient(x.view());
+                value = ev.0;
+                grad = ev.1;
+            }
         }
         grad = self.horizontal_grad(x, &grad);
 
@@ -2401,5 +2642,113 @@ impl Solver {
             solver.gtol = gtol;
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ndarray::array;
+
+    use super::*;
+
+    #[test]
+    fn the_sphere_dogleg_model_matches_the_projected_basis() {
+        let mut solver = Solver::new(Method::Dogleg, Control::default(), 3);
+        solver.set_manifold(ManifoldKind::Sphere);
+        let x = array![0.3, -1.2, 0.7];
+        let hess = array![[2.0, 0.5, -1.0], [0.25, 3.0, 0.4], [-0.6, 1.5, 1.0]];
+        solver.fill_tangent_model(&x, &hess);
+        let basis = solver.tangent_hessian(&x, &hess);
+        let gap = (&solver.tangent.model - &basis)
+            .mapv(f64::abs)
+            .fold(0.0, |a: f64, &b| a.max(b));
+        assert!(
+            gap <= 1e-14,
+            "rank-one model is {gap:e} from the basis expansion"
+        );
+    }
+
+    /// The dogleg point of an oblique kind at radii that reach the Newton
+    /// point, the dogleg segment and the clipped Cauchy point: its tangent
+    /// residual `|s - P s|` and the length of `P s`, the step the session
+    /// retracts. At the first radius the point is the Newton point, and its
+    /// model gradient `H s + g` must be orthogonal to every column of `P`.
+    fn check_dogleg_point(
+        kind: ManifoldKind,
+        x: &Array1<f64>,
+        hess: &Array2<f64>,
+        grad: &Array1<f64>,
+        radii: [f64; 3],
+    ) {
+        let mut solver = Solver::new(Method::Dogleg, Control::default(), x.len());
+        solver.set_manifold(kind);
+        for radius in radii {
+            let s = solver.dogleg_point(x, hess, grad, radius);
+            let residual = l2(&(&s - &kind.project(x, &s)));
+            assert!(
+                residual <= 1e-12,
+                "{} at radius {radius}: tangent residual {residual:e}",
+                kind.as_str()
+            );
+            let mut step = s;
+            kind.project_in_place(x, &mut step);
+            let len = l2(&step);
+            // A point on the trust sphere meets the radius to rounding.
+            assert!(
+                len <= radius * (1.0 + 4.0 * f64::EPSILON),
+                "{} at radius {radius}: projected step {len:e}",
+                kind.as_str()
+            );
+        }
+        let s = solver.dogleg_point(x, hess, grad, radii[0]);
+        let slope = hess.dot(&s) + grad;
+        let worst = solver
+            .projection_columns(x)
+            .columns()
+            .into_iter()
+            .map(|c| c.dot(&slope).abs())
+            .fold(0.0, f64::max);
+        assert!(
+            worst <= 1e-12,
+            "{}: the Newton point is {worst:e} from stationary on the tangent space",
+            kind.as_str()
+        );
+    }
+
+    #[test]
+    fn multinomial_dogleg_point_is_tangent_within_the_radius() {
+        let kind = ManifoldKind::Multinomial;
+        let x = array![0.2, 0.3, 0.5];
+        let hess = array![[2.0, 0.2, 0.1], [0.2, 3.0, 0.0], [0.1, 0.0, 4.0]];
+        let grad = kind.project(&x, &array![1.0, -2.0, 0.5]);
+        check_dogleg_point(kind, &x, &hess, &grad, [10.0, 0.86, 0.3]);
+    }
+
+    /// A symmetric positive definite 9 by 9 Hessian with a coupled band.
+    fn banded_hessian() -> Array2<f64> {
+        Array2::from_shape_fn((9, 9), |(i, j)| match i.abs_diff(j) {
+            0 => 1.0 + 0.5 * i as f64,
+            1 => 0.2,
+            2 => -0.1,
+            _ => 0.0,
+        })
+    }
+
+    #[test]
+    fn multinomial_ds_dogleg_point_is_tangent_within_the_radius() {
+        let kind = ManifoldKind::multinomial_ds(3);
+        let x = array![0.5, 0.3, 0.2, 0.2, 0.5, 0.3, 0.3, 0.2, 0.5];
+        let v = array![1.0, -2.0, 0.5, 0.3, -0.7, 1.2, -0.4, 0.8, -1.1];
+        let grad = kind.project(&x, &v);
+        check_dogleg_point(kind, &x, &banded_hessian(), &grad, [10.0, 0.85, 0.3]);
+    }
+
+    #[test]
+    fn multinomial_sym_dogleg_point_is_tangent_within_the_radius() {
+        let kind = ManifoldKind::multinomial_sym(3);
+        let x = array![0.5, 0.3, 0.2, 0.3, 0.4, 0.3, 0.2, 0.3, 0.5];
+        let v = array![1.0, -2.0, 0.5, 0.3, -0.7, 1.2, -0.4, 0.8, -1.1];
+        let grad = kind.project(&x, &v);
+        check_dogleg_point(kind, &x, &banded_hessian(), &grad, [10.0, 0.8, 0.3]);
     }
 }

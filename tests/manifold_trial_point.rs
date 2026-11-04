@@ -184,6 +184,109 @@ fn dogleg_stays_on_the_sphere() {
     assert_on_sphere(&walk);
 }
 
+/// f(x) = -x_3 + sum_i d_i x_i^2 / 2 with distinct d_i, so the tangent
+/// model differs from the Hessian at every point of the walk.
+struct Bowl {
+    bounds: Bounds<f64>,
+    weights: Array1<f64>,
+    energies: Mutex<usize>,
+}
+
+impl Objective<f64> for Bowl {
+    fn dim(&self) -> usize {
+        3
+    }
+    fn bounds(&self) -> &Bounds<f64> {
+        &self.bounds
+    }
+    fn eval(&self, x: ArrayView1<f64>) -> f64 {
+        *self.energies.lock().unwrap() += 1;
+        -x[2] + 0.5 * (&self.weights * &x).dot(&x)
+    }
+}
+
+impl Gradient<f64> for Bowl {
+    fn dim(&self) -> usize {
+        3
+    }
+    fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+        array![0.0, 0.0, -1.0] + &self.weights * &x
+    }
+}
+
+impl DifferentiableObjective<f64> for Bowl {
+    fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+        (self.eval(x), self.grad(x))
+    }
+}
+
+impl HessianObjective for Bowl {
+    fn hessian(&self, _x: ArrayView1<f64>) -> Array2<f64> {
+        Array2::from_diag(&self.weights)
+    }
+}
+
+fn dogleg_end<O: HessianObjective>(objective: &O, start: Array1<f64>) -> Array1<f64> {
+    let mut solver = Solver::new(Method::Dogleg, control(), 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    solver.set_accept(Accept::None);
+    let mut x = start;
+    for _ in 0..STEPS {
+        solver.step_hess(objective, &mut x).unwrap();
+    }
+    x
+}
+
+fn assert_end(got: &Array1<f64>, want: [f64; 3]) {
+    for (g, w) in got.iter().zip(want) {
+        assert!((g - w).abs() <= 1e-12, "endpoint {got}, want {want:?}");
+    }
+}
+
+#[test]
+fn dogleg_on_the_sphere_keeps_its_endpoint_and_calls() {
+    let tilt = Tilt::new(1.0);
+    let end = dogleg_end(&tilt, array![1.0, 0.0, 0.0]);
+    assert_end(&end, [0.366060826241496, 0.0, 0.930590925966610]);
+    assert_eq!(tilt.energies.into_inner().unwrap(), STEPS + 1);
+    let bowl = Bowl {
+        bounds: Bounds::new(Array1::from_elem(3, -1e6), Array1::from_elem(3, 1e6), 0.0),
+        weights: array![1.0, 2.0, 4.0],
+        energies: Mutex::new(0),
+    };
+    let end = dogleg_end(&bowl, array![0.48, 0.6, 0.64]);
+    assert_end(
+        &end,
+        [0.942775681942755, 0.005214117204762, 0.333386902140963],
+    );
+    assert_eq!(bowl.energies.into_inner().unwrap(), STEPS + 1);
+}
+
+#[test]
+fn a_sphere_dogleg_after_a_positive_dogleg_keeps_its_endpoint() {
+    let bowl = Bowl {
+        bounds: Bounds::new(Array1::from_elem(3, 1e-6), Array1::from_elem(3, 1e6), 0.0),
+        weights: array![1.0, 2.0, 4.0],
+        energies: Mutex::new(0),
+    };
+    let mut solver = Solver::new(Method::Dogleg, control(), 3);
+    solver.set_manifold(ManifoldKind::positive(3));
+    solver.set_accept(Accept::None);
+    let mut x = array![0.48, 0.6, 0.64];
+    for _ in 0..STEPS {
+        solver.step_hess(&bowl, &mut x).unwrap();
+    }
+    assert!(x.iter().all(|v| *v > 0.0), "left the orthant: {x}");
+    solver.set_manifold(ManifoldKind::Sphere);
+    let tilt = Tilt::new(1.0);
+    let mut x = array![1.0, 0.0, 0.0];
+    for _ in 0..STEPS {
+        solver.step_hess(&tilt, &mut x).unwrap();
+    }
+    assert_end(&x, [0.366060826241496, 0.0, 0.930590925966610]);
+    assert_eq!(tilt.energies.into_inner().unwrap(), STEPS + 1);
+}
+
 /// f(x) = -(x_1 + x_2 + x_3) on the positive orthant. Descent grows x,
 /// where the retraction x exp(v / x) moves farther than the step v.
 struct Climb {

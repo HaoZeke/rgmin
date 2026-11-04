@@ -6,6 +6,12 @@
 
 ** Unreleased
 
+On a curved manifold kind, a ~Solver~ step caps the tangent step and then retracts it, so every point it evaluates lies on the set.
+On the unit sphere with a 0.1 cap, steepest descent, FIRE, FIRE 2.0 and dogleg evaluated points up to 1.1e-1 off it before.
+Dogleg steps in the tangent space, and steepest descent and FIRE take one oracle call per step instead of two.
+A trial that the box clip would move is refused before the oracle sees it, and a FIRE step with no trial left returns ~Error::OffManifold~.
+Flat kinds keep the old order and the old numbers.
+
 ~Solver::set_fire_preset~ selects the FIRE 2.0 parameters of Guenole et al. 2020 Table 1 on a ~fire2~ session.
 ~Solver::set_fire_abc~ turns on the accelerated bias-corrected (ABC) FIRE update of Echeverri Restrepo and Andric 2023, which ASE runs as ~FIRE2(use_abc=True)~.
 Both are opt-in, and @@rst::doc:`howto/fire`@@ shows them.
