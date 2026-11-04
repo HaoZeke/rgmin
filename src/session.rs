@@ -9,7 +9,7 @@ use rand::rngs::StdRng;
 
 #[cfg(feature = "highs")]
 use crate::accept::accept_step_with_fallback;
-use crate::accept::{Accept, Trial, accept_step, retract_within_cap, single_trial};
+use crate::accept::{Accept, Acceptance, Trial, accept_step, retract_within_cap, single_trial};
 use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::{Control, StopNorm};
@@ -696,7 +696,7 @@ impl Solver {
             lo: self.box_lo.clone(),
             hi: self.box_hi.clone(),
             equalities: self.equalities.clone(),
-            center_axes: if self.project_rigid && self.dim % 3 == 0 {
+            center_axes: if self.project_rigid && self.dim.is_multiple_of(3) {
                 Some((self.dim / 3, 3))
             } else {
                 None
@@ -969,7 +969,7 @@ impl Solver {
             for k in 0..x.len() {
                 let lo = side_at(self.box_lo.as_deref(), k).unwrap_or(f64::NEG_INFINITY);
                 let hi = side_at(self.box_hi.as_deref(), k).unwrap_or(f64::INFINITY);
-                if !x[k].is_finite() || !grad[k].is_finite() || !(lo <= x[k] && x[k] <= hi) {
+                if !(x[k].is_finite() && grad[k].is_finite() && lo <= x[k] && x[k] <= hi) {
                     return f64::INFINITY;
                 }
                 // x - clip(x-g, lo, hi) = clip(g, x-hi, x-lo).
@@ -1264,10 +1264,10 @@ impl Solver {
     /// `P^{-1} force` when an exponential preconditioner is installed.
     /// Otherwise `h0 * force`, the scalar geometry seed.
     fn geometry_seed_force(&self, force: &Array1<f64>, h0: f64) -> Array1<f64> {
-        if let Inner::Lbfgs(solver) = &self.inner {
-            if let Some(pre) = solver.exp_apply(force.view()) {
-                return pre;
-            }
+        if let Inner::Lbfgs(solver) = &self.inner
+            && let Some(pre) = solver.exp_apply(force.view())
+        {
+            return pre;
         }
         h0 * force
     }
@@ -1275,10 +1275,10 @@ impl Solver {
     /// `scale * P^{-1} force` when an exponential preconditioner is installed.
     /// Otherwise `scale * force`.
     fn geometry_scaled_force(&self, force: &Array1<f64>, scale: f64) -> Array1<f64> {
-        if let Inner::Lbfgs(solver) = &self.inner {
-            if let Some(pre) = solver.exp_apply(force.view()) {
-                return scale * &pre;
-            }
+        if let Inner::Lbfgs(solver) = &self.inner
+            && let Some(pre) = solver.exp_apply(force.view())
+        {
+            return scale * &pre;
         }
         scale * force
     }
@@ -1666,7 +1666,7 @@ impl Solver {
         }
         #[cfg(feature = "highs")]
         if self.highs {
-            let center = if self.project_rigid && self.dim % 3 == 0 {
+            let center = if self.project_rigid && self.dim.is_multiple_of(3) {
                 Some((self.dim / 3, 3))
             } else {
                 None
@@ -1704,11 +1704,13 @@ impl Solver {
                 value,
                 &gold,
                 &dir,
-                &self.control,
-                self.accept,
-                &mut self.e_hist,
-                None,
-                self.manifold,
+                Acceptance {
+                    control: &self.control,
+                    accept: self.accept,
+                    e_hist: &mut self.e_hist,
+                    atom_maxmove: None,
+                    manifold: self.manifold,
+                },
                 false,
             );
             if moved {
@@ -1752,11 +1754,13 @@ impl Solver {
             value,
             &gold,
             &dir,
-            &self.control,
-            self.accept,
-            &mut self.e_hist,
-            self.atom_maxmove,
-            self.manifold,
+            Acceptance {
+                control: &self.control,
+                accept: self.accept,
+                e_hist: &mut self.e_hist,
+                atom_maxmove: self.atom_maxmove,
+                manifold: self.manifold,
+            },
         );
         if moved {
             *x = npos;
@@ -1913,13 +1917,11 @@ impl Solver {
             && matches!(self.inner, Inner::Lbfgs(_))
             && self.accept != Accept::None
         {
-            if !cached {
-                if let Some(previous) = &self.last_pos {
-                    let (s, y) = self.lbfgs_sy(previous, x, &self.last_grad, &grad);
-                    if let Inner::Lbfgs(solver) = &mut self.inner {
-                        solver.transport(|v| crate::manifold::Sphere.transport(previous, x, v));
-                        solver.push_pair(s, y, Some(l2(&grad)));
-                    }
+            if !cached && let Some(previous) = &self.last_pos {
+                let (s, y) = self.lbfgs_sy(previous, x, &self.last_grad, &grad);
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.transport(|v| crate::manifold::Sphere.transport(previous, x, v));
+                    solver.push_pair(s, y, Some(l2(&grad)));
                 }
             }
             if let Inner::Lbfgs(solver) = &mut self.inner {
@@ -1951,15 +1953,13 @@ impl Solver {
         // A refused Accept::None trial takes the pair back: `last_pos`
         // still names the old point, so a retry records the move again.
         let mut before_move = None;
-        if !cached {
-            if let Some(previous) = &self.last_pos {
-                let (s, y) = self.lbfgs_sy(previous, x, &self.last_grad, &grad);
-                if let Inner::Lbfgs(solver) = &mut self.inner {
-                    if self.accept == Accept::None {
-                        before_move = Some(solver.curvature());
-                    }
-                    solver.push_pair(s, y, Some(l2(&grad)));
+        if !cached && let Some(previous) = &self.last_pos {
+            let (s, y) = self.lbfgs_sy(previous, x, &self.last_grad, &grad);
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                if self.accept == Accept::None {
+                    before_move = Some(solver.curvature());
                 }
+                solver.push_pair(s, y, Some(l2(&grad)));
             }
         }
 
@@ -2045,11 +2045,13 @@ impl Solver {
                     value,
                     &grad,
                     &dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2089,11 +2091,13 @@ impl Solver {
                     value,
                     &grad,
                     &step_dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2167,11 +2171,13 @@ impl Solver {
                     value,
                     &gold,
                     &direction,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2208,11 +2214,13 @@ impl Solver {
                     value,
                     &gold,
                     &direction,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2238,7 +2246,7 @@ impl Solver {
             Inner::Sr2 { b, fresh } => {
                 let seed = *fresh && self.accept != Accept::None;
                 let rhs = grad.mapv(|g| -g);
-                let mut direction = solve_dense(b, &rhs).unwrap_or_else(|| rhs);
+                let mut direction = solve_dense(b, &rhs).unwrap_or(rhs);
                 if seed {
                     direction *= self.istep;
                 }
@@ -2250,11 +2258,13 @@ impl Solver {
                     value,
                     &gold,
                     &direction,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2284,7 +2294,7 @@ impl Solver {
                 beta2,
                 eps,
             } => {
-                let dir = adam_direction(m, v, &grad, *beta1, *beta2, *b1p, *b2p, *eps);
+                let dir = adam_direction(m, v, &grad, *beta1, *beta2, (*b1p, *b2p), *eps);
                 let dir = dir.mapv(|d| d * self.istep);
                 let (npos, nval, ngrad, _) = accept_step(
                     obj,
@@ -2292,11 +2302,13 @@ impl Solver {
                     value,
                     &grad,
                     &dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2431,11 +2443,13 @@ impl Solver {
                     value,
                     &gold,
                     &dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2566,9 +2580,7 @@ impl Solver {
                 &mut state.swarm,
                 &mut state.gbest_position,
                 &mut state.gbest_value,
-                *inertia,
-                *c1,
-                *c2,
+                (*inertia, *c1, *c2),
                 &mut state.rng,
             );
             *x = state.gbest_position.clone();

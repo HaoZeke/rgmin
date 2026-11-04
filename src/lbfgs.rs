@@ -181,10 +181,10 @@ impl Lbfgs {
 
     pub(crate) fn search_direction(&self, x: ArrayView1<f64>, g: ArrayView1<f64>) -> Array1<f64> {
         #[cfg(feature = "highs")]
-        if self.highs.is_some() {
-            if let Ok(d) = self.highs_step(x, g) {
-                return d;
-            }
+        if self.highs.is_some()
+            && let Ok(d) = self.highs_step(x, g)
+        {
+            return d;
         }
         let _ = x;
         self.direction(g)
@@ -362,12 +362,12 @@ impl Lbfgs {
         let sn = s.iter().map(|v| v * v).sum::<f64>().sqrt();
         let yn = y.iter().map(|v| v * v).sum::<f64>().sqrt();
         let ss = sn * sn;
-        if self.cautious_eps > 0.0 {
-            if let Some(g) = gnorm {
-                let thresh = self.cautious_eps * ss * g.max(1.0e-30).powf(self.cautious_alpha);
-                if sy < thresh {
-                    return;
-                }
+        if self.cautious_eps > 0.0
+            && let Some(g) = gnorm
+        {
+            let thresh = self.cautious_eps * ss * g.max(1.0e-30).powf(self.cautious_alpha);
+            if sy < thresh {
+                return;
             }
         }
         // Relative curvature: a tiny accepted trust step makes the
@@ -474,7 +474,7 @@ impl Lbfgs {
                 break;
             }
             if slope_a.abs() <= -self.curvature * slope {
-                self.accept(x, f, g, d, a, fa, ga);
+                self.accept(x, f, g, d, a, (fa, ga));
                 return (true, evals);
             }
             if slope_a >= 0.0 {
@@ -542,7 +542,7 @@ impl Lbfgs {
                 slope_hi = slope_t;
             } else {
                 if slope_t.abs() <= -self.curvature * slope {
-                    self.accept(x, f, g, d, trial, ft, gt);
+                    self.accept(x, f, g, d, trial, (ft, gt));
                     return (true, evals);
                 }
                 if slope_t * (hi - lo) >= 0.0 {
@@ -568,9 +568,9 @@ impl Lbfgs {
         g: &mut Array1<f64>,
         d: &Array1<f64>,
         step: f64,
-        f_new: f64,
-        g_new: Array1<f64>,
+        new: (f64, Array1<f64>),
     ) {
+        let (f_new, g_new) = new;
         let mut s = d.clone();
         s *= step;
         let mut y = g_new.clone();
@@ -774,6 +774,10 @@ impl Lbfgs {
     }
 
     /// One outer L-BFGS iteration: two-loop direction, line search, pair.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "public signature; grouping the arguments would break callers"
+    )]
     pub fn step_objective<O>(
         &mut self,
         obj: &O,

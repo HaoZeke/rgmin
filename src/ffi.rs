@@ -21,9 +21,9 @@ use ndarray::{Array1, Array2, ArrayView1};
 use crate::precon::{ExpParams, ExpState, Neighbours};
 use crate::{
     Accept, ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind,
-    Error, HessianOracle, HvpOracle, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep,
-    Restart, ScgParams, Solver, StopNorm, lowest_mode, minimize_method, minimize_method_hess,
-    minimize_method_hvp, minimize_scg, minimize_scg_exact,
+    Error, HessianObjective, HessianOracle, HessianVector, HvpOracle, LineSearch, ManifoldKind,
+    Method, NewtonKind, Oracle, QnStep, Restart, ScgParams, Solver, StopNorm, lowest_mode,
+    minimize_method, minimize_method_hess, minimize_method_hvp, minimize_scg, minimize_scg_exact,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
@@ -340,6 +340,9 @@ pub extern "C" fn rgmin_abi_stamp() -> rgmin_abi_stamp_t {
 }
 
 /// Return nonzero when a caller's ABI identity is accepted by this build.
+///
+/// # Safety
+/// `stamp` is null or points to a readable [`rgmin_abi_stamp_t`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_abi_compatible(stamp: *const rgmin_abi_stamp_t) -> i32 {
     if stamp.is_null() {
@@ -1409,6 +1412,9 @@ pub struct rgmin_solver_t {
 }
 
 /// Allocate a session. `dim` is the length of `x`. Null on bad arguments.
+///
+/// # Safety
+/// `ctrl` is null or points to a readable [`rgmin_control_t`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_create(
     method: rgmin_method_t,
@@ -1445,6 +1451,10 @@ pub unsafe extern "C" fn rgmin_solver_create(
 }
 
 /// Release a session from [`rgmin_solver_create`].
+///
+/// # Safety
+/// `solver` is null or a session from [`rgmin_solver_create`] that is not
+/// yet freed. The handle is dangling after this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_free(solver: *mut rgmin_solver_t) {
     if !solver.is_null() {
@@ -1453,6 +1463,9 @@ pub unsafe extern "C" fn rgmin_solver_free(solver: *mut rgmin_solver_t) {
 }
 
 /// Drop method memory. The next step is a cold start from the current `x`.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_forget(solver: *mut rgmin_solver_t) {
     if solver.is_null() {
@@ -1465,6 +1478,9 @@ pub unsafe extern "C" fn rgmin_solver_forget(solver: *mut rgmin_solver_t) {
 /// objective afresh at the current `x` (initial step scale, empty
 /// acceptance window) and the retained curvature preconditions it. The
 /// restart for a sequence of related objectives.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_rebase(solver: *mut rgmin_solver_t) {
     if solver.is_null() {
@@ -1474,6 +1490,9 @@ pub unsafe extern "C" fn rgmin_solver_rebase(solver: *mut rgmin_solver_t) {
 }
 
 /// Set the Euclidean step cap used by the next [`rgmin_solver_step`].
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_maxmove(solver: *mut rgmin_solver_t, maxmove: f64) {
     if solver.is_null() {
@@ -1495,6 +1514,9 @@ pub enum rgmin_qn_step_t {
 }
 
 /// eOn `lbfgs_step`. Legal on an `RGMIN_LBFGS` session with [`rgmin_solver_step_hess`].
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_qn_step(
     solver: *mut rgmin_solver_t,
@@ -1709,6 +1731,9 @@ pub enum rgmin_accept_t {
 }
 
 /// eOn `lbfgs_accept`. Legal on any session.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_accept(
     solver: *mut rgmin_solver_t,
@@ -1740,6 +1765,9 @@ pub enum rgmin_stop_norm_t {
 
 /// Select the session stop norm. ABI minor 29. Returns 0, or 1 on a
 /// null session or an unknown integer.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_stop_norm(solver: *mut rgmin_solver_t, norm: i32) -> i32 {
     if solver.is_null() {
@@ -1830,6 +1858,9 @@ pub unsafe extern "C" fn rgmin_solver_set_fire_abc(solver: *mut rgmin_solver_t, 
 /// An installed exponential preconditioner replaces that scalar seed,
 /// including the steepest fallbacks. Newton and dogleg scale a saddle
 /// kick to this length. Non-positive clears it.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_atom_maxmove(solver: *mut rgmin_solver_t, maxmove: f64) {
     if solver.is_null() {
@@ -1839,6 +1870,9 @@ pub unsafe extern "C" fn rgmin_solver_set_atom_maxmove(solver: *mut rgmin_solver
 }
 
 /// eOn `lbfgs_project_rigid`.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_project_rigid(solver: *mut rgmin_solver_t, enabled: i32) {
     if solver.is_null() {
@@ -1848,6 +1882,9 @@ pub unsafe extern "C" fn rgmin_solver_set_project_rigid(solver: *mut rgmin_solve
 }
 
 /// Al-Baali extra-updates on the newest L-BFGS pair.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_extra_updates(solver: *mut rgmin_solver_t, extra: usize) {
     if solver.is_null() {
@@ -1857,6 +1894,9 @@ pub unsafe extern "C" fn rgmin_solver_set_extra_updates(solver: *mut rgmin_solve
 }
 
 /// Li-Fukushima cautious pair filter. `eps <= 0` disables it.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_cautious(
     solver: *mut rgmin_solver_t,
@@ -1870,6 +1910,9 @@ pub unsafe extern "C" fn rgmin_solver_set_cautious(
 }
 
 /// HiGHS feasible-set step. Returns 1 when this build has no `highs` feature.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_highs(solver: *mut rgmin_solver_t, enabled: i32) -> i32 {
     if solver.is_null() {
@@ -1892,6 +1935,10 @@ pub unsafe extern "C" fn rgmin_solver_set_highs(solver: *mut rgmin_solver_t, ena
 /// Per-coordinate box on `x + p`. A NULL side is unbounded.
 /// `n` is the length of each non-NULL side and must match the session
 /// dimension. Returns 0, or 1 if this build has no `highs` feature.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// `lower` and `upper` are each null or point to `n` readable f64s.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_box(
     solver: *mut rgmin_solver_t,
@@ -1937,6 +1984,9 @@ pub unsafe extern "C" fn rgmin_solver_set_box(
 
 /// L_inf trust radius on the HiGHS step. Non-positive clears it.
 /// Returns 0, or 1 if this build has no `highs` feature.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_trust(solver: *mut rgmin_solver_t, radius: f64) -> i32 {
     if solver.is_null() {
@@ -1958,6 +2008,10 @@ pub unsafe extern "C" fn rgmin_solver_set_trust(solver: *mut rgmin_solver_t, rad
 
 /// Append one sparse equality `a · p = rhs`. `idx` / `coef` have length `nnz`.
 /// Returns 0, or 1 if this build has no `highs` feature.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// `idx` and `coef` are each null or point to `nnz` readable values.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_add_equality(
     solver: *mut rgmin_solver_t,
@@ -2002,6 +2056,9 @@ pub unsafe extern "C" fn rgmin_solver_add_equality(
 }
 
 /// Drop every stored HiGHS equality. Returns 0, or 1 without `highs`.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_clear_equalities(solver: *mut rgmin_solver_t) -> i32 {
     if solver.is_null() {
@@ -2021,6 +2078,9 @@ pub unsafe extern "C" fn rgmin_solver_clear_equalities(solver: *mut rgmin_solver
 }
 
 /// HiGHS `solver` token. Unknown integers return 1.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_highs_solver(
     solver: *mut rgmin_solver_t,
@@ -2048,6 +2108,9 @@ pub unsafe extern "C" fn rgmin_solver_set_highs_solver(
 }
 
 /// HiGHS `run_crossover`. Unknown integers return 1.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_highs_crossover(
     solver: *mut rgmin_solver_t,
@@ -2075,6 +2138,11 @@ pub unsafe extern "C" fn rgmin_solver_set_highs_crossover(
 }
 
 /// HiGHS user callback. NULL `cb` clears it.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// A non-null `cb` must stay callable with `user` until it is cleared or
+/// the session is freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_highs_callback(
     solver: *mut rgmin_solver_t,
@@ -2149,6 +2217,10 @@ pub enum rgmin_manifold_t {
     RGMIN_MANIFOLD_CENTERED_MATRIX = 22,
 }
 
+/// Select the session manifold by token.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_manifold(
     solver: *mut rgmin_solver_t,
@@ -2193,6 +2265,9 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
 
 /// Oblique \(\mathrm{OB}(n,m)\): product of `m` unit spheres in `R^n`.
 /// Packed column-major, length `n*m`. Not a 3N cluster.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_oblique(solver: *mut rgmin_solver_t, n: usize, m: usize) {
     if solver.is_null() {
@@ -2203,6 +2278,9 @@ pub unsafe extern "C" fn rgmin_solver_set_oblique(solver: *mut rgmin_solver_t, n
 
 /// Stiefel \(\mathrm{St}(n,p)\). `p = 1` is the sphere packing.
 /// `p > 1` is packed column-major, length `n*p`.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_stiefel(solver: *mut rgmin_solver_t, n: usize, p: usize) {
     if solver.is_null() {
@@ -2212,6 +2290,9 @@ pub unsafe extern "C" fn rgmin_solver_set_stiefel(solver: *mut rgmin_solver_t, n
 }
 
 /// `n` unit-modulus complex numbers. Packed interleaved, length `2 n`.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_complex_circle(solver: *mut rgmin_solver_t, n: usize) {
     if solver.is_null() {
@@ -2221,6 +2302,9 @@ pub unsafe extern "C" fn rgmin_solver_set_complex_circle(solver: *mut rgmin_solv
 }
 
 /// Complex Euclidean \(\mathbb{C}^n\). Packed interleaved, length `2 n`.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_euclidean_complex(solver: *mut rgmin_solver_t, n: usize) {
     if solver.is_null() {
@@ -2230,6 +2314,9 @@ pub unsafe extern "C" fn rgmin_solver_set_euclidean_complex(solver: *mut rgmin_s
 }
 
 /// Singleton of packed length `n`. manopt `constantfactory`.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_constant(solver: *mut rgmin_solver_t, n: usize) {
     if solver.is_null() {
@@ -2240,6 +2327,9 @@ pub unsafe extern "C" fn rgmin_solver_set_constant(solver: *mut rgmin_solver_t, 
 
 /// Doubly-stochastic n-by-n, packed `n^2`. manopt
 /// `multinomialdoublystochasticfactory`. Token 18 defaults to n = 2.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_multinomial_ds(solver: *mut rgmin_solver_t, n: usize) {
     if solver.is_null() {
@@ -2250,6 +2340,9 @@ pub unsafe extern "C" fn rgmin_solver_set_multinomial_ds(solver: *mut rgmin_solv
 
 /// Symmetric doubly-stochastic n-by-n, packed `n^2`. manopt
 /// `multinomialsymmetricfactory`. Token 19 defaults to n = 2.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_multinomial_sym(solver: *mut rgmin_solver_t, n: usize) {
     if solver.is_null() {
@@ -2260,6 +2353,9 @@ pub unsafe extern "C" fn rgmin_solver_set_multinomial_sym(solver: *mut rgmin_sol
 
 /// Complex unit sphere in \(\mathbb{C}^n\). Packed interleaved, length `2 n`.
 /// manopt `spherecomplexfactory`. Token 20 defaults to n = 1.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_sphere_complex(solver: *mut rgmin_solver_t, n: usize) {
     if solver.is_null() {
@@ -2270,6 +2366,9 @@ pub unsafe extern "C" fn rgmin_solver_set_sphere_complex(solver: *mut rgmin_solv
 
 /// Positive orthant of packed length `n`. manopt `positivefactory`.
 /// Token 21 defaults to n = 1. Reserved tokens 7-10 unused.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_positive(solver: *mut rgmin_solver_t, n: usize) {
     if solver.is_null() {
@@ -2282,6 +2381,9 @@ pub unsafe extern "C" fn rgmin_solver_set_positive(solver: *mut rgmin_solver_t, 
 /// manopt `centeredmatrixfactory`. Token 22 defaults to 2-by-2
 /// centered columns. `center_rows != 0` centers rows (`1^T X = 0`).
 /// Reserved tokens 7-10 unused.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_centered_matrix(
     solver: *mut rgmin_solver_t,
@@ -2297,6 +2399,10 @@ pub unsafe extern "C" fn rgmin_solver_set_centered_matrix(
 
 /// Per-atom masses for `RGMIN_MANIFOLD_MW_RIGID`. `n_atoms == 0` or a
 /// null pointer clears them (unit mass).
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// `masses` is null or points to `n_atoms` readable f64s.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_masses(
     solver: *mut rgmin_solver_t,
@@ -2315,6 +2421,9 @@ pub unsafe extern "C" fn rgmin_solver_set_masses(
 }
 
 /// Periodic cell. Nonzero: Sella `proj_rot = false`, quotient is \(R^{3N}/T(3)\).
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_periodic(solver: *mut rgmin_solver_t, enabled: i32) {
     if solver.is_null() {
@@ -2324,6 +2433,12 @@ pub unsafe extern "C" fn rgmin_solver_set_periodic(solver: *mut rgmin_solver_t, 
 }
 
 /// One outer iteration. `x` is in/out. Callbacks live for this call only.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// `eval` and `grad` must be callable with `user` for the duration of this call.
+/// `x` is null or a writable rank-1 f64 tensor, and `out` is null or
+/// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_step(
     solver: *mut rgmin_solver_t,
@@ -2377,6 +2492,12 @@ pub unsafe extern "C" fn rgmin_solver_step(
 }
 
 /// One Newton / RFO iteration. `hess` writes a length-`n*n` row-major Hessian.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// `eval`, `grad` and `hess` must be callable with `user` for the duration of this call.
+/// `x` is null or a writable rank-1 f64 tensor, and `out` is null or
+/// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_step_hess(
     solver: *mut rgmin_solver_t,
@@ -2503,6 +2624,12 @@ pub unsafe extern "C" fn rgmin_solver_step_hvp(
 }
 
 /// One outer iteration with a fused `(f, g)` callback.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// `evalgrad` must be callable with `user` for the duration of this call.
+/// `x` is null or a writable rank-1 f64 tensor, and `out` is null or
+/// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_step_fg(
     solver: *mut rgmin_solver_t,
@@ -2548,6 +2675,10 @@ pub unsafe extern "C" fn rgmin_solver_step_fg(
 }
 
 /// Record `s`, `y` from the caller's previous outer. No evaluation.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// `s` and `y` are each null or point to `n` readable f64s.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_push_pair(
     solver: *mut rgmin_solver_t,
@@ -2641,6 +2772,11 @@ pub unsafe extern "C" fn rgmin_solver_report_gradient(
 }
 
 /// Two-loop `d = -H g`. No evaluation and no push.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// `grad` is null or points to `n` readable f64s, and `dir` is null or
+/// points to `n` writable f64s.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_search_direction(
     solver: *mut rgmin_solver_t,
@@ -2673,6 +2809,12 @@ pub unsafe extern "C" fn rgmin_solver_search_direction(
 }
 
 /// One Newton / RFO iteration with a fused `(f, g)` callback.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// `evalgrad` and `hess` must be callable with `user` for the duration of this call.
+/// `x` is null or a writable rank-1 f64 tensor, and `out` is null or
+/// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_step_hess_fg(
     solver: *mut rgmin_solver_t,
@@ -2763,10 +2905,7 @@ fn c_oracle_hess(
     hess: rgmin_hess_fn,
     user: *mut c_void,
     n: usize,
-) -> HessianOracle<
-    impl Fn(ndarray::ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync,
-    impl Fn(ndarray::ArrayView1<f64>) -> Array2<f64> + Send + Sync,
-> {
+) -> impl HessianObjective {
     let eval_ptr = eval as usize;
     let grad_ptr = grad as usize;
     let hess_ptr = hess as usize;
@@ -2819,10 +2958,7 @@ fn c_oracle_hvp(
     hvp: rgmin_hvp_fn,
     user: *mut c_void,
     n: usize,
-) -> HvpOracle<
-    impl Fn(ndarray::ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync,
-    impl Fn(ndarray::ArrayView1<f64>, ndarray::ArrayView1<f64>) -> Array1<f64> + Send + Sync,
-> {
+) -> impl HessianVector {
     let eval_ptr = eval as usize;
     let grad_ptr = grad as usize;
     let hvp_ptr = hvp as usize;
@@ -2897,10 +3033,7 @@ fn c_oracle_hess_fg(
     hess: rgmin_hess_fn,
     user: *mut c_void,
     n: usize,
-) -> HessianOracle<
-    impl Fn(ndarray::ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync,
-    impl Fn(ndarray::ArrayView1<f64>) -> Array2<f64> + Send + Sync,
-> {
+) -> impl HessianObjective {
     let fg_ptr = evalgrad as usize;
     let hess_ptr = hess as usize;
     let user_addr = user as usize;

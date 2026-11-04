@@ -106,7 +106,7 @@ where
     let mut r = g.clone();
     let mut delta = -&r;
     let r0 = nrm2(r.view());
-    if !(r0 > 0.0) {
+    if r0.is_nan() || r0 <= 0.0 {
         return TcgResult {
             eta,
             model_decrease: 0.0,
@@ -197,6 +197,10 @@ impl RtrRadius {
 
 /// Solve a tangent-space trust-region subproblem on an embedded manifold.
 /// The Hessian callback supplies the ambient action, projected at `x`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public signature; grouping the arguments would break callers"
+)]
 pub fn truncated_cg<M, F>(
     manifold: &M,
     x: ArrayView1<f64>,

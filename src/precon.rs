@@ -273,12 +273,12 @@ impl ExpState {
                 what: "A or c_stab is not usable",
             });
         }
-        if let Some(mu) = params.mu {
-            if !(mu.is_finite() && mu > 0.0) {
-                return Err(Error::Precon {
-                    what: "mu is not positive",
-                });
-            }
+        if let Some(mu) = params.mu
+            && !(mu.is_finite() && mu > 0.0)
+        {
+            return Err(Error::Precon {
+                what: "mu is not positive",
+            });
         }
         let r_nn_pending = params.r_nn.is_none();
         let r_nn = params.r_nn.unwrap_or(1.0);
@@ -317,11 +317,11 @@ impl ExpState {
     where
         G: Fn(ArrayView1<f64>) -> Array1<f64>,
     {
-        if self.r_nn_pending {
-            if let Some(r) = nearest_neighbour_distance(positions, &self.neighbours) {
-                self.r_nn = r;
-                self.r_nn_pending = false;
-            }
+        if self.r_nn_pending
+            && let Some(r) = nearest_neighbour_distance(positions, &self.neighbours)
+        {
+            self.r_nn = r;
+            self.r_nn_pending = false;
         }
         let need_mu = self.mu.is_none() || self.params.recalc_mu;
         if need_mu {
@@ -409,7 +409,7 @@ pub fn nearest_neighbour_distance(
 pub fn sine_probe(positions: ArrayView1<f64>, r_nn: f64, lengths: Option<[f64; 3]>) -> Array1<f64> {
     let n = positions.len();
     let mut v = Array1::zeros(n);
-    if n % 3 != 0 || !(r_nn.is_finite() && r_nn > 0.0) {
+    if !(n.is_multiple_of(3) && r_nn.is_finite() && r_nn > 0.0) {
         return v;
     }
     let span = position_span(positions);
@@ -518,7 +518,7 @@ fn resolve_r_nn(
 }
 
 fn atom_count(positions: ArrayView1<f64>) -> Result<usize> {
-    if positions.len() % 3 != 0 || positions.is_empty() {
+    if !positions.len().is_multiple_of(3) || positions.is_empty() {
         return Err(Error::Precon {
             what: "positions length is not a positive multiple of 3",
         });
@@ -655,7 +655,7 @@ fn build_csr(
     for (i, diag_i) in diag.iter().enumerate() {
         trips.push((i, i, *diag_i));
     }
-    trips.sort_unstable_by(|p, q| (p.0, p.1).cmp(&(q.0, q.1)));
+    trips.sort_unstable_by_key(|p| (p.0, p.1));
     let mut row_ptr = Vec::with_capacity(n + 1);
     let mut col_idx = Vec::with_capacity(trips.len());
     let mut val = Vec::with_capacity(trips.len());

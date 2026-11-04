@@ -26,10 +26,8 @@ fn unpack(x: &Array1<f64>) -> [[f64; 3]; 3] {
 fn pack(r: [[f64; 3]; 3]) -> Array1<f64> {
     Array1::from_shape_vec(9, {
         let mut v = Vec::with_capacity(9);
-        for i in 0..3 {
-            for j in 0..3 {
-                v.push(r[i][j]);
-            }
+        for row in &r {
+            v.extend_from_slice(row);
         }
         v
     })
@@ -70,6 +68,10 @@ fn qr_pos(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let mut q = [[0.0; 3]; 3];
     for j in 0..3 {
         let mut v = [a[0][j], a[1][j], a[2][j]];
+        #[allow(
+            clippy::needless_range_loop,
+            reason = "k picks a column of q, and the suggested q.iter() walks rows"
+        )]
         for k in 0..j {
             let mut dot = 0.0;
             for i in 0..3 {
@@ -90,8 +92,8 @@ fn qr_pos(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
         - q[0][1] * (q[1][0] * q[2][2] - q[1][2] * q[2][0])
         + q[0][2] * (q[1][0] * q[2][1] - q[1][1] * q[2][0]);
     if det < 0.0 {
-        for i in 0..3 {
-            q[i][2] = -q[i][2];
+        for row in &mut q {
+            row[2] = -row[2];
         }
     }
     q

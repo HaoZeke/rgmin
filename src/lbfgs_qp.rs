@@ -300,7 +300,7 @@ pub(crate) fn side_at(side: Option<&[f64]>, k: usize) -> Option<f64> {
 
 fn column_bounds(k: usize, x: ArrayView1<f64>, opts: &HighsStep) -> (f64, f64) {
     let mut lo = opts.trust.map(|t| -t).unwrap_or(f64::NEG_INFINITY);
-    let mut hi = opts.trust.map(|t| t).unwrap_or(f64::INFINITY);
+    let mut hi = opts.trust.unwrap_or(f64::INFINITY);
     if let Some(b0) = side_at(opts.lo.as_deref(), k) {
         lo = lo.max(b0 - x[k]);
     }
@@ -338,7 +338,7 @@ fn scale_site_motion(d: &mut Array1<f64>, n_atoms: usize, dim: usize, trust: Opt
     let Some(tmax) = trust else {
         return;
     };
-    if !(tmax > 0.0) {
+    if tmax.is_nan() || tmax <= 0.0 {
         return;
     }
     let mut max_mot = 0.0_f64;
@@ -409,6 +409,10 @@ fn scale_to_bounds(d: &mut Array1<f64>, x: ArrayView1<f64>, opts: &HighsStep) {
 /// `min 1/2 p^T Q p + c^T p` with per-coordinate boxes from
 /// `atom_maxmove`, the L_inf trust, and an optional box on `x + p`.
 /// Unconstrained (no box, no centering) skips HiGHS.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public signature; grouping the arguments would break callers"
+)]
 pub fn highs_feasible_step(
     direction: Option<&Array1<f64>>,
     hess: Option<&Array2<f64>>,
@@ -460,12 +464,13 @@ pub fn highs_feasible_step(
         let (lo, hi) = coord_bounds(k, x, box_lo, box_hi, atom_maxmove, trust);
         cols.push(pb.add_column(c[k], lo..=hi));
     }
-    if let Some((n_atoms, dim)) = center_axes {
-        if n_atoms * dim == n && n_atoms > 0 {
-            for h in 0..dim {
-                let row: Vec<_> = (0..n_atoms).map(|i| (cols[i * dim + h], 1.0)).collect();
-                pb.add_row(0.0..=0.0, &row);
-            }
+    if let Some((n_atoms, dim)) = center_axes
+        && n_atoms * dim == n
+        && n_atoms > 0
+    {
+        for h in 0..dim {
+            let row: Vec<_> = (0..n_atoms).map(|i| (cols[i * dim + h], 1.0)).collect();
+            pb.add_row(0.0..=0.0, &row);
         }
     }
     for (coeffs, rhs) in equalities {
@@ -539,17 +544,17 @@ fn coord_bounds(
 ) -> (f64, f64) {
     let mut lo = f64::NEG_INFINITY;
     let mut hi = f64::INFINITY;
-    if let Some(t) = trust {
-        if t > 0.0 {
-            lo = -t;
-            hi = t;
-        }
+    if let Some(t) = trust
+        && t > 0.0
+    {
+        lo = -t;
+        hi = t;
     }
-    if let Some(a) = atom_maxmove {
-        if a > 0.0 {
-            lo = lo.max(-a);
-            hi = hi.min(a);
-        }
+    if let Some(a) = atom_maxmove
+        && a > 0.0
+    {
+        lo = lo.max(-a);
+        hi = hi.min(a);
     }
     if let Some(b0) = side_at(box_lo, k) {
         lo = lo.max(b0 - x[k]);

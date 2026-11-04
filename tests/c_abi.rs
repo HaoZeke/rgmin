@@ -10,7 +10,7 @@ use eindir_core::ffi::eindir_core_abi_stamp;
 use eindir_core::ffi::{eindir_objective_t, eindir_status_t};
 use rgmin::ffi::{
     rgmin_abi_compatible, rgmin_abi_stamp, rgmin_accept_t, rgmin_conjugacy_t, rgmin_control_t,
-    rgmin_curv_fn, rgmin_eigen_kind_t, rgmin_eigen_params_t, rgmin_exp_t, rgmin_last_error,
+    rgmin_eigen_kind_t, rgmin_eigen_params_t, rgmin_exp_t, rgmin_last_error,
     rgmin_lowest_eigenpair, rgmin_lowest_mode_t, rgmin_method_from_name, rgmin_method_t,
     rgmin_minimize, rgmin_minimize_eindir, rgmin_minimize_scg, rgmin_report_t, rgmin_scg_params_t,
     rgmin_solver_clear_exp, rgmin_solver_create, rgmin_solver_exp_mu, rgmin_solver_free,
@@ -91,11 +91,11 @@ unsafe extern "C" fn rosen_evalgrad(
 ) -> rgmin_status_t {
     let n = unsafe { &mut *(user as *mut usize) };
     *n += 1;
-    let ev = rosen_eval(std::ptr::null_mut(), x, value_out);
+    let ev = unsafe { rosen_eval(std::ptr::null_mut(), x, value_out) };
     if ev != rgmin_status_t::RGMIN_SUCCESS {
         return ev;
     }
-    rosen_grad(std::ptr::null_mut(), x, g)
+    unsafe { rosen_grad(std::ptr::null_mut(), x, g) }
 }
 
 unsafe extern "C" fn rosen_grad(

@@ -7,6 +7,11 @@ use crate::error::{Error, Result};
 use crate::lbfgs_qp::side_at;
 use crate::newton::HessianObjective;
 
+/// `true` unless `lo <= hi`. A NaN on either side is out of order.
+fn out_of_order(lo: f64, hi: f64) -> bool {
+    lo.is_nan() || hi.is_nan() || lo > hi
+}
+
 pub(crate) struct BoxObjective<'a, O: ?Sized> {
     inner: &'a O,
     bounds: Bounds<f64>,
@@ -34,12 +39,12 @@ impl<'a, O: DifferentiableObjective<f64> + ?Sized> BoxObjective<'a, O> {
         for k in 0..dim {
             let requested_low = side_at(lo.as_deref(), k).unwrap_or(f64::NEG_INFINITY);
             let requested_high = side_at(hi.as_deref(), k).unwrap_or(f64::INFINITY);
-            if !(requested_low <= requested_high) || !(low[k] <= high[k]) {
+            if out_of_order(requested_low, requested_high) || out_of_order(low[k], high[k]) {
                 return Err(Error::Highs("invalid coordinate box".into()));
             }
             low[k] = low[k].max(requested_low);
             high[k] = high[k].min(requested_high);
-            if !(low[k] <= high[k]) {
+            if out_of_order(low[k], high[k]) {
                 return Err(Error::Highs("invalid coordinate box".into()));
             }
         }
