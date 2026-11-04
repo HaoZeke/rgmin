@@ -6,6 +6,9 @@
 
 ** Unreleased
 
+On a curved manifold kind, Newton-CG and Newton-PCG retract their trust-region step, so every point the objective sees lies on the set.
+CG runs on the model ~P H P + (I - P)~ for the tangent projection ~P~ of the kind, and flat kinds keep ~x + p~.
+
 On a curved manifold kind, a ~Solver~ step caps the tangent step and then retracts it, so every point it evaluates lies on the set.
 On the unit sphere with a 0.1 cap, steepest descent, FIRE, FIRE 2.0 and dogleg evaluated points up to 1.1e-1 off it before.
 Dogleg steps in the tangent space, and steepest descent and FIRE take one oracle call per step instead of two.

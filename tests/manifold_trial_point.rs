@@ -416,3 +416,60 @@ fn an_expanding_retraction_is_shrunk_to_the_cap() {
     let energies = objective.energies.into_inner().unwrap();
     assert!(energies <= STEPS + 1, "{energies} energies");
 }
+
+fn newton_end<O>(method: Method, objective: &O, start: Array1<f64>) -> Array1<f64>
+where
+    O: DifferentiableObjective<f64>,
+{
+    let mut solver = Solver::new(method, control(), 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    let mut x = start;
+    for _ in 0..STEPS {
+        solver.step(objective, &mut x).unwrap();
+    }
+    x
+}
+
+/// Newton-CG takes the product as `P H v`, and Newton-PCG applies the
+/// whole model `P H P v + (I - P) v`; both keep the walks of the model.
+#[test]
+fn newton_cg_on_the_sphere_keeps_its_endpoints_and_calls() {
+    let cases = [
+        (
+            Method::NewtonCg,
+            [0.366060826241496, 0.0, 0.930590925966610],
+            37,
+            [0.942780586410702, 0.007214251121868, 0.333335747359690],
+            33,
+        ),
+        (
+            Method::NewtonPcg,
+            [0.372687989658418, 0.036026827336441, 0.927257100310608],
+            73,
+            [0.942775413091655, 0.006550539264434, 0.333364081606288],
+            72,
+        ),
+    ];
+    for (method, tilt_end, tilt_calls, bowl_end, bowl_calls) in cases {
+        let tilt = Tilt::new(1.0);
+        let end = newton_end(method.clone(), &tilt, array![1.0, 0.0, 0.0]);
+        assert_end(&end, tilt_end);
+        assert_eq!(
+            tilt.energies.into_inner().unwrap(),
+            tilt_calls,
+            "{method:?}"
+        );
+        let bowl = Bowl {
+            bounds: Bounds::new(Array1::from_elem(3, -1e6), Array1::from_elem(3, 1e6), 0.0),
+            weights: array![1.0, 2.0, 4.0],
+            energies: Mutex::new(0),
+        };
+        let end = newton_end(method.clone(), &bowl, array![0.48, 0.6, 0.64]);
+        assert_end(&end, bowl_end);
+        assert_eq!(
+            bowl.energies.into_inner().unwrap(),
+            bowl_calls,
+            "{method:?}"
+        );
+    }
+}

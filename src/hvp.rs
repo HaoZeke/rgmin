@@ -15,10 +15,12 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eindir_core::DifferentiableObjective;
-use ndarray::{Array1, Array2, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, Zip};
 
+use crate::accept::retract_within_cap;
 use crate::control::Control;
 use crate::error::{Error, Result};
+use crate::manifold::ManifoldKind;
 use crate::report::Report;
 use crate::rigid::project_out_rot_trans;
 use crate::scg::DirectionalCurvature;
@@ -540,6 +542,8 @@ pub(crate) struct NewtonCgRequest {
     pub precondition: bool,
     /// Rademacher seed for the sketch. Rebuilt every outer step.
     pub seed: u64,
+    /// Curved kind to step on, or `None` for the flat step `x + p`.
+    pub manifold: Option<ManifoldKind>,
 }
 
 /// Point, radius, and the products this attempt spent.
@@ -574,6 +578,10 @@ struct SessionAction<'a, O: ?Sized, A> {
     fd_grad: &'a Array1<f64>,
     hvps: &'a AtomicUsize,
     action: &'a A,
+    /// Curved kind and the point of its tangent model `P H P + (I - P)`.
+    tangent: Option<(ManifoldKind, &'a Array1<f64>)>,
+    /// Apply the whole model. Without it a product takes `v` as tangent.
+    whole_model: bool,
 }
 
 impl<'a, O, A> eindir_core::Objective<f64> for SessionAction<'a, O, A>
@@ -621,6 +629,43 @@ where
     A: OptionalAction + Send + Sync,
 {
     fn hessian_vector(&self, x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
+        let Some((kind, at)) = self.tangent else {
+            return self.ambient_hv(x, v);
+        };
+        // The model of a curved kind is `P H P + (I - P)` for the
+        // tangent projection `P` of the kind, and the identity on the
+        // kernel of `P` keeps it invertible there. It equals the dogleg
+        // model where `P` is orthogonal; the Fisher projection of the
+        // multinomial kinds is oblique, and there dogleg solves `Z^T H Z`
+        // in an orthonormal tangent basis `Z` instead. Plain CG starts
+        // from the tangent gradient and the model maps tangent vectors to
+        // tangent vectors, so `P v = v` and the model is `P H v`. Under
+        // the Nystrom preconditioner the sketch probes and the
+        // preconditioned directions have normal parts, which need the
+        // whole model.
+        if !self.whole_model {
+            let mut hv = self.ambient_hv(x, v);
+            kind.project_in_place(at, &mut hv);
+            return hv;
+        }
+        let mut pv = v.to_owned();
+        kind.project_in_place(at, &mut pv);
+        let mut hv = self.ambient_hv(x, pv.view());
+        kind.project_in_place(at, &mut hv);
+        Zip::from(&mut hv)
+            .and(&v)
+            .and(&pv)
+            .for_each(|h, &vi, &pi| *h += vi - pi);
+        hv
+    }
+}
+
+impl<O, A> SessionAction<'_, O, A>
+where
+    O: DifferentiableObjective<f64> + ?Sized,
+    A: OptionalAction + Send + Sync,
+{
+    fn ambient_hv(&self, x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
         if let Some(hv) = self.action.apply(x, v) {
             self.hvps.fetch_add(1, Ordering::Relaxed);
             return hv;
@@ -688,6 +733,8 @@ where
         fd_grad,
         hvps: &hvps,
         action,
+        tangent: req.manifold.map(|kind| (kind, x)),
+        whole_model: req.precondition,
     };
     let n = x.len();
     let gnorm = nrm2(grad.view());
@@ -712,15 +759,37 @@ where
         p.mapv_inplace(|v| v * scale);
     }
     let trust_norm = nrm2(p.view());
-    let mut trial = x.clone();
-    axpy(1.0, p.view(), &mut trial);
-    if let Some(cap) = req.atom_cap {
-        scale_step_atom(x, &mut trial, cap);
-    } else if let Some(cap) = req.euclid_cap {
-        scale_step(x, &mut trial, cap);
-    }
-    trial = obj.bounds().clip(trial.view());
-    let step = &trial - x;
+    let refuse = || {
+        let radius = update_radius(radius, -1.0, 0.0, rmax);
+        NewtonCgTaken {
+            pos: x.clone(),
+            value,
+            grad: grad.clone(),
+            radius,
+            moved: false,
+            trial_gradients: 0,
+            hvps: hvps.load(Ordering::Relaxed),
+            collapsed: radius < RADIUS_FLOOR,
+        }
+    };
+    let (trial, step) = if let Some(kind) = req.manifold {
+        kind.project_in_place(x, &mut p);
+        match retract_within_cap(obj, x, &p, req.atom_cap, req.euclid_cap, kind) {
+            Some(pair) => pair,
+            None => return refuse(),
+        }
+    } else {
+        let mut trial = x.clone();
+        axpy(1.0, p.view(), &mut trial);
+        if let Some(cap) = req.atom_cap {
+            scale_step_atom(x, &mut trial, cap);
+        } else if let Some(cap) = req.euclid_cap {
+            scale_step(x, &mut trial, cap);
+        }
+        trial = obj.bounds().clip(trial.view());
+        let step = &trial - x;
+        (trial, step)
+    };
     if steps_differ(step.view(), p_cg.view()) {
         let hp = adapter.hessian_vector(x.view(), step.view());
         pred = -(dot(grad.view(), step.view()) + 0.5 * dot(step.view(), hp.view()));
@@ -731,20 +800,8 @@ where
     } else {
         taken
     };
-    let refuse = || NewtonCgTaken {
-        pos: x.clone(),
-        value,
-        grad: grad.clone(),
-        radius: update_radius(radius, -1.0, 0.0, rmax),
-        moved: false,
-        trial_gradients: 0,
-        hvps: hvps.load(Ordering::Relaxed),
-        collapsed: false,
-    };
     if trust_norm <= 0.0 || !(pred.is_finite() && pred > 0.0) {
-        let mut out = refuse();
-        out.collapsed = out.radius < RADIUS_FLOOR;
-        return out;
+        return refuse();
     }
     let (ft, gt) = obj.value_and_gradient(trial.view());
     let rho = if ft.is_finite() {
@@ -842,6 +899,7 @@ where
                 project_rigid: false,
                 precondition: false,
                 seed: step as u64,
+                manifold: None,
             },
             &action,
         );

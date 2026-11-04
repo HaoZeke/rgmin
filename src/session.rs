@@ -1233,6 +1233,7 @@ impl Solver {
                 project_rigid: self.project_rigid,
                 precondition,
                 seed: self.steps as u64,
+                manifold: (!self.manifold.is_flat()).then_some(self.manifold),
             },
             action,
         );
