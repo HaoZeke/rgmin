@@ -2647,6 +2647,7 @@ impl Solver {
 
 #[cfg(test)]
 mod tests {
+    use eindir_core::{Bounds, Gradient};
     use ndarray::array;
 
     use super::*;
@@ -2750,5 +2751,73 @@ mod tests {
         let v = array![1.0, -2.0, 0.5, 0.3, -0.7, 1.2, -0.4, 0.8, -1.1];
         let grad = kind.project(&x, &v);
         check_dogleg_point(kind, &x, &banded_hessian(), &grad, [10.0, 0.8, 0.3]);
+    }
+
+    /// Bound on `|x . v| / |v|`, the bound of the sphere trial tests.
+    /// One projection leaves a normal part of a few ulps, and the
+    /// secant of a chord of length `l` has a normal part `l / 2`.
+    const TANGENT: f64 = 1e-10;
+
+    /// f(x) = -x_3.
+    struct Lift(Bounds<f64>);
+
+    impl Objective<f64> for Lift {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            &self.0
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            -x[2]
+        }
+    }
+
+    impl Gradient<f64> for Lift {
+        fn dim(&self) -> usize {
+            3
+        }
+        fn grad(&self, _x: ArrayView1<f64>) -> Array1<f64> {
+            array![0.0, 0.0, -1.0]
+        }
+    }
+
+    impl DifferentiableObjective<f64> for Lift {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    /// The sphere walk of `tests/manifold_trial_point.rs`: twelve steps
+    /// from (1, 0, 0) under a Euclidean cap of 0.1.
+    #[test]
+    fn fire2_velocity_is_tangent_after_a_curved_step() {
+        let steps = 12;
+        let control = Control {
+            maxiter: steps,
+            gtol: 1e-12,
+            istep: 1.0,
+            maxmove: Some(0.1),
+        };
+        let lift = Lift(Bounds::new(
+            Array1::from_elem(3, -1e6),
+            Array1::from_elem(3, 1e6),
+            0.0,
+        ));
+        let mut solver = Solver::new(Method::Fire { kind: FireKind::V2 }, control, 3);
+        solver.set_manifold(ManifoldKind::Sphere);
+        let mut x = array![1.0, 0.0, 0.0];
+        let mut worst = 0.0_f64;
+        for _ in 0..steps {
+            solver.step(&lift, &mut x).unwrap();
+            let Inner::Fire(state) = &solver.inner else {
+                unreachable!()
+            };
+            let speed = l2(&state.vel);
+            if speed > 0.0 {
+                worst = worst.max(x.dot(&state.vel).abs() / speed);
+            }
+        }
+        assert!(worst <= TANGENT, "|x . v| / |v| reached {worst:.4e}");
     }
 }

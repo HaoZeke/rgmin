@@ -287,6 +287,75 @@ fn a_sphere_dogleg_after_a_positive_dogleg_keeps_its_endpoint() {
     assert_eq!(tilt.energies.into_inner().unwrap(), STEPS + 1);
 }
 
+#[test]
+fn newton_cg_stays_on_the_sphere() {
+    let walk = walk(Method::NewtonCg, Accept::None, 1.0);
+    assert_on_sphere(&walk);
+}
+
+#[test]
+fn newton_pcg_stays_on_the_sphere() {
+    let walk = walk(Method::NewtonPcg, Accept::None, 1.0);
+    assert_on_sphere(&walk);
+}
+
+#[test]
+fn lbfgs_reports_a_trial_the_box_refuses() {
+    // The first trial climbs to x_3 = sin(atan(CAP)), above this bound.
+    let below_first_trial = 0.5 * CAP;
+    let mut objective = Tilt::new(0.0);
+    objective.bounds = Bounds::new(
+        Array1::from_elem(3, -1e6),
+        array![1e6, 1e6, below_first_trial],
+        0.0,
+    );
+    let mut solver = Solver::new(Method::lbfgs(), control(), 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    let mut x = array![1.0, 0.0, 0.0];
+    let err = solver.step(&objective, &mut x).unwrap_err();
+    assert!(
+        matches!(err, rgmin::Error::OffManifold { kind: "sphere" }),
+        "{err:?}"
+    );
+    assert_eq!(x, array![1.0, 0.0, 0.0]);
+}
+
+/// FNV-1a over the bits of every point and value, after the FNV
+/// reference of Fowler, Noll and Vo (draft-eastlake-fnv).
+fn fnv1a(hash: u64, word: f64) -> u64 {
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    word.to_bits()
+        .to_le_bytes()
+        .iter()
+        .fold(hash, |h, b| (h ^ u64::from(*b)).wrapping_mul(PRIME))
+}
+
+/// On the flat Euclidean kind the walk of each method, every point and
+/// value it returns, matches the digest recorded before the change.
+#[test]
+fn flat_walks_keep_their_digests() {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    let cases = [
+        (Method::NewtonCg, 0xf760_362d_9a91_9afa_u64),
+        (Method::NewtonPcg, 0xce41_c263_ea63_b4a1),
+        (Method::Fire { kind: FireKind::V2 }, 0x552b_a4b9_b0eb_63a9),
+        (Method::lbfgs(), 0xff05_53c8_a592_b5db),
+    ];
+    for (method, recorded) in cases {
+        let objective = Tilt::new(1.0);
+        let mut solver = Solver::new(method.clone(), control(), 3);
+        let mut x = array![1.0, 0.0, 0.0];
+        let mut hash = OFFSET_BASIS;
+        for _ in 0..STEPS {
+            let report = solver.step(&objective, &mut x).unwrap();
+            hash = x
+                .iter()
+                .fold(fnv1a(hash, report.value), |h, v| fnv1a(h, *v));
+        }
+        assert_eq!(hash, recorded, "{method:?} digest {hash:#018x}");
+    }
+}
+
 /// f(x) = -(x_1 + x_2 + x_3) on the positive orthant. Descent grows x,
 /// where the retraction x exp(v / x) moves farther than the step v.
 struct Climb {
