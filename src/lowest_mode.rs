@@ -357,6 +357,9 @@ fn dimer<H: ApplyHessian + ?Sized>(
     }
 }
 
+/// Lowest Ritz value with its unit vector, residual and Hessian action.
+type RitzPair = (f64, Array1<f64>, Array1<f64>, Array1<f64>);
+
 struct Subspace {
     q: Vec<Array1<f64>>,
     aq: Vec<Array1<f64>>,
@@ -394,7 +397,7 @@ impl Subspace {
         true
     }
 
-    fn ritz(&self, n: usize) -> Option<(f64, Array1<f64>, Array1<f64>, Array1<f64>)> {
+    fn ritz(&self, n: usize) -> Option<RitzPair> {
         let k = self.q.len();
         if k == 0 {
             return None;
@@ -728,12 +731,7 @@ mod tests {
     use crate::hvp::HvpOracle;
     use ndarray::array;
 
-    fn gapped_diag(
-        n: usize,
-    ) -> HvpOracle<
-        impl Fn(ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync,
-        impl Fn(ArrayView1<f64>, ArrayView1<f64>) -> Array1<f64> + Send + Sync,
-    > {
+    fn gapped_diag(n: usize) -> impl HessianVector {
         HvpOracle::unbounded(
             n,
             move |x| {

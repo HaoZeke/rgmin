@@ -21,9 +21,9 @@ use ndarray::{Array1, Array2, ArrayView1};
 use crate::precon::{ExpParams, ExpState, Neighbours};
 use crate::{
     Accept, ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind,
-    Error, HessianOracle, HvpOracle, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep,
-    Restart, ScgParams, Solver, StopNorm, lowest_mode, minimize_method, minimize_method_hess,
-    minimize_method_hvp, minimize_scg, minimize_scg_exact,
+    Error, HessianObjective, HessianOracle, HessianVector, HvpOracle, LineSearch, ManifoldKind,
+    Method, NewtonKind, Oracle, QnStep, Restart, ScgParams, Solver, StopNorm, lowest_mode,
+    minimize_method, minimize_method_hess, minimize_method_hvp, minimize_scg, minimize_scg_exact,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
@@ -2763,10 +2763,7 @@ fn c_oracle_hess(
     hess: rgmin_hess_fn,
     user: *mut c_void,
     n: usize,
-) -> HessianOracle<
-    impl Fn(ndarray::ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync,
-    impl Fn(ndarray::ArrayView1<f64>) -> Array2<f64> + Send + Sync,
-> {
+) -> impl HessianObjective {
     let eval_ptr = eval as usize;
     let grad_ptr = grad as usize;
     let hess_ptr = hess as usize;
@@ -2819,10 +2816,7 @@ fn c_oracle_hvp(
     hvp: rgmin_hvp_fn,
     user: *mut c_void,
     n: usize,
-) -> HvpOracle<
-    impl Fn(ndarray::ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync,
-    impl Fn(ndarray::ArrayView1<f64>, ndarray::ArrayView1<f64>) -> Array1<f64> + Send + Sync,
-> {
+) -> impl HessianVector {
     let eval_ptr = eval as usize;
     let grad_ptr = grad as usize;
     let hvp_ptr = hvp as usize;
@@ -2897,10 +2891,7 @@ fn c_oracle_hess_fg(
     hess: rgmin_hess_fn,
     user: *mut c_void,
     n: usize,
-) -> HessianOracle<
-    impl Fn(ndarray::ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync,
-    impl Fn(ndarray::ArrayView1<f64>) -> Array2<f64> + Send + Sync,
-> {
+) -> impl HessianObjective {
     let fg_ptr = evalgrad as usize;
     let hess_ptr = hess as usize;
     let user_addr = user as usize;
