@@ -86,13 +86,12 @@ fn pair_block(diff: [f64; 3], r2: f64, first: f64, second: f64) -> [[f64; 3]; 3]
 }
 
 fn scatter_block(hessian: &mut Array2<f64>, i: usize, j: usize, block: [[f64; 3]; 3]) {
-    for a in 0..3 {
-        for b in 0..3 {
+    for (a, row) in block.iter().enumerate() {
+        for (b, &value) in row.iter().enumerate() {
             let ia = 3 * i + a;
             let ib = 3 * i + b;
             let ja = 3 * j + a;
             let jb = 3 * j + b;
-            let value = block[a][b];
             hessian[(ia, jb)] += value;
             hessian[(jb, ia)] += value;
             hessian[(ia, ib)] -= value;
@@ -107,9 +106,9 @@ fn apply_block(hv: &mut Array1<f64>, v: ArrayView1<f64>, i: usize, j: usize, blo
         dv[a] = v[3 * j + a] - v[3 * i + a];
     }
     let mut bdv = [0.0; 3];
-    for a in 0..3 {
-        for b in 0..3 {
-            bdv[a] += block[a][b] * dv[b];
+    for (bdv_a, row) in bdv.iter_mut().zip(&block) {
+        for (block_ab, dv_b) in row.iter().zip(&dv) {
+            *bdv_a += block_ab * dv_b;
         }
     }
     for a in 0..3 {
@@ -374,13 +373,13 @@ fn run_dense(
 fn run_newton_cg(
     method: Method,
     start: &Array1<f64>,
-    cap: Option<f64>,
-    maxmove: Option<f64>,
+    caps: (Option<f64>, Option<f64>),
     gtol: f64,
     step_budget: usize,
     fg: impl Fn(ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync,
     hvp: impl Fn(ArrayView1<f64>, ArrayView1<f64>) -> Array1<f64> + Send + Sync,
 ) -> Run {
+    let (cap, maxmove) = caps;
     let dim = start.len();
     let obj = HvpOracle::unbounded(dim, fg, hvp);
     let mut ctrl = control(gtol, step_budget.max(1));
@@ -525,8 +524,7 @@ fn per_atom_cap_does_not_freeze_the_newton_cg_radius() {
     let capped = run_newton_cg(
         Method::NewtonCg,
         &start,
-        Some(0.2),
-        None,
+        (Some(0.2), None),
         1e-8,
         16,
         quad_fg,
@@ -551,8 +549,7 @@ fn per_atom_cap_does_not_freeze_the_newton_cg_radius() {
     let uncapped = run_newton_cg(
         Method::NewtonCg,
         &start,
-        None,
-        None,
+        (None, None),
         1e-8,
         16,
         quad_fg,
@@ -576,8 +573,7 @@ fn maxmove_is_the_euclidean_trust_ceiling() {
     let capped = run_newton_cg(
         Method::NewtonCg,
         &start,
-        None,
-        Some(0.2),
+        (None, Some(0.2)),
         1e-8,
         16,
         quad_fg,
@@ -616,7 +612,7 @@ fn morse_case(name: &str, cap: Option<f64>) -> Run {
     let (start, cell) = load_fixture(name);
     let fg = move |x: ArrayView1<f64>| morse_value_grad(x, cell);
     let hv = move |x: ArrayView1<f64>, v: ArrayView1<f64>| morse_hvp(x, v, cell);
-    let run = run_newton_cg(Method::NewtonCg, &start, cap, None, 1e-3, 80, fg, hv);
+    let run = run_newton_cg(Method::NewtonCg, &start, (cap, None), 1e-3, 80, fg, hv);
     let force = run.grad_calls + run.products;
     eprintln!(
         "morse {name} cap={cap:?}: grads={} hvp={} force={force} |g|={:.3e} energy={:.6} max_euclid={:.3} max_atom={:.3}",
@@ -810,7 +806,7 @@ fn benchmark_morse_newton_cg_campaign() {
                                 },
                             ),
                         ] {
-                            let run = run_dense(method, coords, cap, gtol, 60, &fg, &hs);
+                            let run = run_dense(method, coords, cap, gtol, 60, fg, hs);
                             let force = run.grad_calls + dim * run.products;
                             let ok = run.grad_norm <= gtol && force < 10_000;
                             if !ok {
@@ -824,7 +820,7 @@ fn benchmark_morse_newton_cg_campaign() {
                         let fg = |x: ArrayView1<f64>| morse_value_grad(x, cell);
                         let hv = |x: ArrayView1<f64>, v: ArrayView1<f64>| morse_hvp(x, v, cell);
                         let run =
-                            run_newton_cg(Method::NewtonCg, coords, cap, None, gtol, 60, fg, hv);
+                            run_newton_cg(Method::NewtonCg, coords, (cap, None), gtol, 60, fg, hv);
                         let force = run.grad_calls + run.products;
                         let ok = run.grad_norm <= gtol && force < 10_000;
                         if !ok {
@@ -943,8 +939,7 @@ fn benchmark_lj38_newton_cg_campaign() {
                     let run = run_newton_cg(
                         Method::NewtonCg,
                         coords,
-                        Some(0.2),
-                        None,
+                        (Some(0.2), None),
                         gtol,
                         400,
                         lj_value_grad,
