@@ -197,6 +197,10 @@ impl RtrRadius {
 
 /// Solve a tangent-space trust-region subproblem on an embedded manifold.
 /// The Hessian callback supplies the ambient action, projected at `x`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public signature; grouping the arguments would break callers"
+)]
 pub fn truncated_cg<M, F>(
     manifold: &M,
     x: ArrayView1<f64>,

@@ -164,6 +164,16 @@ where
     Trial::Accepted(trial, ft, gt)
 }
 
+/// The policy a session applies to each trial step, with the energy
+/// history that the nonmonotone test reads and every accepted step extends.
+pub(crate) struct Acceptance<'a> {
+    pub(crate) control: &'a Control,
+    pub(crate) accept: Accept,
+    pub(crate) e_hist: &'a mut VecDeque<f64>,
+    pub(crate) atom_maxmove: Option<f64>,
+    pub(crate) manifold: ManifoldKind,
+}
+
 /// Apply `dir` under `accept`. Each trial is one `value_and_gradient`.
 pub(crate) fn accept_step<O>(
     obj: &O,
@@ -171,28 +181,12 @@ pub(crate) fn accept_step<O>(
     value: f64,
     grad: &Array1<f64>,
     dir: &Array1<f64>,
-    control: &Control,
-    accept: Accept,
-    e_hist: &mut VecDeque<f64>,
-    atom_maxmove: Option<f64>,
-    manifold: ManifoldKind,
+    acceptance: Acceptance<'_>,
 ) -> (Array1<f64>, f64, Array1<f64>, bool)
 where
     O: DifferentiableObjective<f64> + ?Sized,
 {
-    accept_step_with_fallback(
-        obj,
-        pos,
-        value,
-        grad,
-        dir,
-        control,
-        accept,
-        e_hist,
-        atom_maxmove,
-        manifold,
-        true,
-    )
+    accept_step_with_fallback(obj, pos, value, grad, dir, acceptance, true)
 }
 
 /// Accept a direction with an optional steepest-descent fallback.
@@ -204,16 +198,19 @@ pub(crate) fn accept_step_with_fallback<O>(
     value: f64,
     grad: &Array1<f64>,
     dir: &Array1<f64>,
-    control: &Control,
-    accept: Accept,
-    e_hist: &mut VecDeque<f64>,
-    atom_maxmove: Option<f64>,
-    manifold: ManifoldKind,
+    acceptance: Acceptance<'_>,
     steepest_fallback: bool,
 ) -> (Array1<f64>, f64, Array1<f64>, bool)
 where
     O: DifferentiableObjective<f64> + ?Sized,
 {
+    let Acceptance {
+        control,
+        accept,
+        e_hist,
+        atom_maxmove,
+        manifold,
+    } = acceptance;
     match accept {
         Accept::None => {
             match single_trial(obj, pos, dir, control, e_hist, atom_maxmove, manifold) {
@@ -328,11 +325,13 @@ mod tests {
             1.0,
             &g,
             &dir,
-            &ctrl(),
-            Accept::None,
-            &mut hist,
-            None,
-            ManifoldKind::Euclidean,
+            Acceptance {
+                control: &ctrl(),
+                accept: Accept::None,
+                e_hist: &mut hist,
+                atom_maxmove: None,
+                manifold: ManifoldKind::Euclidean,
+            },
         );
         assert!(moved);
         assert!((x[0] - 2.0).abs() < 1e-15);
@@ -381,11 +380,13 @@ mod tests {
             1.0,
             &g,
             &dir,
-            &ctrl(),
-            Accept::None,
-            &mut hist,
-            None,
-            ManifoldKind::Euclidean,
+            Acceptance {
+                control: &ctrl(),
+                accept: Accept::None,
+                e_hist: &mut hist,
+                atom_maxmove: None,
+                manifold: ManifoldKind::Euclidean,
+            },
         );
         assert!(!moved);
         assert!((x[0] - 1.0).abs() < 1e-15);
@@ -407,11 +408,13 @@ mod tests {
             1.0,
             &g,
             &dir,
-            &ctrl(),
-            Accept::Energy,
-            &mut hist,
-            None,
-            ManifoldKind::Euclidean,
+            Acceptance {
+                control: &ctrl(),
+                accept: Accept::Energy,
+                e_hist: &mut hist,
+                atom_maxmove: None,
+                manifold: ManifoldKind::Euclidean,
+            },
         );
         // 10 rejected halvings + one short steepest fallback.
         assert_eq!(obj.evals.load(Ordering::Relaxed), 11);
@@ -507,11 +510,13 @@ mod tests {
             1.0,
             &array![1.0, 1.0, 1.0],
             &dir,
-            &ctrl(),
-            Accept::None,
-            &mut hist,
-            None,
-            ManifoldKind::Sphere,
+            Acceptance {
+                control: &ctrl(),
+                accept: Accept::None,
+                e_hist: &mut hist,
+                atom_maxmove: None,
+                manifold: ManifoldKind::Sphere,
+            },
         );
         assert!(!moved);
         assert_eq!(x, pos);

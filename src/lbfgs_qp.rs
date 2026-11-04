@@ -409,6 +409,10 @@ fn scale_to_bounds(d: &mut Array1<f64>, x: ArrayView1<f64>, opts: &HighsStep) {
 /// `min 1/2 p^T Q p + c^T p` with per-coordinate boxes from
 /// `atom_maxmove`, the L_inf trust, and an optional box on `x + p`.
 /// Unconstrained (no box, no centering) skips HiGHS.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public signature; grouping the arguments would break callers"
+)]
 pub fn highs_feasible_step(
     direction: Option<&Array1<f64>>,
     hess: Option<&Array2<f64>>,

@@ -9,7 +9,7 @@ use rand::rngs::StdRng;
 
 #[cfg(feature = "highs")]
 use crate::accept::accept_step_with_fallback;
-use crate::accept::{Accept, Trial, accept_step, retract_within_cap, single_trial};
+use crate::accept::{Accept, Acceptance, Trial, accept_step, retract_within_cap, single_trial};
 use crate::adam::adam_direction;
 use crate::bb::bb_direction;
 use crate::control::{Control, StopNorm};
@@ -1704,11 +1704,13 @@ impl Solver {
                 value,
                 &gold,
                 &dir,
-                &self.control,
-                self.accept,
-                &mut self.e_hist,
-                None,
-                self.manifold,
+                Acceptance {
+                    control: &self.control,
+                    accept: self.accept,
+                    e_hist: &mut self.e_hist,
+                    atom_maxmove: None,
+                    manifold: self.manifold,
+                },
                 false,
             );
             if moved {
@@ -1752,11 +1754,13 @@ impl Solver {
             value,
             &gold,
             &dir,
-            &self.control,
-            self.accept,
-            &mut self.e_hist,
-            self.atom_maxmove,
-            self.manifold,
+            Acceptance {
+                control: &self.control,
+                accept: self.accept,
+                e_hist: &mut self.e_hist,
+                atom_maxmove: self.atom_maxmove,
+                manifold: self.manifold,
+            },
         );
         if moved {
             *x = npos;
@@ -2045,11 +2049,13 @@ impl Solver {
                     value,
                     &grad,
                     &dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2089,11 +2095,13 @@ impl Solver {
                     value,
                     &grad,
                     &step_dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2167,11 +2175,13 @@ impl Solver {
                     value,
                     &gold,
                     &direction,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2208,11 +2218,13 @@ impl Solver {
                     value,
                     &gold,
                     &direction,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2250,11 +2262,13 @@ impl Solver {
                     value,
                     &gold,
                     &direction,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2284,7 +2298,7 @@ impl Solver {
                 beta2,
                 eps,
             } => {
-                let dir = adam_direction(m, v, &grad, *beta1, *beta2, *b1p, *b2p, *eps);
+                let dir = adam_direction(m, v, &grad, *beta1, *beta2, (*b1p, *b2p), *eps);
                 let dir = dir.mapv(|d| d * self.istep);
                 let (npos, nval, ngrad, _) = accept_step(
                     obj,
@@ -2292,11 +2306,13 @@ impl Solver {
                     value,
                     &grad,
                     &dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2431,11 +2447,13 @@ impl Solver {
                     value,
                     &gold,
                     &dir,
-                    &self.control,
-                    self.accept,
-                    &mut self.e_hist,
-                    self.atom_maxmove,
-                    self.manifold,
+                    Acceptance {
+                        control: &self.control,
+                        accept: self.accept,
+                        e_hist: &mut self.e_hist,
+                        atom_maxmove: self.atom_maxmove,
+                        manifold: self.manifold,
+                    },
                 );
                 *x = npos;
                 value = nval;
@@ -2566,9 +2584,7 @@ impl Solver {
                 &mut state.swarm,
                 &mut state.gbest_position,
                 &mut state.gbest_value,
-                *inertia,
-                *c1,
-                *c2,
+                (*inertia, *c1, *c2),
                 &mut state.rng,
             );
             *x = state.gbest_position.clone();
