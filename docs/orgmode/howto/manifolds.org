@@ -78,9 +78,27 @@ let _ = solver.step(&obj, &mut x).unwrap();
 assert!((x.dot(&x) - 1.0).abs() < 1e-12);
 #+end_src
 
-First-order steps retract the taken increment. Quasi-Newton
-directions are projected into the tangent, then retracted by the
-accept rule.
+On a curved kind a step projects its increment onto the tangent space.
+The step is capped there and then retracted.
+The objective sees only retracted points.
+A trial that the box would move is refused before any oracle call.
+Here ~P~ is the projection of the kind onto the tangent space.
+Newton-CG and Newton-PCG solve the model ~P H P + (I - P)~.
+Dogleg solves the model ~Z^T H Z~ with the gradient ~Z^T g~, for an orthonormal basis ~Z~ of the tangent space, and maps its point back through ~Z~.
+Its Newton and Cauchy points are then tangent, and the trust radius bounds the step that is retracted.
+On the sphere dogleg writes the same model in ambient form, ~P^T H P + (I - P)^T (I - P)~ with ~P = I - x x^T~.
+Where ~P~ is an orthogonal projection, the dogleg model equals ~P H P + (I - P)~ on the tangent space, so dogleg and Newton-CG/PCG solve one model.
+That is so on every curved kind but the three multinomial kinds.
+Their Fisher projection is oblique, and there the two models differ.
+A ~fire2~ session applies ~P~ to its velocity.
+That projection is at each new point.
+A refused trial under ~Method::Fire~ returns ~Error::OffManifold~.
+So does a refused L-BFGS trial under ~Accept::None~.
+Under ~Accept::Energy~ and ~Accept::Nonmonotone~, L-BFGS on the sphere and on Stiefel searches on the set.
+On the other curved kinds the L-BFGS line search runs in ambient space.
+Its Wolfe probes evaluate ~x + a d~ off the set.
+The step is retracted once, after the search.
+Flat kinds keep the old order of retraction, cap and box clip.
 
 ** C
 
