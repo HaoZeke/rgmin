@@ -300,7 +300,7 @@ pub(crate) fn side_at(side: Option<&[f64]>, k: usize) -> Option<f64> {
 
 fn column_bounds(k: usize, x: ArrayView1<f64>, opts: &HighsStep) -> (f64, f64) {
     let mut lo = opts.trust.map(|t| -t).unwrap_or(f64::NEG_INFINITY);
-    let mut hi = opts.trust.map(|t| t).unwrap_or(f64::INFINITY);
+    let mut hi = opts.trust.unwrap_or(f64::INFINITY);
     if let Some(b0) = side_at(opts.lo.as_deref(), k) {
         lo = lo.max(b0 - x[k]);
     }

@@ -655,7 +655,7 @@ fn build_csr(
     for (i, diag_i) in diag.iter().enumerate() {
         trips.push((i, i, *diag_i));
     }
-    trips.sort_unstable_by(|p, q| (p.0, p.1).cmp(&(q.0, q.1)));
+    trips.sort_unstable_by_key(|p| (p.0, p.1));
     let mut row_ptr = Vec::with_capacity(n + 1);
     let mut col_idx = Vec::with_capacity(trips.len());
     let mut val = Vec::with_capacity(trips.len());
