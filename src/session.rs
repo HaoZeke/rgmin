@@ -2384,7 +2384,13 @@ impl Solver {
                 };
                 let moved = free.is_none_or(|free| trial != free);
                 if matches!(state.kind, FireKind::V2) && state.dt > 0.0 && moved {
-                    state.vel = (&trial - &forward_start) / state.dt;
+                    let mut secant = (&trial - &forward_start) / state.dt;
+                    // The secant of a curved step has a normal part at the
+                    // trial, of order |trial - x| / 2 relative.
+                    if curved {
+                        manifold.project_in_place(&trial, &mut secant);
+                    }
+                    state.vel = secant;
                 }
                 let ev = obj.value_and_gradient(trial.view());
                 if !finite(ev.0, ev.1.view()) {
