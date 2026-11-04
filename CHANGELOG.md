@@ -64,6 +64,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `benchmarks/minimize.py` is an airspeed velocity (asv) suite that times one `rgmin_minimize` call on a convex quadratic in 16 and 64 dimensions.
+  `snakemake -c 1` calibrates an upper bound for each benchmark from repeated runs of `develop`.
+  `snakemake -c 1 pr_gate` exits non-zero when a benchmark is slower than that bound, and `benchflow/README.md` describes the workflow.
 - Opt-in FIRE 2.0 parameter set and accelerated bias-corrected (ABC) FIRE on `fire2` sessions.
   `Solver::set_fire_preset(FirePreset::Guenole2020)` takes Guenole et al. 2020 Table 1 and keeps `dt` when a shrink would pass `dt_min` (Algorithm 2).
   `Solver::set_fire_abc` divides the mixed velocity by `1 - (1 - alpha)^(N+1)` (Echeverri Restrepo and Andric, Comput. Mater. Sci. 218, 111978 (2023)), as ASE `FIRE2(use_abc=True)` does.
