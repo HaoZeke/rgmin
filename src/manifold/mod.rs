@@ -266,6 +266,46 @@ impl ManifoldKind {
         Self::CenteredMatrix { m, n, rows }
     }
 
+    /// [`Manifold::project`] written back into `v`. The sphere does it
+    /// without allocating, with the arithmetic of `Sphere::project`.
+    pub(crate) fn project_in_place(self, x: &Array1<f64>, v: &mut Array1<f64>) {
+        if self == Self::Sphere {
+            let s: f64 = x.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
+            v.zip_mut_with(x, |vi, &xi| *vi -= s * xi);
+        } else {
+            *v = self.project(x, v);
+        }
+    }
+
+    /// `true` when the retraction keeps a straight step on the set, so a
+    /// chord can be capped and clipped after it. A curved kind caps the
+    /// tangent step before the retraction instead.
+    pub(crate) fn is_flat(self) -> bool {
+        match self {
+            Self::Euclidean
+            | Self::RigidQuotient
+            | Self::MwRigid
+            | Self::Symmetric
+            | Self::SkewSymmetric
+            | Self::EuclideanComplex { .. }
+            | Self::CenteredMatrix { .. }
+            | Self::Constant { .. } => true,
+            Self::Sphere
+            | Self::So3
+            | Self::Stiefel
+            | Self::Se3
+            | Self::Oblique { .. }
+            | Self::Multinomial
+            | Self::StiefelP { .. }
+            | Self::Spd
+            | Self::ComplexCircle { .. }
+            | Self::MultinomialDoublyStochastic { .. }
+            | Self::MultinomialSymmetric { .. }
+            | Self::SphereComplex { .. }
+            | Self::Positive { .. } => false,
+        }
+    }
+
     /// C ABI / INI token.
     pub fn as_str(self) -> &'static str {
         match self {
