@@ -181,10 +181,10 @@ impl Lbfgs {
 
     pub(crate) fn search_direction(&self, x: ArrayView1<f64>, g: ArrayView1<f64>) -> Array1<f64> {
         #[cfg(feature = "highs")]
-        if self.highs.is_some() {
-            if let Ok(d) = self.highs_step(x, g) {
-                return d;
-            }
+        if self.highs.is_some()
+            && let Ok(d) = self.highs_step(x, g)
+        {
+            return d;
         }
         let _ = x;
         self.direction(g)
@@ -362,12 +362,12 @@ impl Lbfgs {
         let sn = s.iter().map(|v| v * v).sum::<f64>().sqrt();
         let yn = y.iter().map(|v| v * v).sum::<f64>().sqrt();
         let ss = sn * sn;
-        if self.cautious_eps > 0.0 {
-            if let Some(g) = gnorm {
-                let thresh = self.cautious_eps * ss * g.max(1.0e-30).powf(self.cautious_alpha);
-                if sy < thresh {
-                    return;
-                }
+        if self.cautious_eps > 0.0
+            && let Some(g) = gnorm
+        {
+            let thresh = self.cautious_eps * ss * g.max(1.0e-30).powf(self.cautious_alpha);
+            if sy < thresh {
+                return;
             }
         }
         // Relative curvature: a tiny accepted trust step makes the

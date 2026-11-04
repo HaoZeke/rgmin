@@ -220,10 +220,10 @@ where
         }
         Accept::Energy | Accept::Nonmonotone => {
             let mut ref_e = value;
-            if accept == Accept::Nonmonotone {
-                if let Some(m) = e_hist.iter().copied().reduce(f64::max) {
-                    ref_e = m;
-                }
+            if accept == Accept::Nonmonotone
+                && let Some(m) = e_hist.iter().copied().reduce(f64::max)
+            {
+                ref_e = m;
             }
             let mut alpha = 1.0;
             for _ in 0..10 {
