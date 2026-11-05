@@ -9,8 +9,11 @@
 //! analytic, and is valid while displacements stay far below the
 //! nearest-neighbour distance.
 //!
-//! Two methods run on each rayon pool: L-BFGS (m = 10, strong Wolfe) and
-//! FIRE 2.0 with the Guenole 2020 preset. The force evaluation and the
+//! Two methods run on each rayon pool. L-BFGS (m = 10) takes the
+//! two-loop direction and the strong Wolfe search (c1 = 1e-4, c2 = 0.9,
+//! at most 40 trials) under `Accept::Energy`, with no per-atom cap.
+//! FIRE 2.0 with the Guenole 2020 preset has no line search; a 0.2
+//! Angstrom per-atom cap scales each step. The force evaluation and the
 //! `par` vector seam both run on the pool. Every run starts from the same
 //! geometry and stops at a max per-atom force below 0.01 eV/Angstrom.
 //!
@@ -18,18 +21,23 @@
 //! `max_dev` the largest coordinate difference from the first 1-thread
 //! run over all repeats, `efficiency` the speedup over 1 thread divided
 //! by the thread count. The harness is CPU only; the `gpu` column stays
-//! empty. It exits non-zero when a run does not converge.
+//! empty. After the timed L-BFGS repeats on each pool, one untimed solve
+//! counts the steps that ran the line search, seen as a second oracle
+//! call at the step's start, and the accepted steps that meet the strong
+//! Wolfe conditions, and reports both on stderr. It exits non-zero when a
+//! run does not converge or an L-BFGS step fails either count.
 //!
 //! `cargo run --release --features par --example strong_scale -- \
 //!   --cells 20 --repeats 5 [--max-threads T] [--hardware NAME]`
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use ndarray::{Array1, ArrayView1};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
-use rgmin::{Control, FireKind, FirePreset, LineSearch, Method, Oracle, Solver, StopNorm};
+use rgmin::{Accept, Control, FireKind, FirePreset, LineSearch, Method, Oracle, Solver, StopNorm};
 
 /// Pt Morse parameters of tests/newton_cg_morse.rs: eV, 1/Angstrom, Angstrom.
 const D0: f64 = 0.7102;
@@ -42,6 +50,10 @@ const SEED: u64 = 0;
 
 const FMAX: f64 = 0.01;
 const BUDGET: usize = 2000;
+
+/// Strong Wolfe constants of the L-BFGS search, the `Solver::new` default.
+const C1: f64 = 1e-4;
+const C2: f64 = 0.9;
 
 /// Half-lattice offsets of the 12 FCC nearest neighbours.
 const NN: [[i64; 3]; 12] = [
@@ -136,9 +148,25 @@ struct Run {
     steps: usize,
     fmax: f64,
     x: Array1<f64>,
+    /// Steps that ran the line search; counted only on an audited run.
+    searched: usize,
+    /// Accepted steps that meet the strong Wolfe conditions; counted only
+    /// on an audited run.
+    wolfe: usize,
 }
 
-fn relax(sys: &System, name: &str) -> Run {
+/// Strong Wolfe conditions (Nocedal-Wright 3.7) for the accepted step `s`
+/// from `(f0, g0)` to `(f1, g1)`.
+fn strong_wolfe(
+    s: &Array1<f64>,
+    (f0, g0): (f64, &Array1<f64>),
+    (f1, g1): (f64, &Array1<f64>),
+) -> bool {
+    let (d0, d1) = (g0.dot(s), g1.dot(s));
+    d0 < 0.0 && f1 <= f0 + C1 * d0 && d1.abs() <= -C2 * d0
+}
+
+fn relax(sys: &System, name: &str, audit: bool) -> Run {
     let n = sys.x0.len();
     let (method, istep) = match name {
         "lbfgs" => (Method::Lbfgs { memory: 10 }, 0.2),
@@ -151,28 +179,59 @@ fn relax(sys: &System, name: &str) -> Run {
         maxmove: None,
     };
     let calls = AtomicUsize::new(0);
+    let origin = Mutex::new(Array1::zeros(0));
+    let at_origin = AtomicUsize::new(0);
     let obj = Oracle::unbounded(n, |x: ArrayView1<f64>| {
         calls.fetch_add(1, Ordering::Relaxed);
+        if audit && *origin.lock().expect("origin") == x {
+            at_origin.fetch_add(1, Ordering::Relaxed);
+        }
         morse(sys, x)
     });
     let start = Instant::now();
     let mut solver = Solver::new(method, control, n);
-    solver.set_atom_maxmove(0.2);
     solver.set_stop_norm(StopNorm::MaxAtom);
     match name {
-        "lbfgs" => solver.set_linesearch(LineSearch::Wolfe {
-            c1: 1e-4,
-            c2: 0.9,
-            maxiter: 40,
-        }),
-        _ => solver
-            .set_fire_preset(FirePreset::Guenole2020)
-            .expect("fire2 preset"),
+        // A per-atom cap selects the capped geometry step and Accept::None
+        // a single clipped trial; neither reads the line search.
+        "lbfgs" => {
+            solver.set_accept(Accept::Energy);
+            solver.set_linesearch(LineSearch::Wolfe {
+                c1: C1,
+                c2: C2,
+                maxiter: 40,
+            });
+        }
+        _ => {
+            solver.set_atom_maxmove(0.2);
+            solver
+                .set_fire_preset(FirePreset::Guenole2020)
+                .expect("fire2 preset");
+        }
     }
     let mut x = sys.x0.clone();
+    let mut last = audit.then(|| morse(sys, x.view()));
     let (mut steps, mut fmax) = (0, f64::INFINITY);
+    let (mut searched, mut wolfe) = (0, 0);
     while steps < BUDGET && fmax >= FMAX {
-        fmax = solver.step(&obj, &mut x).expect("step").grad_norm;
+        if audit {
+            *origin.lock().expect("origin") = x.clone();
+            at_origin.store(0, Ordering::Relaxed);
+        }
+        let report = solver.step(&obj, &mut x).expect("step");
+        fmax = report.grad_norm;
+        if let Some((f0, g0)) = last.take() {
+            // The session evaluates the start of its first step itself.
+            // LineSearch::search takes no start value, so it evaluates the
+            // start of every step again; the capped geometry step and the
+            // Accept::None trial reuse the value the session holds.
+            let own = usize::from(steps == 0);
+            searched += usize::from(at_origin.load(Ordering::Relaxed) > own);
+            let x0 = std::mem::take(&mut *origin.lock().expect("origin"));
+            let g1 = report.grad.expect("session gradient");
+            wolfe += usize::from(strong_wolfe(&(&x - &x0), (f0, &g0), (report.value, &g1)));
+            last = Some((report.value, g1));
+        }
         steps += 1;
     }
     Run {
@@ -181,6 +240,8 @@ fn relax(sys: &System, name: &str) -> Run {
         steps,
         fmax,
         x,
+        searched,
+        wolfe,
     }
 }
 
@@ -234,7 +295,7 @@ fn main() {
     println!(
         "hardware,cores,gpu,method,threads,n,repeats,wall_s,force_calls,iterations,grad_norm,max_dev,speedup,efficiency"
     );
-    let mut ok = true;
+    let (mut ok, mut wolfe) = (true, true);
     for name in ["lbfgs", "fire2"] {
         let mut base: Option<(f64, Array1<f64>)> = None;
         for &t in &threads {
@@ -243,7 +304,7 @@ fn main() {
                 .build()
                 .expect("thread pool");
             let runs: Vec<Run> = (0..repeats)
-                .map(|_| pool.install(|| relax(&sys, name)))
+                .map(|_| pool.install(|| relax(&sys, name, false)))
                 .collect();
             let mut walls: Vec<f64> = runs.iter().map(|r| r.wall).collect();
             walls.sort_by(f64::total_cmp);
@@ -265,10 +326,26 @@ fn main() {
                 r.fmax,
                 speedup / t as f64,
             );
+            if name == "lbfgs" {
+                let audit = pool.install(|| relax(&sys, name, true));
+                ok &= audit.fmax < FMAX;
+                wolfe &= audit.searched == audit.steps && audit.wolfe == audit.steps;
+                eprintln!(
+                    "strong_scale: lbfgs on {t} threads: {} steps, {} searched, {} meet strong Wolfe (c1 = {C1:e}, c2 = {C2}), {} force calls",
+                    audit.steps, audit.searched, audit.wolfe, audit.calls,
+                );
+            }
         }
     }
     if !ok {
         eprintln!("strong_scale: a run did not reach fmax < {FMAX} eV/Angstrom");
+    }
+    if !wolfe {
+        eprintln!(
+            "strong_scale: an L-BFGS step ran no line search or missed the strong Wolfe conditions"
+        );
+    }
+    if !(ok && wolfe) {
         std::process::exit(1);
     }
 }

@@ -21,8 +21,15 @@ Each atom has one Morse bond to each of its 12 nearest neighbours,
 with the Pt parameters of the Morse tutorial.
 Every bond sits at the Morse minimum in the ideal lattice.
 Two methods run on every pool.
-The first is ~lbfgs~ with m = 10 and the strong Wolfe search.
+The first is ~lbfgs~ with m = 10.
+Each step takes the two-loop direction and the strong Wolfe search,
+with c1 = 1e-4, c2 = 0.9 and at most 40 trials.
+The session sets ~Accept::Energy~ and no per-atom cap.
+A per-atom cap would select the capped geometry step and
+~Accept::None~ a single clipped trial, and neither runs the line
+search.
 The second is ~fire2~ with ~FirePreset::Guenole2020~.
+It has no line search; a 0.2 Angstrom per-atom cap scales each step.
 Each run stops when the largest per-atom force drops below
 0.01 eV/Angstrom.
 
@@ -36,4 +43,14 @@ It is nonzero only where a parallel reduction changes the last bits.
 ~efficiency~ is the speedup over 1 thread divided by the thread count.
 The harness is CPU only, so the ~gpu~ column stays empty.
 ~--max-threads~ caps the thread counts.
-The example exits non-zero when a run does not converge.
+
+After the timed ~lbfgs~ repeats on each pool, one untimed solve
+checks the line search.
+It counts the steps that call the oracle again at their start, which
+~LineSearch::search~ does and the capped geometry step and the
+~Accept::None~ trial do not.
+It also counts the accepted steps that meet the strong Wolfe
+conditions.
+Both counts go to stderr.
+The example exits non-zero when a run does not converge or an ~lbfgs~
+step fails either count.
