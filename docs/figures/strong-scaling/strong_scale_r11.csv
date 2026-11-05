@@ -1,0 +1,9 @@
+hardware,cores,gpu,method,threads,n,repeats,wall_s,force_calls,iterations,grad_norm,max_dev,speedup,efficiency
+"Intel(R) Xeon(R) Processor",8,,lbfgs,1,96000,11,0.493291,57,13,7.574187e-3,0.000e0,1.000,1.000
+"Intel(R) Xeon(R) Processor",8,,lbfgs,2,96000,11,0.274273,57,13,7.574187e-3,2.842e-14,1.799,0.899
+"Intel(R) Xeon(R) Processor",8,,lbfgs,4,96000,11,0.165109,57,13,7.574187e-3,2.842e-14,2.988,0.747
+"Intel(R) Xeon(R) Processor",8,,lbfgs,8,96000,11,0.114306,57,13,7.574187e-3,2.842e-14,4.316,0.539
+"Intel(R) Xeon(R) Processor",8,,fire2,1,96000,11,0.282545,29,25,9.309719e-3,0.000e0,1.000,1.000
+"Intel(R) Xeon(R) Processor",8,,fire2,2,96000,11,0.173097,29,25,9.309719e-3,2.842e-14,1.632,0.816
+"Intel(R) Xeon(R) Processor",8,,fire2,4,96000,11,0.118298,29,25,9.309719e-3,2.842e-14,2.388,0.597
+"Intel(R) Xeon(R) Processor",8,,fire2,8,96000,11,0.095038,29,25,9.309719e-3,2.842e-14,2.973,0.372

@@ -1,0 +1,4 @@
+strong_scale: lbfgs on 1 threads: 13 steps, 13 searched, 13 meet strong Wolfe (c1 = 1e-4, c2 = 0.9), 57 force calls
+strong_scale: lbfgs on 2 threads: 13 steps, 13 searched, 13 meet strong Wolfe (c1 = 1e-4, c2 = 0.9), 57 force calls
+strong_scale: lbfgs on 4 threads: 13 steps, 13 searched, 13 meet strong Wolfe (c1 = 1e-4, c2 = 0.9), 57 force calls
+strong_scale: lbfgs on 8 threads: 13 steps, 13 searched, 13 meet strong Wolfe (c1 = 1e-4, c2 = 0.9), 57 force calls

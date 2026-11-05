@@ -53,3 +53,7 @@ conditions.
 Both counts go to stderr.
 The example exits non-zero when a run does not converge or an ``lbfgs``
 step fails either count.
+
+``docs/figures/strong-scaling/strong_scale_r11.csv`` is one run with
+``--cells 20 --repeats 11`` on an 8-core Xeon KVM guest.
+``strong_scale_r11.log`` beside it holds the stderr of that run.
