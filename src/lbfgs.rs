@@ -57,6 +57,7 @@ struct Pair {
 pub(crate) struct Curvature {
     memory: Vec<Pair>,
     last: (f64, f64, bool),
+    stored: bool,
 }
 
 /// L-BFGS whose curvature pairs survive between calls.
@@ -99,6 +100,8 @@ pub struct Lbfgs {
     pub(crate) last_yy: f64,
     /// [`Self::last_sy`] and [`Self::last_yy`] belong to a real step.
     pub(crate) have_curvature: bool,
+    /// The latest [`Self::push_pair`] stored its pair.
+    stored: bool,
 }
 
 impl Default for Lbfgs {
@@ -127,6 +130,7 @@ impl Lbfgs {
             last_sy: 0.0,
             last_yy: 0.0,
             have_curvature: false,
+            stored: false,
         }
     }
 
@@ -141,6 +145,7 @@ impl Lbfgs {
     /// the retained pairs describe a Hessian that no longer applies.
     pub fn forget(&mut self) {
         self.memory.clear();
+        self.stored = false;
         self.last_sy = 0.0;
         self.last_yy = 0.0;
         self.have_curvature = false;
@@ -151,6 +156,7 @@ impl Lbfgs {
         Curvature {
             memory: self.memory.clone(),
             last: (self.last_sy, self.last_yy, self.have_curvature),
+            stored: self.stored,
         }
     }
 
@@ -158,6 +164,7 @@ impl Lbfgs {
     pub(crate) fn restore(&mut self, saved: Curvature) {
         self.memory = saved.memory;
         (self.last_sy, self.last_yy, self.have_curvature) = saved.last;
+        self.stored = saved.stored;
     }
 
     /// Pairs currently held.
@@ -342,22 +349,59 @@ impl Lbfgs {
         F: FnMut(&Array1<f64>) -> Array1<f64>,
     {
         let pairs = std::mem::take(&mut self.memory);
+        let stored = self.stored;
+        let mut kept = false;
         for pair in pairs {
-            self.push_pair(map(&pair.s), map(&pair.y), None);
+            kept = self.push_pair(map(&pair.s), map(&pair.y), None);
         }
+        // A newest pair the map dropped is no longer there to replace.
+        self.stored = stored && kept;
     }
 
-    pub(crate) fn push(&mut self, s: Array1<f64>, y: Array1<f64>) {
-        self.push_pair(s, y, None);
+    /// [`Self::transport`] with a map that can fail. Every pair is mapped
+    /// before any is replaced, so a failure leaves the memory as it was.
+    pub(crate) fn try_transport<F, E>(&mut self, mut map: F) -> std::result::Result<(), E>
+    where
+        F: FnMut(&Array1<f64>) -> std::result::Result<Array1<f64>, E>,
+    {
+        let moved = self
+            .memory
+            .iter()
+            .map(|pair| Ok((map(&pair.s)?, map(&pair.y)?)))
+            .collect::<std::result::Result<Vec<_>, E>>()?;
+        let stored = self.stored;
+        self.memory.clear();
+        let mut kept = false;
+        for (s, y) in moved {
+            kept = self.push_pair(s, y, None);
+        }
+        self.stored = stored && kept;
+        Ok(())
     }
 
-    /// Drop the newest pair, then push. Used after a manifold retract.
+    /// Stored pairs, oldest first.
+    #[cfg(test)]
+    pub(crate) fn pairs(&self) -> impl Iterator<Item = (&Array1<f64>, &Array1<f64>)> {
+        self.memory.iter().map(|p| (&p.s, &p.y))
+    }
+
+    pub(crate) fn push(&mut self, s: Array1<f64>, y: Array1<f64>) -> bool {
+        self.push_pair(s, y, None)
+    }
+
+    /// Replace the newest pair after a manifold retract. Only a pair the
+    /// latest push stored is popped; a dropped pair leaves the previous
+    /// one in place.
     pub(crate) fn replace_newest(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) {
-        let _ = self.memory.pop();
+        if self.stored {
+            let _ = self.memory.pop();
+        }
         self.push_pair(s, y, gnorm);
     }
 
-    pub(crate) fn push_pair(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) {
+    /// Store `(s, y)` unless the cautious or relative-curvature test
+    /// drops it. Returns whether it was stored.
+    pub(crate) fn push_pair(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) -> bool {
         let sy = s.dot(&y);
         let sn = s.iter().map(|v| v * v).sum::<f64>().sqrt();
         let yn = y.iter().map(|v| v * v).sum::<f64>().sqrt();
@@ -367,13 +411,15 @@ impl Lbfgs {
         {
             let thresh = self.cautious_eps * ss * g.max(1.0e-30).powf(self.cautious_alpha);
             if sy < thresh {
-                return;
+                self.stored = false;
+                return false;
             }
         }
         // Relative curvature: a tiny accepted trust step makes the
         // compact Hessian indefinite and HiGHS's QP solver does not return.
         if !sy.is_finite() || sy <= 1e-8 * sn * yn {
-            return;
+            self.stored = false;
+            return false;
         }
         self.memory.push(Pair {
             s,
@@ -381,6 +427,8 @@ impl Lbfgs {
             rho: 1.0 / sy,
         });
         self.trim();
+        self.stored = true;
+        true
     }
 
     fn gnorm(&self, g: &Array1<f64>) -> f64 {
@@ -832,5 +880,69 @@ impl Lbfgs {
             self.push(&*pos - &old, &*grad - &gold);
         }
         *istep = next_istep(lsstep, control);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ndarray::{Array1, array};
+
+    use super::Lbfgs;
+
+    fn held(lbfgs: &Lbfgs) -> Vec<(Array1<f64>, Array1<f64>)> {
+        lbfgs.pairs().map(|(s, y)| (s.clone(), y.clone())).collect()
+    }
+
+    /// A transport that drops the newest pair leaves no pair of the latest
+    /// push, so the next replacement keeps the older pair.
+    #[test]
+    fn a_transport_that_drops_the_newest_pair_keeps_the_older_one() {
+        let mut lbfgs = Lbfgs::with_capacity(4);
+        assert!(lbfgs.push(array![1.0, 0.0], array![2.0, 0.0]));
+        assert!(lbfgs.push(array![1.0, 1.0], array![-1.0, 3.0]));
+        // On the first coordinate alone the newer pair has s.y = -1.
+        lbfgs.transport(|v| array![v[0], 0.0]);
+        let older = (array![1.0, 0.0], array![2.0, 0.0]);
+        assert_eq!(held(&lbfgs), vec![older.clone()]);
+        lbfgs.replace_newest(array![0.0, 1.0], array![0.0, 3.0], None);
+        assert_eq!(
+            held(&lbfgs),
+            vec![older, (array![0.0, 1.0], array![0.0, 3.0])]
+        );
+    }
+
+    /// A map that fails on the second pair, after the first has moved,
+    /// leaves both pairs as they were.
+    #[test]
+    fn a_failed_transport_keeps_every_pair() {
+        let mut lbfgs = Lbfgs::with_capacity(4);
+        assert!(lbfgs.push(array![1.0, 0.0], array![2.0, 0.0]));
+        assert!(lbfgs.push(array![0.0, 1.0], array![0.0, 3.0]));
+        let before = held(&lbfgs);
+        let mut calls = 0;
+        let moved = lbfgs.try_transport(|v| {
+            calls += 1;
+            if calls < 3 { Ok(v * 0.5) } else { Err(calls) }
+        });
+        assert_eq!(moved, Err(3));
+        assert_eq!(held(&lbfgs), before);
+        assert!(lbfgs.stored);
+    }
+    /// A fallible transport that succeeds but drops the newest pair also
+    /// leaves the older pair to the next replacement.
+    #[test]
+    fn a_fallible_transport_that_drops_the_newest_pair_keeps_the_older_one() {
+        let mut lbfgs = Lbfgs::with_capacity(4);
+        assert!(lbfgs.push(array![1.0, 0.0], array![2.0, 0.0]));
+        assert!(lbfgs.push(array![1.0, 1.0], array![-1.0, 3.0]));
+        let moved: Result<(), ()> = lbfgs.try_transport(|v| Ok(array![v[0], 0.0]));
+        assert_eq!(moved, Ok(()));
+        let older = (array![1.0, 0.0], array![2.0, 0.0]);
+        assert_eq!(held(&lbfgs), vec![older.clone()]);
+        lbfgs.replace_newest(array![0.0, 1.0], array![0.0, 3.0], None);
+        assert_eq!(
+            held(&lbfgs),
+            vec![older, (array![0.0, 1.0], array![0.0, 3.0])]
+        );
     }
 }
