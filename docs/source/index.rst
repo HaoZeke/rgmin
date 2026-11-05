@@ -86,6 +86,7 @@ It also covers the features of each route, the C library and a checkout.
    explanation/quasi-newton
    explanation/trust-region
    explanation/scg
+   explanation/step-bounds
    explanation/randomized
 
 .. toctree::
