@@ -7,12 +7,17 @@ use ndarray::ArrayView1;
 pub struct Control {
     /// Maximum CG iterations.
     pub maxiter: usize,
-    /// Stop when `||g||_2 < gtol`.
+    /// Stop when the gradient norm is below `gtol`: [`Self::stop_norm`]
+    /// in a session, `||g||_2` elsewhere.
     pub gtol: f64,
     /// Initial line-search step guess.
     pub istep: f64,
     /// Optional Euclidean cap on a proposed step (xtsci `maxmove`).
     pub maxmove: Option<f64>,
+    /// Norm a [`crate::Solver`] built from this control compares to
+    /// [`Self::gtol`]. [`crate::Solver::set_stop_norm`] replaces it.
+    /// Drivers that run no session keep `||g||_2`.
+    pub stop_norm: StopNorm,
 }
 
 impl Default for Control {
@@ -22,6 +27,7 @@ impl Default for Control {
             gtol: 1e-5,
             istep: 1.0,
             maxmove: None,
+            stop_norm: StopNorm::Two,
         }
     }
 }
@@ -38,15 +44,21 @@ pub enum StopNorm {
     MaxAtom,
     /// Largest absolute component: eOn `max_component`, LAMMPS `inf`.
     Inf,
+    /// `||g||_2 / sqrt(n)`, zero for an empty `g`: eOn `rms`.
+    Rms,
 }
 
 impl StopNorm {
     /// This norm of `g`. A non-finite entry gives infinity under
-    /// [`Self::MaxAtom`] and [`Self::Inf`], so no tolerance accepts it.
+    /// [`Self::MaxAtom`], [`Self::Inf`] and [`Self::Rms`], so no
+    /// tolerance accepts it.
     pub fn of(self, g: ArrayView1<f64>) -> f64 {
         match self {
             Self::Two => crate::vecops::nrm2(g),
             Self::Inf => crate::vecops::nrminf(g),
+            Self::Rms if g.is_empty() => 0.0,
+            Self::Rms if crate::vecops::nrminf(g).is_infinite() => f64::INFINITY,
+            Self::Rms => crate::vecops::nrm2(g) / (g.len() as f64).sqrt(),
             Self::MaxAtom => {
                 let mut worst = 0.0_f64;
                 let mut i = 0;

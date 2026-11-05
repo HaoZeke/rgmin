@@ -74,7 +74,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 31;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 32;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -965,6 +965,7 @@ pub unsafe extern "C" fn rgmin_minimize(
             } else {
                 None
             },
+            stop_norm: StopNorm::Two,
         };
         match minimize_method(
             &obj,
@@ -1051,6 +1052,7 @@ pub unsafe extern "C" fn rgmin_minimize_scg(
             } else {
                 None
             },
+            stop_norm: StopNorm::Two,
         };
         let (scg, conjugacy) = if params.is_null() {
             (ScgParams::default(), Conjugacy::PolakRibiere)
@@ -1176,6 +1178,7 @@ pub unsafe extern "C" fn rgmin_minimize_hess(
             } else {
                 None
             },
+            stop_norm: StopNorm::Two,
         };
         let rust_method = method_from_c(method, c.memory);
         match minimize_method_hess(
@@ -1271,6 +1274,7 @@ pub unsafe extern "C" fn rgmin_minimize_hvp(
             } else {
                 None
             },
+            stop_norm: StopNorm::Two,
         };
         match minimize_method_hvp(
             &obj,
@@ -1381,6 +1385,7 @@ pub unsafe extern "C" fn rgmin_minimize_eindir(
             } else {
                 None
             },
+            stop_norm: StopNorm::Two,
         };
         match minimize_method(
             &obj,
@@ -1452,6 +1457,7 @@ pub unsafe extern "C" fn rgmin_solver_create(
         } else {
             None
         },
+        stop_norm: StopNorm::Two,
     };
     let mut solver = Solver::new(method_from_c(method, c.memory), control, dim).with_gtol(c.gtol);
     solver.set_accept(Accept::Energy);
@@ -1772,6 +1778,8 @@ pub enum rgmin_stop_norm_t {
     RGMIN_STOP_NORM_MAX_ATOM = 1,
     /// Largest absolute component: eOn `max_component`, LAMMPS `inf`.
     RGMIN_STOP_NORM_INF = 2,
+    /// `||g||_2 / sqrt(n)`: eOn `rms`. ABI minor 32.
+    RGMIN_STOP_NORM_RMS = 3,
 }
 
 /// Select the session stop norm. ABI minor 29. Returns 0, or 1 on a
@@ -1789,6 +1797,7 @@ pub unsafe extern "C" fn rgmin_solver_set_stop_norm(solver: *mut rgmin_solver_t,
         0 => StopNorm::Two,
         1 => StopNorm::MaxAtom,
         2 => StopNorm::Inf,
+        3 => StopNorm::Rms,
         _ => {
             set_last_error("rgmin_solver_set_stop_norm: unknown norm");
             return 1;

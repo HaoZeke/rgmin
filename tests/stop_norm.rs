@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ndarray::{Array1, ArrayView1, array};
-use rgmin::{Control, FireKind, Method, Oracle, Solver, StopNorm};
+use rgmin::{Control, FireKind, LineSearch, Method, Oracle, Solver, StopNorm};
 
 fn lj_cluster(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
     let n = x.len() / 3;
@@ -51,6 +51,7 @@ fn session(method: Method, gtol: f64, norm: Option<StopNorm>) -> Solver {
         gtol,
         istep: 0.1,
         maxmove: None,
+        ..Default::default()
     };
     let mut s = Solver::new(method, control, 21);
     s.set_atom_maxmove(0.2);
@@ -86,10 +87,16 @@ fn stop_norms_match_the_reference_definitions() {
     assert_eq!(StopNorm::Two.of(g.view()), 33.0_f64.sqrt());
     assert_eq!(StopNorm::MaxAtom.of(g.view()), 5.0);
     assert_eq!(StopNorm::Inf.of(g.view()), 4.0);
+    assert_eq!(
+        StopNorm::Rms.of(g.view()),
+        33.0_f64.sqrt() / 10.0_f64.sqrt()
+    );
+    assert_eq!(StopNorm::Rms.of(Array1::zeros(0).view()), 0.0);
     assert_eq!(StopNorm::default(), StopNorm::Two);
     let bad = array![0.0, f64::NAN, 0.0, 9.0, 0.0, 0.0];
     assert_eq!(StopNorm::MaxAtom.of(bad.view()), f64::INFINITY);
     assert_eq!(StopNorm::Inf.of(bad.view()), f64::INFINITY);
+    assert_eq!(StopNorm::Rms.of(bad.view()), f64::INFINITY);
 }
 
 /// Four atoms each at force 0.9: max-atom 0.9, two-norm 1.8. At
@@ -110,6 +117,7 @@ fn max_atom_session_stops_where_the_two_norm_session_moves() {
                 gtol: 1.0,
                 istep: 0.1,
                 maxmove: None,
+                ..Default::default()
             };
             let mut s = Solver::new(method(), control, 12);
             s.set_stop_norm(norm);
@@ -130,7 +138,12 @@ fn max_atom_session_stops_where_the_two_norm_session_moves() {
 #[test]
 fn report_carries_the_gradient_its_norm_measures() {
     for method in [lbfgs, fire] {
-        for norm in [None, Some(StopNorm::MaxAtom), Some(StopNorm::Inf)] {
+        for norm in [
+            None,
+            Some(StopNorm::MaxAtom),
+            Some(StopNorm::Inf),
+            Some(StopNorm::Rms),
+        ] {
             let mut s = session(method(), 1e-8, norm);
             let obj = Oracle::unbounded(21, lj_cluster);
             let mut x = lj7_start();
@@ -139,6 +152,7 @@ fn report_carries_the_gradient_its_norm_measures() {
                 let grad = rep.grad.expect("session report has a gradient");
                 assert_eq!(grad, lj_cluster(rep.coords.view()).1);
                 assert_eq!(rep.grad_norm, norm.unwrap_or_default().of(grad.view()));
+                assert_eq!(rep.stop_norm, norm.unwrap_or_default());
             }
         }
     }
@@ -172,4 +186,88 @@ fn max_atom_run_is_a_prefix_of_the_two_norm_run() {
         }
         assert!(StopNorm::MaxAtom.of(lj_cluster(two.last().unwrap().view()).1.view()) < fmax);
     }
+}
+
+fn from_control(method: Method, gtol: f64, norm: StopNorm) -> Solver {
+    let control = Control {
+        maxiter: 2000,
+        gtol,
+        istep: 0.1,
+        stop_norm: norm,
+        ..Default::default()
+    };
+    let mut s = Solver::new(method, control, 21);
+    s.set_atom_maxmove(0.2);
+    s
+}
+
+/// A session takes its norm from `Control`, and the setter replaces it.
+#[test]
+fn control_selects_the_session_norm() {
+    assert_eq!(Control::default().stop_norm, StopNorm::Two);
+    for norm in [
+        StopNorm::Two,
+        StopNorm::MaxAtom,
+        StopNorm::Inf,
+        StopNorm::Rms,
+    ] {
+        let mut s = from_control(lbfgs(), 1.0, norm);
+        assert_eq!(s.stop_norm(), norm);
+        s.set_stop_norm(StopNorm::Two);
+        assert_eq!(s.stop_norm(), StopNorm::Two);
+    }
+}
+
+/// Each selector set in `Control` stops LJ7 at a point the Euclidean
+/// session passes through without stopping: the run is a strict prefix
+/// of the two-norm run, its last report clears `gtol` in the selected
+/// norm, and the two-norm there is still at or above `gtol`.
+#[test]
+fn every_control_norm_stops_before_the_two_norm() {
+    let gtol = 0.01;
+    for method in [lbfgs, fire] {
+        let (two, _) = relax(from_control(method(), gtol, StopNorm::Two), gtol);
+        assert_eq!(two, relax(session(method(), gtol, None), gtol).0);
+        for norm in [StopNorm::MaxAtom, StopNorm::Inf, StopNorm::Rms] {
+            let (path, _) = relax(from_control(method(), gtol, norm), gtol);
+            assert!(path.len() < two.len(), "{norm:?}");
+            assert_eq!(path[..], two[..path.len()], "{norm:?}");
+            let g = lj_cluster(path.last().unwrap().view()).1;
+            assert!(norm.of(g.view()) < gtol, "{norm:?}");
+            assert!(StopNorm::Two.of(g.view()) >= gtol, "{norm:?}");
+            println!(
+                "{method:?} {norm:?}: {} of {} reports",
+                path.len(),
+                two.len(),
+                method = method()
+            );
+        }
+    }
+}
+
+/// `minimize_method` runs FIRE as a session, which takes the norm from
+/// `Control` and names it in the report. One-shot L-BFGS runs no session
+/// and reports the two-norm under the same `Control`.
+#[test]
+fn report_names_the_norm_of_grad_norm() {
+    let control = Control {
+        maxiter: 2000,
+        gtol: 0.01,
+        istep: 0.1,
+        maxmove: Some(0.2),
+        stop_norm: StopNorm::MaxAtom,
+    };
+    let obj = Oracle::unbounded(21, lj_cluster);
+    let rep =
+        rgmin::minimize_method(&obj, lj7_start(), &control, fire(), LineSearch::default()).unwrap();
+    let g = lj_cluster(rep.coords.view()).1;
+    assert_eq!(rep.stop_norm, StopNorm::MaxAtom);
+    assert_eq!(rep.grad_norm, StopNorm::MaxAtom.of(g.view()));
+    assert!(rep.grad_norm < control.gtol);
+    let rep =
+        rgmin::minimize_lbfgs(&obj, lj7_start(), &control, LineSearch::default(), 20).unwrap();
+    let g = lj_cluster(rep.coords.view()).1;
+    assert_eq!(rep.stop_norm, StopNorm::Two);
+    assert_eq!(rep.grad_norm, StopNorm::Two.of(g.view()));
+    assert!(rep.grad_norm < control.gtol);
 }
