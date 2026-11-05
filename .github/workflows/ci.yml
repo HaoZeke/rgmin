@@ -50,6 +50,17 @@ jobs:
       - run: cargo build --locked ${{ matrix.args }}
       - run: cargo test --locked ${{ matrix.args }}
 
+  strong-scale:
+    name: strong_scale smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --locked --features par --example strong_scale -- --cells 2 --repeats 1 --max-threads 2
+
   clippy:
     name: clippy (${{ matrix.toolchain }}, ${{ matrix.name }})
     runs-on: ubuntu-latest
