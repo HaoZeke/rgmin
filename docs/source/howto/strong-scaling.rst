@@ -1,0 +1,38 @@
+
+
+Measure CPU strong scaling
+--------------------------
+
+The ``strong_scale`` example holds one system fixed and reruns it on
+rayon pools of 1, 2, 4, ... threads up to the physical core count.
+It needs the opt-in ``par`` feature, which runs the length-n vector
+algebra on the pool.
+The force evaluation runs on the same pool.
+
+.. code:: bash
+
+    cargo run --release --features par --example strong_scale -- \
+      --cells 20 --repeats 5 > strong_scale.csv
+
+The system is a perturbed periodic FCC crystal of 4 L^3 atoms, with
+L set by ``--cells``.
+Each atom has one Morse bond to each of its 12 nearest neighbours,
+with the Pt parameters of the Morse tutorial.
+Every bond sits at the Morse minimum in the ideal lattice.
+Two methods run on every pool.
+The first is ``lbfgs`` with m = 10 and the strong Wolfe search.
+The second is ``fire2`` with ``FirePreset::Guenole2020``.
+Each run stops when the largest per-atom force drops below
+0.01 eV/Angstrom.
+
+The CSV has one row per method and thread count.
+``hardware`` is the CPU model name from ``/proc/cpuinfo``, or the value
+of ``--hardware``.
+``wall_s`` is the median wall time over the repeats.
+``max_dev`` is the largest coordinate difference from the first
+1-thread run.
+It is nonzero only where a parallel reduction changes the last bits.
+``efficiency`` is the speedup over 1 thread divided by the thread count.
+The harness is CPU only, so the ``gpu`` column stays empty.
+``--max-threads`` caps the thread counts.
+The example exits non-zero when a run does not converge.

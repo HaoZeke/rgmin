@@ -69,6 +69,7 @@ It also covers the features of each route, the C library and a checkout.
    howto/install
    howto/session
    howto/fire
+   howto/strong-scaling
    howto/constraints
    howto/manifolds
    howto/irc
