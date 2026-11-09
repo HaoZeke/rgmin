@@ -249,7 +249,7 @@ pub struct Fire2Extras {
 impl Fire2Extras {
     /// Table 1 of Guénolé et al., Comput. Mater. Sci. 175 (2020) 109584,
     /// DOI 10.1016/j.commatsci.2020.109584: `dt_min = 0.02 dt0`,
-    /// `N_delay = 20`, initial delay on.
+    /// `N_delay = 20`, initial delay on, `vdfmax = 2000`.
     #[must_use]
     pub fn new(dt0: f64) -> Self {
         let dt0 = if dt0 > 0.0 { dt0 } else { 0.1 };
@@ -259,7 +259,7 @@ impl Fire2Extras {
             initial_delay: true,
             steps: 0,
             n_neg: 0,
-            n_neg_max: usize::MAX,
+            n_neg_max: 2_000,
         }
     }
 }
@@ -512,6 +512,29 @@ mod tests {
         );
         assert!((state.vel[0] - 0.9).abs() < 1e-12);
         assert!((state.vel[1] - 0.01).abs() < 1e-12);
+    }
+
+    #[test]
+    fn table_1_vdfmax_stops_on_the_step_past_2000() {
+        let (mut state, mut ext) = guenole2020(1, 0.1);
+        assert_eq!(ext.n_neg_max, 2_000);
+        let force = array![-1.0];
+        for i in 1..=2_000 {
+            state.vel[0] = 1.0;
+            fire2_displacement(&mut state, &mut ext, &force).expect("within vdfmax");
+            assert_eq!(ext.n_neg, i);
+        }
+        state.vel[0] = 1.0;
+        let dt = state.dt;
+        let alpha = state.alpha;
+        assert_eq!(
+            fire2_displacement(&mut state, &mut ext, &force),
+            Err(Fire2Stalled)
+        );
+        assert_eq!(ext.n_neg, 2_001);
+        assert_eq!(state.dt, dt);
+        assert_eq!(state.alpha, alpha);
+        assert_eq!(state.vel[0], 1.0);
     }
 
     #[test]

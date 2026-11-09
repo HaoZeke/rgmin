@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- FIRE 2.0 stops when consecutive non-positive-power steps exceed
+  `vdfmax`. The published schedule uses 2000, from Table 1 of Comput.
+  Mater. Sci. 175 (2020) 109584. The stopping step does not move.
+
 ### Fixed
 
 - The Exp pair weight and the μ sine probe call `libm` `exp` and

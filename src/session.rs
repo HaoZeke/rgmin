@@ -1349,7 +1349,7 @@ impl Solver {
     /// `limit` returns [`Error::FireStalled`] and does not move.
     /// A positive power step, and [`Self::forget`], clear the count.
     /// A session that is not running that schedule ignores the call.
-    /// `usize::MAX` does not stop.
+    /// The published schedule starts at 2000. `usize::MAX` does not stop.
     pub fn set_fire_vdfmax(&mut self, limit: usize) {
         if let Inner::Fire(_, Some(ext)) = &mut self.inner {
             ext.n_neg_max = limit;
