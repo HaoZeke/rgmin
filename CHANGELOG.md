@@ -340,8 +340,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FIRE 2.0 as Guénolé et al. 2020 algorithm 2 publishes it
   (`fire::fire2_displacement`, `fire::guenole2020`, `Fire2Extras`):
   half-step back and zeroed velocity on an uphill step, `dt_min`, the
-  initial delay, and the mix after the kick, with the paper's table 2
-  parameters. On rgpot surfaces (5 starts each, per-atom cap 0.2) it
+  initial delay, and the mix after the kick, with Table 1 of Comput.
+  Mater. Sci. 175 (2020) 109584, DOI 10.1016/j.commatsci.2020.109584.
+  On rgpot surfaces (5 starts each, per-atom cap 0.2) it
   takes 26.0 force calls on the Pt7 island against 57.8 for
   `FireKind::V2`, 33.8 on the EAM Al slab against 67.4, and 871 on LJ38
   from random packings against 437, so the default stays. `validation/fire2.py` checks the mix bounds and

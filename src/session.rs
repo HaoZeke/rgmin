@@ -1310,8 +1310,9 @@ impl Solver {
     /// FIRE schedule for a FIRE session; a no-op on any other method.
     ///
     /// [`FireVariant::Guenole2020`] replaces the session's FIRE state with
-    /// the published FIRE 2.0 ([`crate::fire::fire2_displacement`]) and its
-    /// table 2 parameters, from `dt = Control::istep`;
+    /// the published FIRE 2.0 ([`crate::fire::fire2_displacement`]) and
+    /// Table 1 of Comput. Mater. Sci. 175 (2020) 109584,
+    /// DOI 10.1016/j.commatsci.2020.109584, from `dt = Control::istep`;
     /// [`FireVariant::Rgmin`] restores [`FireState::new`] for the kind the
     /// session was built with. Either way the velocity starts at zero.
     ///

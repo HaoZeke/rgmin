@@ -215,7 +215,8 @@ pub enum FireVariant {
     #[default]
     Rgmin,
     /// FIRE 2.0 exactly as Guénolé et al. 2020 algorithm 2 (semi-implicit
-    /// Euler) publishes it, with its table 2 parameters: see
+    /// Euler) publishes it, with its Table 1 parameters (Comput. Mater.
+    /// Sci. 175 (2020) 109584, DOI 10.1016/j.commatsci.2020.109584): see
     /// [`fire2_displacement`].
     Guenole2020,
 }
@@ -240,8 +241,9 @@ pub struct Fire2Extras {
 }
 
 impl Fire2Extras {
-    /// Guénolé et al. 2020 table 2: `dt_min = 0.02 dt0`, `N_delay = 20`,
-    /// initial delay on.
+    /// Table 1 of Guénolé et al., Comput. Mater. Sci. 175 (2020) 109584,
+    /// DOI 10.1016/j.commatsci.2020.109584: `dt_min = 0.02 dt0`,
+    /// `N_delay = 20`, initial delay on.
     #[must_use]
     pub fn new(dt0: f64) -> Self {
         let dt0 = if dt0 > 0.0 { dt0 } else { 0.1 };
@@ -254,10 +256,11 @@ impl Fire2Extras {
     }
 }
 
-/// A [`FireState`] and [`Fire2Extras`] with the Guénolé et al. 2020
-/// table 2 parameters: `alpha_start = 0.25`, `f_alpha = 0.99`,
-/// `f_inc = 1.1`, `f_dec = 0.5`, `N_delay = 20`, `dt_max = 10 dt0`,
-/// `dt_min = 0.02 dt0`.
+/// A [`FireState`] and [`Fire2Extras`] with Table 1 of Guénolé et al.,
+/// Comput. Mater. Sci. 175 (2020) 109584,
+/// DOI 10.1016/j.commatsci.2020.109584: `alpha_start = 0.25`,
+/// `f_alpha = 0.99`, `f_inc = 1.1`, `f_dec = 0.5`, `N_delay = 20`,
+/// `dt_max = 10 dt0`, `dt_min = 0.02 dt0`.
 #[must_use]
 pub fn guenole2020(dim: usize, dt0: f64) -> (FireState, Fire2Extras) {
     let mut state = FireState::new(FireKind::V2, dim, dt0);
