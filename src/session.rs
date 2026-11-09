@@ -1344,6 +1344,18 @@ impl Solver {
         }
     }
 
+    /// Consecutive non-positive-power limit for the published FIRE 2.0
+    /// schedule (`vdfmax`). The step that makes the count exceed
+    /// `limit` returns [`Error::FireStalled`] and does not move.
+    /// A positive power step, and [`Self::forget`], clear the count.
+    /// A session that is not running that schedule ignores the call.
+    /// `usize::MAX` does not stop.
+    pub fn set_fire_vdfmax(&mut self, limit: usize) {
+        if let Inner::Fire(_, Some(ext)) = &mut self.inner {
+            ext.n_neg_max = limit;
+        }
+    }
+
     /// Split quick-min into an atomic block `[0, at)` and a cell block
     /// `[at, n)`. Each block takes the reference projection on its own
     /// force, so a cell velocity that opposes the stress is zeroed even
@@ -1520,6 +1532,7 @@ impl Solver {
                 state.reset();
                 if let Some(ext) = ext {
                     ext.steps = 0;
+                    ext.n_neg = 0;
                 }
             }
             Inner::QuickMin(state, session) => {
@@ -2885,7 +2898,12 @@ impl Solver {
                 }
                 let mix = fire_mix(&self.precon, &state.vel, &raw, &steepest);
                 let mut dx = match ext {
-                    Some(ext) => fire2_displacement_metric(state, ext, &raw, &steepest, mix),
+                    Some(ext) => {
+                        match fire2_displacement_metric(state, ext, &raw, &steepest, mix) {
+                            Ok(dx) => dx,
+                            Err(_) => return Err(Error::FireStalled { steps: self.steps }),
+                        }
+                    }
                     None => fire_displacement(state, &steepest),
                 };
                 eckart(

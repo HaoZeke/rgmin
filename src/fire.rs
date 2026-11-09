@@ -238,6 +238,12 @@ pub struct Fire2Extras {
     pub initial_delay: bool,
     /// Steps taken since the last reset.
     pub steps: usize,
+    /// Consecutive steps whose power `P = F · v` is not positive.
+    pub n_neg: usize,
+    /// Stop on the step that makes [`Self::n_neg`] exceed this limit.
+    ///
+    /// `usize::MAX` does not stop.
+    pub n_neg_max: usize,
 }
 
 impl Fire2Extras {
@@ -252,9 +258,17 @@ impl Fire2Extras {
             n_delay: 20,
             initial_delay: true,
             steps: 0,
+            n_neg: 0,
+            n_neg_max: usize::MAX,
         }
     }
 }
+
+/// FIRE 2.0 stopped because consecutive non-positive power exceeded
+/// [`Fire2Extras::n_neg_max`]. That step does not change the position,
+/// the time step, the mixing parameter, or the velocity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fire2Stalled;
 
 /// A [`FireState`] and [`Fire2Extras`] with Table 1 of Guénolé et al.,
 /// Comput. Mater. Sci. 175 (2020) 109584,
@@ -284,7 +298,9 @@ pub fn guenole2020(dim: usize, dt0: f64) -> (FireState, Fire2Extras) {
 /// `v = (1 - alpha) v + alpha |v| f / |f|`, and move `dt v`. The
 /// returned `dx` includes the half-step correction, so it equals
 /// `dt v` only on a downhill step. The mix never lengthens `v` and never
-/// lowers `f . v` (`validation/fire2.py`).
+/// lowers `f . v` (`validation/fire2.py`). A step that makes the
+/// consecutive non-positive count exceed [`Fire2Extras::n_neg_max`]
+/// returns [`Fire2Stalled`] before the shrink and the half-step.
 ///
 /// Guénolé, Nöhring, Vaid, Houllé, Xie, Prakash, Bitzek, *Assessment
 /// and optimization of the fast inertial relaxation engine (FIRE)*,
@@ -293,7 +309,7 @@ pub fn fire2_displacement(
     state: &mut FireState,
     ext: &mut Fire2Extras,
     force: &Array1<f64>,
-) -> Array1<f64> {
+) -> Result<Array1<f64>, Fire2Stalled> {
     fire2_displacement_metric(state, ext, force, force, None)
 }
 
@@ -308,10 +324,11 @@ pub fn fire2_displacement_metric(
     power_force: &Array1<f64>,
     steepest: &Array1<f64>,
     mix: Option<FireMix>,
-) -> Array1<f64> {
+) -> Result<Array1<f64>, Fire2Stalled> {
     let power = crate::vecops::dot(power_force.view(), state.vel.view());
     let mut dx = Array1::zeros(state.vel.len());
     if power > 0.0 {
+        ext.n_neg = 0;
         state.n_pos += 1;
         if state.n_pos > ext.n_delay {
             state.dt = (state.dt * state.f_inc).min(state.dt_max);
@@ -319,6 +336,10 @@ pub fn fire2_displacement_metric(
         }
     } else {
         state.n_pos = 0;
+        ext.n_neg = ext.n_neg.saturating_add(1);
+        if ext.n_neg > ext.n_neg_max {
+            return Err(Fire2Stalled);
+        }
         if !(ext.initial_delay && ext.steps < ext.n_delay) {
             if state.dt * state.f_dec >= ext.dt_min {
                 state.dt *= state.f_dec;
@@ -332,7 +353,7 @@ pub fn fire2_displacement_metric(
     crate::vecops::axpy(state.dt, steepest.view(), &mut state.vel);
     mix_toward(state, steepest, mix);
     dx.scaled_add(state.dt, &state.vel);
-    dx
+    Ok(dx)
 }
 
 #[cfg(test)]
@@ -385,7 +406,7 @@ mod tests {
         state.vel = array![1.0, 0.0];
         state.alpha = 0.05;
         let force = array![-1.0, 0.5];
-        let dx = fire2_displacement(&mut state, &mut ext, &force);
+        let dx = fire2_displacement(&mut state, &mut ext, &force).expect("within vdfmax");
         assert!((state.dt - 0.1).abs() < 1e-15);
         assert!((state.alpha - 0.25).abs() < 1e-15);
         let want = [-0.05 - 0.01, 0.005];
@@ -405,12 +426,12 @@ mod tests {
         let force = array![-1.0, 0.0];
         let (mut state, mut ext) = guenole2020(2, 0.2);
         state.vel = array![1.0, 0.0];
-        let _ = fire2_displacement(&mut state, &mut ext, &force);
+        let _ = fire2_displacement(&mut state, &mut ext, &force).expect("within vdfmax");
         assert!((state.dt - 0.2).abs() < 1e-15, "the delay shrank dt");
         ext.steps = ext.n_delay;
         state.dt = 1.5 * ext.dt_min;
         state.vel = array![1.0, 0.0];
-        let _ = fire2_displacement(&mut state, &mut ext, &force);
+        let _ = fire2_displacement(&mut state, &mut ext, &force).expect("within vdfmax");
         assert!(
             (state.dt - 1.5 * ext.dt_min).abs() < 1e-15,
             "dt went under dt_min"
@@ -426,9 +447,9 @@ mod tests {
         let (mut state, mut ext) = guenole2020(2, 0.1);
         state.vel = array![1.0, 0.0];
         let f = array![0.0, 1.0];
-        let dx = fire2_displacement(&mut state, &mut ext, &f);
+        let dx = fire2_displacement(&mut state, &mut ext, &f).expect("within vdfmax");
         assert!((dx[0] + 0.05).abs() < 1e-15 && (dx[1] - 0.01).abs() < 1e-15);
-        let dx = fire2_displacement(&mut state, &mut ext, &f);
+        let dx = fire2_displacement(&mut state, &mut ext, &f).expect("within vdfmax");
         assert!(dx[0].abs() < 1e-15 && (dx[1] - 0.02).abs() < 1e-15, "{dx}");
         assert_eq!(state.n_pos, 1);
     }
@@ -491,5 +512,31 @@ mod tests {
         );
         assert!((state.vel[0] - 0.9).abs() < 1e-12);
         assert!((state.vel[1] - 0.01).abs() < 1e-12);
+    }
+
+    #[test]
+    fn vdfmax_stops_before_the_half_step_and_positive_power_resets() {
+        let (mut state, mut ext) = guenole2020(1, 0.2);
+        ext.n_neg_max = 1;
+        ext.steps = ext.n_delay;
+        state.vel[0] = 1.0;
+        state.alpha = 0.05;
+        let up = array![-1.0];
+        let dx = fire2_displacement(&mut state, &mut ext, &up).expect("first uphill step");
+        assert_eq!(ext.n_neg, 1);
+        assert!(dx[0].is_finite());
+        state.vel[0] = 1.0;
+        state.alpha = 0.05;
+        let dt = state.dt;
+        assert_eq!(
+            fire2_displacement(&mut state, &mut ext, &up),
+            Err(Fire2Stalled)
+        );
+        assert_eq!(ext.n_neg, 2);
+        assert_eq!(state.dt, dt);
+        assert_eq!(state.alpha, 0.05);
+        assert_eq!(state.vel[0], 1.0);
+        let _ = fire2_displacement(&mut state, &mut ext, &array![1.0]).expect("downhill");
+        assert_eq!(ext.n_neg, 0);
     }
 }
