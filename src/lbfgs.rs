@@ -15,6 +15,8 @@
 //! Wolfe, *Convergence Conditions for Ascent Methods*,
 //! <https://doi.org/10.1137/1011036>.
 
+use std::cell::RefCell;
+
 use ndarray::{Array1, ArrayView1};
 
 use crate::control::{Control, StopNorm};
@@ -22,7 +24,7 @@ use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
 use crate::qn::solve_dense;
 use crate::report::Report;
-use crate::step::{finite, l2, next_istep, start_answer, take_step};
+use crate::step::{finite, l2, next_istep, start_answer, take_step_reuse};
 use eindir_core::{DifferentiableObjective, Objective};
 
 /// How [`Lbfgs`] compares the gradient to [`Lbfgs::gtol`].
@@ -60,6 +62,46 @@ struct Pair {
     s: Array1<f64>,
     y: Array1<f64>,
     rho: f64,
+}
+
+/// What replaces `q` between the two loops.
+enum Middle<'a> {
+    /// Dense `P^{-1} q`, or γ `q` when the solve fails.
+    Precon(&'a ndarray::Array2<f64>),
+    /// `exp.solve(q)`, or γ `q` when the solve fails.
+    Exp(&'a crate::precon::Exp),
+    /// γ `q` from the newest pair. No scaling when the memory is empty.
+    Gamma,
+    /// `exp.solve(q)` when it succeeds, otherwise `h0 * q`.
+    Scaled {
+        exp: Option<&'a crate::precon::Exp>,
+        h0: f64,
+    },
+}
+
+impl<'a> Middle<'a> {
+    fn from_parts(
+        precon: Option<&'a ndarray::Array2<f64>>,
+        exp: Option<&'a crate::precon::Exp>,
+    ) -> Self {
+        if let Some(pmat) = precon {
+            Self::Precon(pmat)
+        } else if let Some(exp) = exp {
+            Self::Exp(exp)
+        } else {
+            Self::Gamma
+        }
+    }
+}
+
+/// γ `q` with γ = `(s·y) / (y·y)` of the newest pair.
+fn scale_gamma_into(memory: &[Pair], q: &mut Array1<f64>) {
+    if let Some(p) = memory.last() {
+        let yy = p.y.dot(&p.y);
+        if yy > 0.0 {
+            *q *= p.s.dot(&p.y) / yy;
+        }
+    }
 }
 
 /// Curvature saved by [`Lbfgs::curvature`].
@@ -120,6 +162,47 @@ pub struct Lbfgs {
     pub(crate) have_curvature: bool,
     /// The latest [`Self::push_pair`] stored its pair.
     stored: bool,
+    /// Reused two-loop, probe and line-search buffers. Boxed so the
+    /// session enum does not carry them inline.
+    work: Box<Work>,
+}
+
+/// Scratch that outlives one iteration. Each buffer is its own cell so
+/// a direction and a pair can be borrowed together.
+struct Work {
+    /// Two-loop vector.
+    q: RefCell<Array1<f64>>,
+    /// `α` coefficients of the two-loop.
+    alpha: RefCell<Vec<f64>>,
+    /// Pair indices replayed by the two-loop, including extra updates.
+    idxs: RefCell<Vec<usize>>,
+    /// Line-search probe `x + a d` inside [`Lbfgs::line_search`].
+    probe: RefCell<Array1<f64>>,
+    /// `s` of the pair being stored.
+    s_buf: RefCell<Array1<f64>>,
+    /// `y` of the pair being stored.
+    y_buf: RefCell<Array1<f64>>,
+    /// Point and gradient the current outer step started from.
+    old_x: RefCell<Array1<f64>>,
+    old_g: RefCell<Array1<f64>>,
+    /// Buffers for [`Lbfgs::step_objective`]'s line search.
+    search: crate::workspace::SearchBuffers,
+}
+
+impl Work {
+    fn new() -> Self {
+        Self {
+            q: RefCell::new(Array1::zeros(0)),
+            alpha: RefCell::new(Vec::new()),
+            idxs: RefCell::new(Vec::new()),
+            probe: RefCell::new(Array1::zeros(0)),
+            s_buf: RefCell::new(Array1::zeros(0)),
+            y_buf: RefCell::new(Array1::zeros(0)),
+            old_x: RefCell::new(Array1::zeros(0)),
+            old_g: RefCell::new(Array1::zeros(0)),
+            search: crate::workspace::SearchBuffers::default(),
+        }
+    }
 }
 
 impl Default for Lbfgs {
@@ -150,6 +233,7 @@ impl Lbfgs {
             last_yy: 0.0,
             have_curvature: false,
             stored: false,
+            work: Box::new(Work::new()),
         }
     }
 
@@ -206,14 +290,22 @@ impl Lbfgs {
     }
 
     pub(crate) fn search_direction(&self, x: ArrayView1<f64>, g: ArrayView1<f64>) -> Array1<f64> {
+        self.fill_search_direction(x, g);
+        self.work.q.borrow().clone()
+    }
+
+    /// Writes the search direction into [`Self::q`] without cloning it out.
+    fn fill_search_direction(&self, x: ArrayView1<f64>, g: ArrayView1<f64>) {
         #[cfg(feature = "highs")]
         if self.highs.is_some()
             && let Ok(d) = self.highs_step(x, g)
         {
-            return d;
+            let mut q = self.work.q.borrow_mut();
+            crate::workspace::assign_fit(&mut q, d.view());
+            return;
         }
         let _ = x;
-        self.direction(g)
+        self.fill_direction(g, Middle::from_parts(None, self.h0.as_ref()));
     }
 
     /// Two-loop recursion: applies the inverse-Hessian approximation to `g`.
@@ -240,37 +332,67 @@ impl Lbfgs {
         precon: Option<&ndarray::Array2<f64>>,
         exp: Option<&crate::precon::Exp>,
     ) -> Array1<f64> {
-        let mut q = g.to_owned();
+        self.fill_direction(g, Middle::from_parts(precon, exp));
+        self.work.q.borrow().clone()
+    }
+
+    /// Two-loop into [`Self::q`]. The vector stays in the solver.
+    fn fill_direction(&self, g: ArrayView1<f64>, middle: Middle<'_>) {
+        {
+            let mut q = self.work.q.borrow_mut();
+            crate::workspace::assign_fit(&mut q, g);
+        }
+        self.apply_two_loop(middle);
+    }
+
+    fn apply_two_loop(&self, middle: Middle<'_>) {
         let m = self.memory.len();
-        let mut idxs: Vec<usize> = (0..m).collect();
+        let mut idxs = self.work.idxs.borrow_mut();
+        idxs.clear();
+        idxs.extend(0..m);
         for _ in 0..self.extra_updates {
             if m > 0 {
                 idxs.push(m - 1);
             }
         }
-        let mut alpha = vec![0.0; idxs.len()];
-        for k in (0..idxs.len()).rev() {
+        let nidx = idxs.len();
+        let mut alpha = self.work.alpha.borrow_mut();
+        if alpha.len() < nidx {
+            alpha.resize(nidx, 0.0);
+        }
+        let mut q = self.work.q.borrow_mut();
+        for k in (0..nidx).rev() {
             let i = idxs[k];
             let p = &self.memory[i];
             let a = p.rho * crate::vecops::dot(p.s.view(), q.view());
             alpha[k] = a;
             crate::vecops::axpy(-a, p.y.view(), &mut q);
         }
-        if let Some(pmat) = precon {
-            q = solve_dense(pmat, &q).unwrap_or_else(|| self.scale_gamma(q));
-        } else if let Some(exp) = exp {
-            q = exp.solve(q.view()).unwrap_or_else(|| self.scale_gamma(q));
-        } else {
-            q = self.scale_gamma(q);
+        match middle {
+            Middle::Precon(pmat) => match solve_dense(pmat, &q) {
+                Some(solved) => q.assign(&solved),
+                None => scale_gamma_into(&self.memory, &mut q),
+            },
+            Middle::Exp(exp) => match exp.solve(q.view()) {
+                Some(solved) => q.assign(&solved),
+                None => scale_gamma_into(&self.memory, &mut q),
+            },
+            Middle::Gamma => scale_gamma_into(&self.memory, &mut q),
+            Middle::Scaled { exp, h0 } => {
+                if let Some(solved) = exp.and_then(|exp| exp.solve(q.view())) {
+                    q.assign(&solved);
+                } else {
+                    *q *= h0;
+                }
+            }
         }
-        for k in 0..idxs.len() {
+        for k in 0..nidx {
             let i = idxs[k];
             let p = &self.memory[i];
             let b = p.rho * crate::vecops::dot(p.y.view(), q.view());
             crate::vecops::axpy(alpha[k] - b, p.s.view(), &mut q);
         }
         q.mapv_inplace(|v| -v);
-        q
     }
 
     /// `P^{-1} v` when an exponential preconditioner is installed and the solve succeeds.
@@ -283,35 +405,14 @@ impl Lbfgs {
     /// preconditioner replaces that scalar: the middle product is
     /// `P^{-1} q`, and a failed solve falls back to `h0`.
     pub(crate) fn direction_h0(&self, g: ArrayView1<f64>, h0: f64) -> Array1<f64> {
-        let mut q = g.to_owned();
-        let m = self.memory.len();
-        let mut idxs: Vec<usize> = (0..m).collect();
-        for _ in 0..self.extra_updates {
-            if m > 0 {
-                idxs.push(m - 1);
-            }
-        }
-        let mut alpha = vec![0.0; idxs.len()];
-        for k in (0..idxs.len()).rev() {
-            let i = idxs[k];
-            let p = &self.memory[i];
-            let a = p.rho * crate::vecops::dot(p.s.view(), q.view());
-            alpha[k] = a;
-            crate::vecops::axpy(-a, p.y.view(), &mut q);
-        }
-        if let Some(solved) = self.exp_apply(q.view()) {
-            q = solved;
-        } else {
-            q *= h0;
-        }
-        for k in 0..idxs.len() {
-            let i = idxs[k];
-            let p = &self.memory[i];
-            let b = p.rho * crate::vecops::dot(p.y.view(), q.view());
-            crate::vecops::axpy(alpha[k] - b, p.s.view(), &mut q);
-        }
-        q.mapv_inplace(|v| -v);
-        q
+        self.fill_direction(
+            g,
+            Middle::Scaled {
+                exp: self.h0.as_ref(),
+                h0,
+            },
+        );
+        self.work.q.borrow().clone()
     }
 
     /// Remember `s·y` and `y·y` from the step just taken.
@@ -334,22 +435,8 @@ impl Lbfgs {
         if !sy.is_finite() || sy.abs() < 1e-30 || sy <= 0.0 {
             return;
         }
-        self.memory.push(Pair {
-            s,
-            y,
-            rho: 1.0 / sy,
-        });
-        self.trim();
-    }
-
-    fn scale_gamma(&self, mut q: Array1<f64>) -> Array1<f64> {
-        if let Some(p) = self.memory.last() {
-            let yy = p.y.dot(&p.y);
-            if yy > 0.0 {
-                q *= p.s.dot(&p.y) / yy;
-            }
-        }
-        q
+        self.load_sy(s, y);
+        self.install_pair(sy, false);
     }
 
     /// Records an accepted curvature pair (`s = x+ - x`, `y = g+ - g`).
@@ -421,33 +508,89 @@ impl Lbfgs {
     /// Store `(s, y)` unless the cautious or relative-curvature test
     /// drops it. Returns whether it was stored.
     pub(crate) fn push_pair(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) -> bool {
-        let sy = s.dot(&y);
-        let sn = s.iter().map(|v| v * v).sum::<f64>().sqrt();
-        let yn = y.iter().map(|v| v * v).sum::<f64>().sqrt();
-        let ss = sn * sn;
-        if self.cautious_eps > 0.0
-            && let Some(g) = gnorm
+        self.load_sy(s, y);
+        self.store_loaded(gnorm)
+    }
+
+    /// Copy `s` and `y` into the pair scratch. A later store reuses the
+    /// oldest pair's allocation once `max_pairs` is full.
+    fn load_sy(&self, s: Array1<f64>, y: Array1<f64>) {
         {
-            let thresh = self.cautious_eps * ss * g.max(1.0e-30).powf(self.cautious_alpha);
-            if sy < thresh {
+            let mut buf = self.work.s_buf.borrow_mut();
+            crate::workspace::assign_fit(&mut buf, s.view());
+        }
+        let mut buf = self.work.y_buf.borrow_mut();
+        crate::workspace::assign_fit(&mut buf, y.view());
+    }
+
+    fn store_loaded(&mut self, gnorm: Option<f64>) -> bool {
+        let sy = {
+            let s = self.work.s_buf.borrow();
+            let y = self.work.y_buf.borrow();
+            let sy = s.dot(&*y);
+            let sn = s.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let yn = y.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let ss = sn * sn;
+            if self.cautious_eps > 0.0
+                && let Some(g) = gnorm
+            {
+                let thresh = self.cautious_eps * ss * g.max(1.0e-30).powf(self.cautious_alpha);
+                if sy < thresh {
+                    drop(s);
+                    drop(y);
+                    self.stored = false;
+                    return false;
+                }
+            }
+            // Relative curvature: a tiny accepted trust step makes the
+            // compact Hessian indefinite and HiGHS's QP solver does not return.
+            if !sy.is_finite() || sy <= 1e-8 * sn * yn {
+                drop(s);
+                drop(y);
                 self.stored = false;
                 return false;
             }
-        }
-        // Relative curvature: a tiny accepted trust step makes the
-        // compact Hessian indefinite and HiGHS's QP solver does not return.
-        if !sy.is_finite() || sy <= 1e-8 * sn * yn {
-            self.stored = false;
-            return false;
-        }
-        self.memory.push(Pair {
-            s,
-            y,
-            rho: 1.0 / sy,
-        });
-        self.trim();
-        self.stored = true;
+            sy
+        };
+        self.install_pair(sy, true);
         true
+    }
+
+    /// Put the loaded `(s, y)` into memory with `rho = 1/sy`.
+    ///
+    /// At capacity the oldest pair's buffers are overwritten and rotated
+    /// to the newest slot, which is what [`Self::trim`] did after a push.
+    fn install_pair(&mut self, sy: f64, set_stored: bool) {
+        let rho = 1.0 / sy;
+        let cap = self.max_pairs.max(1);
+        self.trim();
+        if self.memory.len() >= cap {
+            let mut pair = self.memory.remove(0);
+            {
+                let mut s = self.work.s_buf.borrow_mut();
+                let mut y = self.work.y_buf.borrow_mut();
+                std::mem::swap(&mut pair.s, &mut s);
+                std::mem::swap(&mut pair.y, &mut y);
+            }
+            pair.rho = rho;
+            self.memory.push(pair);
+        } else {
+            let s = {
+                let mut s = self.work.s_buf.borrow_mut();
+                let n = s.len();
+                std::mem::replace(&mut *s, Array1::zeros(n))
+            };
+            let y = {
+                let mut y = self.work.y_buf.borrow_mut();
+                let n = y.len();
+                std::mem::replace(&mut *y, Array1::zeros(n))
+            };
+            self.memory.push(Pair { s, y, rho });
+            self.trim();
+        }
+        if set_stored {
+            self.stored = true;
+        }
     }
 
     fn gnorm(&self, g: &Array1<f64>) -> f64 {
@@ -487,7 +630,6 @@ impl Lbfgs {
         x: &mut Array1<f64>,
         f: &mut f64,
         g: &mut Array1<f64>,
-        d: &Array1<f64>,
         slope: f64,
         fg: &mut F,
     ) -> (bool, usize)
@@ -496,16 +638,6 @@ impl Lbfgs {
     {
         let f0 = *f;
         let mut evals = 0usize;
-        let mut scratch = x.clone();
-        let probe = |a: f64, fg: &mut F, evals: &mut usize, scratch: &mut Array1<f64>| {
-            scratch.assign(x);
-            scratch.scaled_add(a, d);
-            let r = fg(scratch.view());
-            if r.is_some() {
-                *evals += 1;
-            }
-            r
-        };
 
         let mut a_prev = 0.0;
         let mut f_prev = f0;
@@ -514,7 +646,8 @@ impl Lbfgs {
         // and Wright require that alpha = 1 is tried first. With no memory
         // the direction is the raw negative gradient and needs a length.
         let mut a = if self.memory.is_empty() {
-            let dnorm = d.iter().fold(0.0_f64, |acc, v| acc + v * v).sqrt();
+            let q = self.work.q.borrow();
+            let dnorm = q.iter().fold(0.0_f64, |acc, v| acc + v * v).sqrt();
             if dnorm > 1.0 { 1.0 / dnorm } else { 1.0 }
         } else {
             1.0
@@ -531,11 +664,14 @@ impl Lbfgs {
         let total_cap = 2 * self.max_line_evals;
 
         for i in 0..bracket_cap {
-            let (fa, ga) = match probe(a, fg, &mut evals, &mut scratch) {
+            let (fa, ga) = match self.probe_at(a, x, fg, &mut evals) {
                 Some(v) => v,
                 None => return (false, evals),
             };
-            let (fa, slope_a) = probed(fa, d, &ga);
+            let (fa, slope_a) = {
+                let q = self.work.q.borrow();
+                probed(fa, &q, &ga)
+            };
             if fa > f0 + self.armijo * a * slope || (i > 0 && fa >= f_prev) {
                 lo = a_prev;
                 f_lo = f_prev;
@@ -547,7 +683,7 @@ impl Lbfgs {
                 break;
             }
             if slope_a.abs() <= -self.curvature * slope {
-                self.accept(x, f, g, d, a, (fa, ga));
+                self.accept(x, f, g, a, (fa, ga));
                 return (true, evals);
             }
             if slope_a >= 0.0 {
@@ -604,18 +740,21 @@ impl Lbfgs {
                     }
                 }
             }
-            let (ft, gt) = match probe(trial, fg, &mut evals, &mut scratch) {
+            let (ft, gt) = match self.probe_at(trial, x, fg, &mut evals) {
                 Some(v) => v,
                 None => return (false, evals),
             };
-            let (ft, slope_t) = probed(ft, d, &gt);
+            let (ft, slope_t) = {
+                let q = self.work.q.borrow();
+                probed(ft, &q, &gt)
+            };
             if ft > f0 + self.armijo * trial * slope || ft >= f_lo {
                 hi = trial;
                 f_hi = ft;
                 slope_hi = slope_t;
             } else {
                 if slope_t.abs() <= -self.curvature * slope {
-                    self.accept(x, f, g, d, trial, (ft, gt));
+                    self.accept(x, f, g, trial, (ft, gt));
                     return (true, evals);
                 }
                 if slope_t * (hi - lo) >= 0.0 {
@@ -634,22 +773,54 @@ impl Lbfgs {
         (false, evals)
     }
 
+    fn probe_at<F>(
+        &self,
+        a: f64,
+        x: &Array1<f64>,
+        fg: &mut F,
+        evals: &mut usize,
+    ) -> Option<(f64, Array1<f64>)>
+    where
+        F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
+    {
+        let mut scratch = self.work.probe.borrow_mut();
+        crate::workspace::assign_fit(&mut scratch, x.view());
+        {
+            let q = self.work.q.borrow();
+            scratch.scaled_add(a, &*q);
+        }
+        let r = fg(scratch.view());
+        if r.is_some() {
+            *evals += 1;
+        }
+        r
+    }
+
     fn accept(
         &mut self,
         x: &mut Array1<f64>,
         f: &mut f64,
         g: &mut Array1<f64>,
-        d: &Array1<f64>,
         step: f64,
         new: (f64, Array1<f64>),
     ) {
         let (f_new, g_new) = new;
-        let mut s = d.clone();
-        s *= step;
-        let mut y = g_new.clone();
-        y -= &*g;
-        self.push(s, y);
-        x.scaled_add(step, d);
+        {
+            let q = self.work.q.borrow();
+            let mut s = self.work.s_buf.borrow_mut();
+            crate::workspace::assign_fit(&mut s, q.view());
+            *s *= step;
+        }
+        {
+            let mut y = self.work.y_buf.borrow_mut();
+            crate::workspace::assign_fit(&mut y, g_new.view());
+            *y -= &*g;
+        }
+        let _ = self.store_loaded(None);
+        {
+            let q = self.work.q.borrow();
+            x.scaled_add(step, &*q);
+        }
         *f = f_new;
         *g = g_new;
     }
@@ -709,8 +880,8 @@ impl Lbfgs {
                 break;
             }
             let f_old = f;
-            let d = self.search_direction(x.view(), g.view());
-            let slope = d.dot(&g);
+            self.fill_search_direction(x.view(), g.view());
+            let slope = self.work.q.borrow().dot(&g);
             if !slope.is_finite() && self.memory.is_empty() {
                 break;
             }
@@ -718,7 +889,7 @@ impl Lbfgs {
                 self.forget();
                 continue;
             }
-            let (ok, evals_used) = self.line_search(&mut x, &mut f, &mut g, &d, slope, &mut fg);
+            let (ok, evals_used) = self.line_search(&mut x, &mut f, &mut g, slope, &mut fg);
             evals += evals_used;
             stalled = ok && self.stalled(f_old, f);
             if !ok {
@@ -781,8 +952,8 @@ impl Lbfgs {
                 break;
             }
             let f_old = f;
-            let d = self.search_direction(x.view(), g.view());
-            let slope = d.dot(&g);
+            self.fill_search_direction(x.view(), g.view());
+            let slope = self.work.q.borrow().dot(&g);
             if !slope.is_finite() && self.memory.is_empty() {
                 break;
             }
@@ -790,7 +961,7 @@ impl Lbfgs {
                 self.forget();
                 continue;
             }
-            let (ok, evals_used) = self.line_search(&mut x, &mut f, &mut g, &d, slope, &mut fg);
+            let (ok, evals_used) = self.line_search(&mut x, &mut f, &mut g, slope, &mut fg);
             evals += evals_used;
             stalled = ok && self.stalled(f_old, f);
             if !ok {
@@ -871,48 +1042,90 @@ impl Lbfgs {
     ) where
         O: DifferentiableObjective<f64> + ?Sized,
     {
-        let dir = self.search_direction(pos.view(), grad.view());
-        let old = pos.clone();
-        let gold = grad.clone();
+        self.fill_search_direction(pos.view(), grad.view());
+        {
+            let mut old = self.work.old_x.borrow_mut();
+            crate::workspace::assign_fit(&mut old, pos.view());
+        }
+        {
+            let mut old = self.work.old_g.borrow_mut();
+            crate::workspace::assign_fit(&mut old, grad.view());
+        }
         // Curvature history supplies the quasi-Newton step length. Wolfe
         // starts at the unit step so accepted steps retain superlinear
         // convergence instead of inheriting repeated line-search shrinkage.
         let trial_step = if self.memory.is_empty() { *istep } else { 1.0 };
-        let (mut npos, _, mut lsstep, mut moved) = take_step(
-            obj,
-            pos,
-            *value,
-            dir.view(),
-            trial_step,
-            linesearch,
-            control,
-        );
+        let (mut lsstep, mut moved) =
+            self.search_from_q(obj, pos, *value, trial_step, linesearch, control);
         if !moved && !self.memory.is_empty() {
             // Retained curvature can describe a different objective scale.
             // Retry with an empty history before reporting a stalled step.
             self.forget();
-            let restart_direction = self.search_direction(pos.view(), grad.view());
-            let restart = take_step(
-                obj,
-                pos,
-                *value,
-                restart_direction.view(),
-                control.istep,
-                linesearch,
-                control,
-            );
-            npos = restart.0;
-            lsstep = restart.2;
-            moved = restart.3;
+            self.fill_search_direction(pos.view(), grad.view());
+            (lsstep, moved) =
+                self.search_from_q(obj, pos, *value, control.istep, linesearch, control);
         }
-        *pos = npos;
+        if moved {
+            pos.assign(&self.work.search.clipped);
+        }
         let ev = obj.value_and_gradient(pos.view());
         *value = ev.0;
         *grad = ev.1;
         if moved {
-            self.push(&*pos - &old, &*grad - &gold);
+            self.stage_secant(pos, grad);
+            let _ = self.store_loaded(None);
         }
         *istep = next_istep(lsstep, control);
+    }
+
+    /// Line search along [`Self::q`], then the clip and cap of `take_step`.
+    fn search_from_q<O>(
+        &mut self,
+        obj: &O,
+        pos: &Array1<f64>,
+        value: f64,
+        istep: f64,
+        linesearch: LineSearch,
+        control: &Control,
+    ) -> (f64, bool)
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let dir = std::mem::take(&mut *self.work.q.borrow_mut());
+        let outcome = take_step_reuse(
+            obj,
+            pos,
+            value,
+            dir.view(),
+            istep,
+            linesearch,
+            control,
+            &mut self.work.search,
+        );
+        *self.work.q.borrow_mut() = dir;
+        outcome
+    }
+
+    /// `s = x - x_old`, `y = g - g_old` in the pair scratch.
+    fn stage_secant(&self, pos: &Array1<f64>, grad: &Array1<f64>) {
+        let old_x = self.work.old_x.borrow();
+        let old_g = self.work.old_g.borrow();
+        {
+            let mut s = self.work.s_buf.borrow_mut();
+            if s.len() != pos.len() {
+                *s = pos - &*old_x;
+            } else {
+                s.assign(pos);
+                *s -= &*old_x;
+            }
+        }
+        let mut y = self.work.y_buf.borrow_mut();
+        if y.len() != grad.len() {
+            *y = grad - &*old_g;
+        } else {
+            y.assign(grad);
+            *y -= &*old_g;
+        }
     }
 }
 

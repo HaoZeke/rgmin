@@ -78,6 +78,7 @@ mod step;
 mod trust;
 /// The vector seam: solver algebra behind one interface.
 pub mod vecops;
+mod workspace;
 
 pub use accept::Accept;
 pub use adam::minimize_adam;
