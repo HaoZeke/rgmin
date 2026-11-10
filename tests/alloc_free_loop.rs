@@ -1,0 +1,196 @@
+//! The allocation-free loop keeps a recorded trajectory bit for bit,
+//! and a warm L-BFGS iteration does not allocate outside the objective.
+
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use eindir_core::objectives::Rosenbrock;
+use ndarray::{Array1, ArrayView1, array};
+use rgmin::{Accept, Control, FireKind, Lbfgs, Method, Solver};
+
+static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct Counting;
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static GLOBAL: Counting = Counting;
+
+fn bits(x: f64) -> u64 {
+    x.to_bits()
+}
+
+fn rosen(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+    let (a, b) = (x[0], x[1]);
+    let t = b - a * a;
+    let u = 1.0 - a;
+    let f = 100.0 * t * t + u * u;
+    let g = array![-400.0 * a * t - 2.0 * u, 200.0 * t];
+    (f, g)
+}
+
+/// Probes of `Lbfgs::minimize` on Rosenbrock from `(-1.2, 1)`, twelve
+/// iterations. Recorded on develop `39e08b85` before the workspace.
+const LBFGS_PROBES: &[(u64, u64, u64)] = &[
+    (0x4038333333333332, 0xbff3333333333333, 0x3ff0000000000000),
+    (0x40656ac02d7626fa, 0xbfd18bb6531cd45c, 0x3ff60bddb8d34326),
+    (0x4010e69d3cbdb120, 0xbff0474f7e72d8e8, 0x3ff13142d19ce0f0),
+    (0x4010825483d37e0b, 0xbff06eac439c8180, 0x3ff117ff4b83478d),
+    (0x40107b68d5799f06, 0xbff074e2011534c7, 0x3ff10ba43244ef10),
+    (0x40107659388d568c, 0xbff072f7c53108e5, 0x3ff0fdb2c3834780),
+    (0x401059a5669735a8, 0xbff05797f72f6e66, 0x3ff0a0f326ff4d90),
+    (0x401020c6661de69c, 0xbff0084fef0f3213, 0x3fefa2ad2ae96792),
+    (0x400f57bd448a0c26, 0xbfee6137413c5737, 0x3febbe41b3069ee1),
+    (0x400e3513fa481de6, 0xbfec67838547d9ce, 0x3fe7bc9acb2c76ae),
+    (0x400bc52503be8d86, 0xbfe9313a3a6762ab, 0x3fe226169db3d71d),
+    (0x40076bd20bf9716f, 0xbfe5b08c9f82d2d5, 0x3fdb413350e40b0e),
+    (0x4003bc0c2aee5cdc, 0xbfe1a1e86261e162, 0x3fd1d937d47b08e6),
+    (0x3fffcefcbaa63976, 0xbfd9306e53e655ee, 0x3fc1156c92705dde),
+];
+
+const SESSION_LBFGS: &[(u64, u64, u64)] = &[
+    (0x400df1609dcf899d, 0x3ff7eb851eb851ed, 0x4000624dd2f1a9fc),
+    (0x3ff737d8e1d916cd, 0x3ff6404f84518a82, 0x4000624dd2f1a9fc),
+    (0x3fc863e6640e7eb3, 0x3ff6d59c17c02b54, 0x40005db4796aa7b3),
+    (0x3fc7a617b75c0126, 0x3ff6dff0b1691237, 0x40005c70c4e950f6),
+    (0x3fc79bb76da64a62, 0x3ff6ddde5836c80d, 0x40005a59874023da),
+    (0x3fc713b92a07efbc, 0x3ff6bf29ba756d72, 0x4000358401a27ab6),
+    (0x3fc5efe4ded684d4, 0x3ff67864abe7e172, 0x3fffb2e91774d2b2),
+    (0x3fa7a187f4c1e6f1, 0x3ff3627b41be1740, 0x3ff76cea5529f138),
+];
+
+const SESSION_FIRE2: &[(u64, u64, u64)] = &[
+    (0x4057551d19f6891e, 0x3fee978d4fdf3b66, 0x3ffe147ae147ae14),
+    (0x40938fa881a061c8, 0x4000624dd2f1a9fc, 0x3fe50b308e289c7e),
+    (0x407d5f3cfd571b53, 0xc000624dd2f1a9fc, 0x4000624dd2f1a9fc),
+    (0x407cdc2a8ebf8e03, 0x4000624dd2f1a9fc, 0x4000624dd2f1a9fc),
+    (0x407d5f3cfd571b53, 0xc000624dd2f1a9fc, 0x4000624dd2f1a9fc),
+    (0x406121d7c53e9f9f, 0xbfee3fc0c66a6e42, 0x4000624dd2f1a9fc),
+    (0x40381ff672c7490a, 0xbff4346512b5b55b, 0x40003ea3cd188f27),
+    (0x4023a00d6932be5a, 0xbff569d5e06a7456, 0x3ffffe53f5b9fde5),
+];
+
+const GEOM_LBFGS: &[(u64, u64, u64)] = &[
+    (0x40121a9d5ff6f9f2, 0xbff0e2fb118a75cd, 0x3ff0f1b8deb7cfeb),
+    (0x40108f2590ca106a, 0xbff08d2ef34c67fc, 0x3ff1142c13830a67),
+    (0x40107fffab3b91b5, 0xbff078c0abb489fe, 0x3ff11555ebbe9469),
+    (0x40107c3e8facc6eb, 0xbff07210eb65958f, 0x3ff10e8509ec99fb),
+    (0x4010598fe9e2e098, 0xbff032de44c9c0d8, 0x3ff0b5d3c59c11e5),
+    (0x40100a0611bdc4f0, 0xbfef4991c0cf5814, 0x3fef9822b38bcd46),
+    (0x400fa933242b9505, 0xbfef7b400fb0ca7e, 0x3fef72a32bed9ff8),
+    (0x400f965308956560, 0xbfef8b350d0338bb, 0x3fef534b7ca94efe),
+];
+
+fn assert_row(tag: &str, k: usize, f: f64, x: ArrayView1<f64>, row: (u64, u64, u64)) {
+    assert_eq!(bits(f), row.0, "{tag} step {k} value");
+    assert_eq!(bits(x[0]), row.1, "{tag} step {k} x0");
+    assert_eq!(bits(x[1]), row.2, "{tag} step {k} x1");
+}
+
+#[test]
+fn recorded_trajectories_stay_bit_identical() {
+    let _hold = GATE.lock().unwrap();
+    let mut seen = Vec::new();
+    let mut lbfgs = Lbfgs::with_capacity(8);
+    lbfgs.gtol = 1e-12;
+    let _ = lbfgs.minimize_watched(
+        array![-1.2, 1.0].view(),
+        12,
+        |x| {
+            let (f, g) = rosen(x);
+            seen.push((f, x.to_owned()));
+            Some((f, g))
+        },
+        |_, _| true,
+    );
+    assert_eq!(seen.len(), LBFGS_PROBES.len());
+    for (k, ((f, x), row)) in seen.iter().zip(LBFGS_PROBES).enumerate() {
+        assert_row("lbfgs", k, *f, x.view(), *row);
+    }
+
+    let obj = Rosenbrock::<2>::new();
+    let control = Control {
+        maxiter: 20,
+        gtol: 1e-14,
+        istep: 0.1,
+        maxmove: None,
+        ..Default::default()
+    };
+    let mut solver = Solver::new(Method::lbfgs(), control.clone(), 2);
+    solver.set_accept(Accept::Energy);
+    let mut x = array![-1.2, 1.0];
+    for (k, row) in SESSION_LBFGS.iter().enumerate() {
+        let rep = solver.step(&obj, &mut x).unwrap();
+        assert_row("session lbfgs", k, rep.value, x.view(), *row);
+    }
+    let mut solver = Solver::new(Method::Fire { kind: FireKind::V2 }, control.clone(), 2);
+    let mut x = array![-1.2, 1.0];
+    for (k, row) in SESSION_FIRE2.iter().enumerate() {
+        let rep = solver.step(&obj, &mut x).unwrap();
+        assert_row("fire2", k, rep.value, x.view(), *row);
+    }
+    let mut solver = Solver::new(Method::lbfgs(), control, 2);
+    solver.set_atom_maxmove(0.2);
+    let mut x = array![-1.2, 1.0];
+    for (k, row) in GEOM_LBFGS.iter().enumerate() {
+        let rep = solver.step(&obj, &mut x).unwrap();
+        assert_row("geometry lbfgs", k, rep.value, x.view(), *row);
+    }
+}
+
+#[test]
+fn warm_lbfgs_iteration_allocates_only_inside_the_objective() {
+    let _hold = GATE.lock().unwrap();
+    let mut lbfgs = Lbfgs::with_capacity(8);
+    lbfgs.gtol = 0.0;
+    let mut obj_at = Vec::with_capacity(32);
+    let mut total_at = Vec::with_capacity(32);
+    let obj_allocs = AtomicUsize::new(0);
+    let _ = lbfgs.minimize_watched(
+        array![-1.2, 1.0].view(),
+        16,
+        |x| {
+            let before = ALLOCS.load(Ordering::Relaxed);
+            let (f, g) = rosen(x);
+            obj_allocs.fetch_add(
+                ALLOCS.load(Ordering::Relaxed).saturating_sub(before),
+                Ordering::Relaxed,
+            );
+            Some((f, g))
+        },
+        |_it, _| {
+            total_at.push(ALLOCS.load(Ordering::Relaxed));
+            obj_at.push(obj_allocs.load(Ordering::Relaxed));
+            true
+        },
+    );
+    assert!(total_at.len() > 10, "iterations {}", total_at.len());
+    let mut warm = Vec::new();
+    for i in 1..total_at.len() {
+        let total = total_at[i] - total_at[i - 1];
+        let obj = obj_at[i] - obj_at[i - 1];
+        let solver = total.saturating_sub(obj);
+        warm.push(solver);
+    }
+    let tail = &warm[warm.len().saturating_sub(4)..];
+    assert!(
+        tail.iter().all(|n| *n == 0),
+        "solver allocations per iteration after warm-up: {warm:?}"
+    );
+}
