@@ -205,7 +205,7 @@ impl Path for Line<'_> {
         true
     }
     fn slope(&mut self, _t: f64, _at: ArrayView1<'_, f64>, g: ArrayView1<'_, f64>) -> f64 {
-        g.iter().zip(self.dir.iter()).map(|(g, d)| g * d).sum()
+        crate::vecops::dot(g, self.dir)
     }
 }
 
@@ -222,8 +222,14 @@ pub(crate) fn axpy_into(
     dir: ArrayView1<'_, f64>,
     trial: &mut Array1<f64>,
 ) {
-    crate::workspace::assign_fit(trial, pos);
-    crate::vecops::axpy(t, dir, trial);
+    crate::workspace::fit(trial, pos.len());
+    match (trial.as_slice_mut(), pos.as_slice(), dir.as_slice()) {
+        (Some(d), Some(p), Some(r)) => crate::vecops::lincomb(d, p, t, r),
+        _ => {
+            crate::workspace::assign_fit(trial, pos);
+            crate::vecops::axpy(t, dir, trial);
+        }
+    }
 }
 
 /// `f`, or `+inf` when the value or gradient is non-finite. NaN fails no
@@ -256,7 +262,9 @@ where
 {
     path.start_into(&mut bufs.anchor);
     let (f0, g0) = oracle(bufs.anchor.view());
-    if unusable(f0, &g0, path.direction()) {
+    let bad = unusable(f0, &g0, path.direction());
+    crate::workspace::recycle_array(g0);
+    if bad {
         bufs.chosen = 0;
         return (f0, 0.0);
     }
@@ -265,7 +273,9 @@ where
             return f64::INFINITY;
         }
         let (f, g) = oracle(bufs.trial.view());
-        scored(f, g.view())
+        let score = scored(f, g.view());
+        crate::workspace::recycle_array(g);
+        score
     };
     let (a, b) = bracket(&mut phi, 0.0, istep.max(1e-12), maxiter);
     let (t, ft) = brent(&mut phi, a, b, tol, maxiter.max(20));
@@ -306,11 +316,17 @@ where
     } = rule;
     path.start_into(&mut bufs.anchor);
     let (f0, g0) = oracle(bufs.anchor.view());
-    if unusable(f0, &g0, path.direction()) {
+    let bad = unusable(f0, &g0, path.direction());
+    let slope: f64 = if bad {
+        0.0
+    } else {
+        path.slope(0.0, bufs.anchor.view(), g0.view())
+    };
+    crate::workspace::recycle_array(g0);
+    if bad {
         bufs.chosen = 0;
         return (f0, 0.0);
     }
-    let slope: f64 = path.slope(0.0, bufs.anchor.view(), g0.view());
     let mut alpha = istep.max(1e-16);
     bufs.copy_anchor_to_best();
     let mut best_f = f0;
@@ -319,7 +335,9 @@ where
         let have = path.point_into(alpha, &mut bufs.trial);
         let f = if have {
             let (f, g) = oracle(bufs.trial.view());
-            scored(f, g.view())
+            let score = scored(f, g.view());
+            crate::workspace::recycle_array(g);
+            score
         } else {
             f64::INFINITY
         };

@@ -29,7 +29,9 @@ where
     }
     let (f, g) = oracle(trial.view());
     let dphi = path.slope(alpha, trial.view(), g.view());
-    (scored(f, g.view()), dphi)
+    let score = scored(f, g.view());
+    crate::workspace::recycle_array(g);
+    (score, dphi)
 }
 
 /// Strong Wolfe constants with the measured `(phi(0), phi'(0))`.
@@ -164,7 +166,9 @@ where
     path.start_into(&mut bufs.anchor);
     let (f0, g0) = oracle(bufs.anchor.view());
     let dphi0: f64 = path.slope(0.0, bufs.anchor.view(), g0.view());
-    if unusable(f0, &g0, path.direction()) || !dphi0.is_finite() || dphi0 >= 0.0 {
+    let bad = unusable(f0, &g0, path.direction()) || !dphi0.is_finite() || dphi0 >= 0.0;
+    crate::workspace::recycle_array(g0);
+    if bad {
         bufs.chosen = 0;
         return (f0, 0.0);
     }
@@ -187,7 +191,9 @@ where
         let (phi, dphi) = if path.point_into(alpha, &mut bufs.trial) {
             let (phi, g) = oracle(bufs.trial.view());
             let dphi = path.slope(alpha, bufs.trial.view(), g.view());
-            (scored(phi, g.view()), dphi)
+            let score = scored(phi, g.view());
+            crate::workspace::recycle_array(g);
+            (score, dphi)
         } else {
             (f64::INFINITY, f64::NAN)
         };

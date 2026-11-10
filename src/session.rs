@@ -18,9 +18,9 @@ use crate::bb::bb_direction;
 use crate::control::{Control, StopNorm};
 use crate::error::{Error, Result};
 use crate::fire::{
-    FireKind, FireMix, FirePreparation, FirePreset, FireState, fire_after_v1, fire_after_v1_metric,
-    fire_clip_components, fire_displacement, fire_displacement_metric, fire_prepare_v2,
-    project_box_tangent,
+    FireKind, FireMix, FirePreparation, FirePreset, FireState, Prepared, fire_after_v1,
+    fire_after_v1_metric, fire_clip_components, fire_displacement, fire_displacement_into,
+    fire_displacement_metric, fire_prepare_v2, fire_prepare_v2_into, project_box_tangent,
 };
 use crate::holonomic::DistanceConstraints;
 use crate::hvp::{
@@ -93,6 +93,217 @@ struct TangentModel {
     basis: Array2<f64>,
 }
 
+/// Scratch vectors for [`Solver::step`]. Sized once, then overwritten.
+struct StepScratch {
+    grad: Array1<f64>,
+    start: Array1<f64>,
+    gold: Array1<f64>,
+    raw: Array1<f64>,
+    dx: Array1<f64>,
+    trial: Array1<f64>,
+    fwd: Array1<f64>,
+    corr: Array1<f64>,
+    saved_vel: Array1<f64>,
+    delta: Array1<f64>,
+    retract: Array1<f64>,
+}
+
+impl StepScratch {
+    fn new(n: usize) -> Self {
+        Self {
+            grad: Array1::zeros(n),
+            start: Array1::zeros(n),
+            gold: Array1::zeros(n),
+            raw: Array1::zeros(n),
+            dx: Array1::zeros(n),
+            trial: Array1::zeros(n),
+            fwd: Array1::zeros(n),
+            corr: Array1::zeros(n),
+            saved_vel: Array1::zeros(n),
+            delta: Array1::zeros(n),
+            retract: Array1::zeros(n),
+        }
+    }
+}
+
+fn empty_array() -> Array1<f64> {
+    Array1::from_vec(Vec::new())
+}
+
+/// Euclidean FIRE step into caller buffers. The arithmetic matches the
+/// allocating arm: negate, prepare, `x + dx`, optional atom cap, clip.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the FIRE step writes several reused buffers"
+)]
+fn flat_fire<O>(
+    state: &mut FireState,
+    obj: &O,
+    x: &mut Array1<f64>,
+    value: &mut f64,
+    grad: &mut Array1<f64>,
+    start: &Array1<f64>,
+    raw: &mut Array1<f64>,
+    dx: &mut Array1<f64>,
+    trial: &mut Array1<f64>,
+    fwd: &mut Array1<f64>,
+    corr: &mut Array1<f64>,
+    saved_vel: &mut Array1<f64>,
+    atom_maxmove: Option<f64>,
+    maxmove: Option<f64>,
+) -> Result<()>
+where
+    O: DifferentiableObjective<f64> + ?Sized,
+{
+    let snap = state.snap_into(saved_vel);
+    negate_into(raw, grad);
+    project_box_tangent(obj.bounds(), x, raw);
+    project_box_tangent(obj.bounds(), x, &mut state.vel);
+    match fire_prepare_v2_into(state, raw, corr) {
+        Prepared::Ready => {}
+        Prepared::Rollback => {
+            add_into(trial, x, corr);
+            clip_in_place(obj.bounds(), trial);
+            x.assign(trial);
+            let ev = obj.value_and_gradient(x.view());
+            if !finite(ev.0, ev.1.view()) {
+                state.restore_snap(snap, saved_vel);
+                x.assign(start);
+                return Err(non_finite());
+            }
+            crate::workspace::absorb(grad, ev.1);
+            negate_into(raw, grad);
+            project_box_tangent(obj.bounds(), x, raw);
+        }
+        Prepared::Stalled => return Err(Error::FireStalled { steps: 0 }),
+    }
+    crate::workspace::assign_fit(fwd, x.view());
+    fire_displacement_into(state, raw, dx);
+    let (atom_cap, cap) = if state.abc {
+        if let Some(limit) = atom_maxmove.or(maxmove) {
+            // ABC clips velocity, then the displacement is `dt * v`.
+            let _ = fire_clip_components(state, limit);
+            crate::workspace::assign_fit(dx, state.vel.view());
+            *dx *= state.dt;
+        }
+        (None, None)
+    } else {
+        (atom_maxmove, maxmove)
+    };
+    let plain = state.preset() == FirePreset::Default && !state.abc;
+    add_into(trial, x, dx);
+    let mut free_buf = empty_array();
+    if !plain {
+        crate::workspace::assign_fit(&mut free_buf, trial.view());
+    }
+    if let Some(limit) = atom_cap {
+        scale_step_atom(x, trial, limit);
+    } else if let Some(limit) = cap {
+        scale_step(x, trial, limit);
+    }
+    clip_in_place(obj.bounds(), trial);
+    let moved = plain || trial != &free_buf;
+    if matches!(state.kind, FireKind::V2) && state.dt > 0.0 && moved {
+        // secant = (trial - forward_start) / dt
+        crate::workspace::assign_fit(corr, trial.view());
+        *corr -= &*fwd;
+        *corr /= state.dt;
+        crate::workspace::assign_fit(&mut state.vel, corr.view());
+    }
+    let ev = obj.value_and_gradient(trial.view());
+    if !finite(ev.0, ev.1.view()) {
+        state.restore_snap(snap, saved_vel);
+        x.assign(start);
+        return Err(non_finite());
+    }
+    x.assign(trial);
+    *value = ev.0;
+    crate::workspace::absorb(grad, ev.1);
+    negate_into(raw, grad);
+    project_box_tangent(obj.bounds(), x, raw);
+    project_box_tangent(obj.bounds(), x, &mut state.vel);
+    fire_after_v1(state, raw);
+    Ok(())
+}
+
+fn negate_into(dst: &mut Array1<f64>, src: &Array1<f64>) {
+    let _phase = crate::phase::Guard::elem();
+    crate::workspace::fit(dst, src.len());
+    match (dst.as_slice_mut(), src.as_slice()) {
+        (Some(d), Some(s)) => crate::vecops::apply1(d, s, |d, s| *d = -s),
+        _ => {
+            dst.assign(src);
+            dst.mapv_inplace(|v| -v);
+        }
+    }
+}
+
+fn add_into(dst: &mut Array1<f64>, a: &Array1<f64>, b: &Array1<f64>) {
+    let _phase = crate::phase::Guard::elem();
+    crate::workspace::fit(dst, a.len());
+    match (dst.as_slice_mut(), a.as_slice(), b.as_slice()) {
+        (Some(d), Some(x), Some(y)) => crate::vecops::apply2(d, x, y, |d, x, y| *d = x + y),
+        _ => {
+            dst.assign(a);
+            *dst += b;
+        }
+    }
+}
+
+fn clip_in_place(bounds: &eindir_core::Bounds<f64>, trial: &mut Array1<f64>) {
+    let _phase = crate::phase::Guard::elem();
+    let n = trial.len();
+    #[cfg(feature = "par")]
+    if n >= 65_536 && rayon::current_num_threads() > 1 {
+        use rayon::prelude::*;
+        let low = bounds.low.as_slice().expect("contiguous");
+        let high = bounds.high.as_slice().expect("contiguous");
+        trial
+            .as_slice_mut()
+            .expect("contiguous")
+            .par_chunks_mut(16_384)
+            .zip(low.par_chunks(16_384))
+            .zip(high.par_chunks(16_384))
+            .for_each(|((t, lo), hi)| {
+                for ((ti, &lo), &hi) in t.iter_mut().zip(lo).zip(hi) {
+                    *ti = ti.max(lo).min(hi);
+                }
+            });
+        return;
+    }
+    for i in 0..n {
+        trial[i] = trial[i].max(bounds.low[i]).min(bounds.high[i]);
+    }
+}
+
+/// Moves a scratch vector out and puts it back when dropped.
+struct SlotGuard {
+    slot: *mut Array1<f64>,
+    buf: Array1<f64>,
+}
+
+impl SlotGuard {
+    fn take(slot: &mut Array1<f64>) -> Self {
+        Self {
+            buf: std::mem::replace(slot, empty_array()),
+            slot,
+        }
+    }
+
+    /// Owned vector. [`Drop`] writes back whatever [`Self::keep`] stored.
+    fn into_buf(mut self) -> Array1<f64> {
+        std::mem::replace(&mut self.buf, empty_array())
+    }
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        unsafe {
+            *self.slot = std::mem::replace(&mut self.buf, empty_array());
+        }
+    }
+}
+
 /// Long-lived solver. Algorithm memory lives here; `x` stays with the caller.
 pub struct Solver {
     dim: usize,
@@ -140,6 +351,8 @@ pub struct Solver {
     last_pos: Option<Array1<f64>>,
     last_value: f64,
     last_grad: Array1<f64>,
+    /// Length-n buffers for one step. Allocated in [`Solver::new`].
+    scratch: StepScratch,
     /// Objective gradients. A finite-difference product is an
     /// [`Self::hvp_calls`] entry, not a gradient.
     gradient_calls: usize,
@@ -250,7 +463,7 @@ impl Solver {
             steps: 0,
             qn_step: QnStep::TwoLoop,
             accept: Accept::None,
-            e_hist: VecDeque::new(),
+            e_hist: VecDeque::with_capacity(16),
             refused: false,
             tangent: TangentModel::default(),
             atom_maxmove: None,
@@ -280,6 +493,7 @@ impl Solver {
             last_pos: None,
             last_value: 0.0,
             last_grad: Array1::zeros(dim),
+            scratch: StepScratch::new(dim),
             gradient_calls: 0,
             hvp_calls: 0,
             exp: None,
@@ -998,9 +1212,13 @@ impl Solver {
     }
 
     fn remember(&mut self, x: &Array1<f64>, value: f64, grad: &Array1<f64>) {
-        self.last_pos = Some(x.clone());
+        if let Some(pos) = &mut self.last_pos {
+            crate::workspace::assign_fit(pos, x.view());
+        } else {
+            self.last_pos = Some(x.to_owned());
+        }
         self.last_value = value;
-        self.last_grad = grad.clone();
+        crate::workspace::assign_fit(&mut self.last_grad, grad.view());
     }
 
     fn stationarity_norm(&self, x: &Array1<f64>, grad: &Array1<f64>) -> f64 {
@@ -1035,13 +1253,17 @@ impl Solver {
     }
 
     fn report(&self, value: f64, x: &Array1<f64>, grad: &Array1<f64>) -> Report {
+        let mut coords = crate::workspace::take_array(x.len());
+        coords.assign(x);
+        let mut stored = crate::workspace::take_array(grad.len());
+        stored.assign(grad);
         Report {
             value,
-            coords: x.clone(),
+            coords,
             steps: self.steps,
             grad_norm: self.stationarity_norm(x, grad),
             stop_norm: self.stop_norm,
-            grad: Some(grad.clone()),
+            grad: Some(stored),
         }
     }
 
@@ -1976,18 +2198,28 @@ impl Solver {
             return self.step_pso(obj, x);
         }
 
-        let (mut value, mut grad) = if cached {
-            (self.last_value, self.last_grad.clone())
+        let grad_slot = SlotGuard::take(&mut self.scratch.grad);
+        let mut grad = grad_slot.into_buf();
+        let mut value = if cached {
+            crate::workspace::assign_fit(&mut grad, self.last_grad.view());
+            self.last_value
         } else {
-            obj.value_and_gradient(x.view())
+            let ev = obj.value_and_gradient(x.view());
+            crate::workspace::absorb(&mut grad, ev.1);
+            ev.0
         };
-        grad = self.horizontal_grad(x, &grad);
+        if !matches!(self.manifold, ManifoldKind::Euclidean) || self.project_rigid {
+            let projected = self.horizontal_grad(x, &grad);
+            crate::workspace::absorb(&mut grad, projected);
+        }
         if !finite(value, grad.view()) {
             return Err(non_finite());
         }
         let gnorm = self.stationarity_norm(x, &grad);
         if gnorm < self.control.gtol {
-            return Ok(self.report(value, x, &grad));
+            let rep = self.report(value, x, &grad);
+            self.scratch.grad = grad;
+            return Ok(rep);
         }
         self.refresh_exp(obj, x, &grad)?;
 
@@ -2018,11 +2250,15 @@ impl Solver {
             }
             self.remember(x, value, &grad);
             self.steps += 1;
-            return Ok(self.report(value, x, &grad));
+            let rep = self.report(value, x, &grad);
+            self.scratch.grad = grad;
+            return Ok(rep);
         }
 
         if self.use_geometry_lbfgs() {
-            return self.geometry_lbfgs_step(obj, x, value, grad);
+            let owned = grad.clone();
+            self.scratch.grad = grad;
+            return self.geometry_lbfgs_step(obj, x, value, owned);
         }
 
         // An external displacement has a measured gradient at both ends.
@@ -2058,8 +2294,24 @@ impl Solver {
             self.istep = self.control.istep.min(1.0 / l2(&grad));
         }
 
-        let start = x.clone();
-        let gold = grad.clone();
+        let start_slot = SlotGuard::take(&mut self.scratch.start);
+        let mut start = start_slot.into_buf();
+        crate::workspace::assign_fit(&mut start, x.view());
+        let gold_slot = SlotGuard::take(&mut self.scratch.gold);
+        let mut gold = gold_slot.into_buf();
+        crate::workspace::assign_fit(&mut gold, grad.view());
+        let raw_slot = SlotGuard::take(&mut self.scratch.raw);
+        let mut raw = raw_slot.into_buf();
+        let dx_slot = SlotGuard::take(&mut self.scratch.dx);
+        let mut dx_buf = dx_slot.into_buf();
+        let trial_slot = SlotGuard::take(&mut self.scratch.trial);
+        let mut trial_buf = trial_slot.into_buf();
+        let fwd_slot = SlotGuard::take(&mut self.scratch.fwd);
+        let mut fwd = fwd_slot.into_buf();
+        let corr_slot = SlotGuard::take(&mut self.scratch.corr);
+        let mut corr = corr_slot.into_buf();
+        let saved_vel_slot = SlotGuard::take(&mut self.scratch.saved_vel);
+        let mut saved_vel = saved_vel_slot.into_buf();
         let mut refused = false;
         match &mut self.inner {
             Inner::Lbfgs(solver) => {
@@ -2395,120 +2647,141 @@ impl Solver {
                 *b2p *= *beta2;
             }
             Inner::Fire(state) => {
-                // A refused trial returns with the integrator as it was, so a
-                // retry probes the same point instead of one further along.
-                let saved = state.clone();
-                let mut raw = grad.mapv(|g| -g);
-                project_box_tangent(obj.bounds(), x, &mut raw);
-                project_box_tangent(obj.bounds(), x, &mut state.vel);
                 let manifold = self.manifold;
                 let curved = !manifold.is_flat();
-                match fire_prepare_v2(state, &raw) {
-                    FirePreparation::Ready => {}
-                    FirePreparation::Rollback(correction) => {
-                        if curved {
-                            let back = manifold.project(x, &correction);
-                            let Some((point, _)) =
-                                retract_within_cap(obj, x, &back, None, None, manifold)
-                            else {
+                if !curved && self.exp.is_none() {
+                    flat_fire(
+                        state,
+                        obj,
+                        x,
+                        &mut value,
+                        &mut grad,
+                        &start,
+                        &mut raw,
+                        &mut dx_buf,
+                        &mut trial_buf,
+                        &mut fwd,
+                        &mut corr,
+                        &mut saved_vel,
+                        self.atom_maxmove,
+                        self.control.maxmove,
+                    )?;
+                } else {
+                    // A refused trial returns with the integrator as it was, so a
+                    // retry probes the same point instead of one further along.
+                    let saved = state.clone();
+                    let mut raw_force = grad.mapv(|g| -g);
+                    project_box_tangent(obj.bounds(), x, &mut raw_force);
+                    project_box_tangent(obj.bounds(), x, &mut state.vel);
+                    let manifold = self.manifold;
+                    let curved = !manifold.is_flat();
+                    match fire_prepare_v2(state, &raw_force) {
+                        FirePreparation::Ready => {}
+                        FirePreparation::Rollback(correction) => {
+                            if curved {
+                                let back = manifold.project(x, &correction);
+                                let Some((point, _)) =
+                                    retract_within_cap(obj, x, &back, None, None, manifold)
+                                else {
+                                    *state = saved;
+                                    *x = start;
+                                    return Err(Error::OffManifold {
+                                        kind: manifold.as_str(),
+                                    });
+                                };
+                                *x = point;
+                            } else {
+                                *x = obj.bounds().clip((&*x + &correction).view());
+                            }
+                            let ev = obj.value_and_gradient(x.view());
+                            if !finite(ev.0, ev.1.view()) {
                                 *state = saved;
                                 *x = start;
-                                return Err(Error::OffManifold {
-                                    kind: manifold.as_str(),
-                                });
-                            };
-                            *x = point;
-                        } else {
-                            *x = obj.bounds().clip((&*x + &correction).view());
+                                return Err(non_finite());
+                            }
+                            grad = ev.1;
+                            raw_force = grad.mapv(|g| -g);
+                            project_box_tangent(obj.bounds(), x, &mut raw_force);
                         }
-                        let ev = obj.value_and_gradient(x.view());
-                        if !finite(ev.0, ev.1.view()) {
+                        FirePreparation::Stalled => {
+                            return Err(Error::FireStalled { steps: self.steps });
+                        }
+                    }
+                    let forward_start = x.clone();
+                    let dx = if self.exp.is_some() {
+                        let mut steepest = metric_vector(&self.exp, &raw_force);
+                        project_box_tangent(obj.bounds(), x, &mut steepest);
+                        fire_displacement_metric(state, &raw_force, &steepest, |vel| {
+                            fire_mix(&self.exp, vel, &raw_force, &steepest)
+                        })
+                    } else {
+                        fire_displacement(state, &raw_force)
+                    };
+                    let dx = match self.atom_maxmove.or(self.control.maxmove) {
+                        Some(cap) if state.abc => fire_clip_components(state, cap),
+                        _ => dx,
+                    };
+                    // `(x + dx - x) / dt` rounds `v` by about `u |x| / |dx|`. The
+                    // opt-in settings keep `v` unless a cap, a bound or the
+                    // retraction moved the trial.
+                    let plain = state.preset() == FirePreset::Default && !state.abc;
+                    let free = (!plain).then(|| &*x + &dx);
+                    let (atom_cap, cap) = if state.abc {
+                        (None, None)
+                    } else {
+                        (self.atom_maxmove, self.control.maxmove)
+                    };
+                    let trial = if curved {
+                        let tangent = manifold.project(x, &dx);
+                        let Some((trial, _)) =
+                            retract_within_cap(obj, x, &tangent, atom_cap, cap, manifold)
+                        else {
                             *state = saved;
                             *x = start;
-                            return Err(non_finite());
+                            return Err(Error::OffManifold {
+                                kind: manifold.as_str(),
+                            });
+                        };
+                        trial
+                    } else {
+                        let mut trial = &*x + &dx;
+                        if let Some(cap) = atom_cap {
+                            scale_step_atom(x, &mut trial, cap);
+                        } else if let Some(cap) = cap {
+                            scale_step(x, &mut trial, cap);
                         }
-                        grad = ev.1;
-                        raw = grad.mapv(|g| -g);
-                        project_box_tangent(obj.bounds(), x, &mut raw);
+                        obj.bounds().clip(trial.view())
+                    };
+                    let moved = free.is_none_or(|free| trial != free);
+                    if matches!(state.kind, FireKind::V2) && state.dt > 0.0 && moved {
+                        let mut secant = (&trial - &forward_start) / state.dt;
+                        // The secant of a curved step has a normal part at the
+                        // trial, of order |trial - x| / 2 relative.
+                        if curved {
+                            manifold.project_in_place(&trial, &mut secant);
+                        }
+                        state.vel = secant;
                     }
-                    FirePreparation::Stalled => {
-                        return Err(Error::FireStalled { steps: self.steps });
-                    }
-                }
-                let forward_start = x.clone();
-                let dx = if self.exp.is_some() {
-                    let mut steepest = metric_vector(&self.exp, &raw);
-                    project_box_tangent(obj.bounds(), x, &mut steepest);
-                    fire_displacement_metric(state, &raw, &steepest, |vel| {
-                        fire_mix(&self.exp, vel, &raw, &steepest)
-                    })
-                } else {
-                    fire_displacement(state, &raw)
-                };
-                let dx = match self.atom_maxmove.or(self.control.maxmove) {
-                    Some(cap) if state.abc => fire_clip_components(state, cap),
-                    _ => dx,
-                };
-                // `(x + dx - x) / dt` rounds `v` by about `u |x| / |dx|`. The
-                // opt-in settings keep `v` unless a cap, a bound or the
-                // retraction moved the trial.
-                let plain = state.preset() == FirePreset::Default && !state.abc;
-                let free = (!plain).then(|| &*x + &dx);
-                let (atom_cap, cap) = if state.abc {
-                    (None, None)
-                } else {
-                    (self.atom_maxmove, self.control.maxmove)
-                };
-                let trial = if curved {
-                    let tangent = manifold.project(x, &dx);
-                    let Some((trial, _)) =
-                        retract_within_cap(obj, x, &tangent, atom_cap, cap, manifold)
-                    else {
+                    let ev = obj.value_and_gradient(trial.view());
+                    if !finite(ev.0, ev.1.view()) {
                         *state = saved;
                         *x = start;
-                        return Err(Error::OffManifold {
-                            kind: manifold.as_str(),
-                        });
-                    };
-                    trial
-                } else {
-                    let mut trial = &*x + &dx;
-                    if let Some(cap) = atom_cap {
-                        scale_step_atom(x, &mut trial, cap);
-                    } else if let Some(cap) = cap {
-                        scale_step(x, &mut trial, cap);
+                        return Err(non_finite());
                     }
-                    obj.bounds().clip(trial.view())
-                };
-                let moved = free.is_none_or(|free| trial != free);
-                if matches!(state.kind, FireKind::V2) && state.dt > 0.0 && moved {
-                    let mut secant = (&trial - &forward_start) / state.dt;
-                    // The secant of a curved step has a normal part at the
-                    // trial, of order |trial - x| / 2 relative.
-                    if curved {
-                        manifold.project_in_place(&trial, &mut secant);
+                    *x = trial;
+                    value = ev.0;
+                    grad = ev.1;
+                    let mut raw_new = grad.mapv(|g| -g);
+                    project_box_tangent(obj.bounds(), x, &mut raw_new);
+                    project_box_tangent(obj.bounds(), x, &mut state.vel);
+                    if self.exp.is_some() {
+                        let mut steep_new = metric_vector(&self.exp, &raw_new);
+                        project_box_tangent(obj.bounds(), x, &mut steep_new);
+                        let mix_new = fire_mix(&self.exp, &state.vel, &raw_new, &steep_new);
+                        fire_after_v1_metric(state, &raw_new, &steep_new, mix_new);
+                    } else {
+                        fire_after_v1(state, &raw_new);
                     }
-                    state.vel = secant;
-                }
-                let ev = obj.value_and_gradient(trial.view());
-                if !finite(ev.0, ev.1.view()) {
-                    *state = saved;
-                    *x = start;
-                    return Err(non_finite());
-                }
-                *x = trial;
-                value = ev.0;
-                grad = ev.1;
-                let mut raw_new = grad.mapv(|g| -g);
-                project_box_tangent(obj.bounds(), x, &mut raw_new);
-                project_box_tangent(obj.bounds(), x, &mut state.vel);
-                if self.exp.is_some() {
-                    let mut steep_new = metric_vector(&self.exp, &raw_new);
-                    project_box_tangent(obj.bounds(), x, &mut steep_new);
-                    let mix_new = fire_mix(&self.exp, &state.vel, &raw_new, &steep_new);
-                    fire_after_v1_metric(state, &raw_new, &steep_new, mix_new);
-                } else {
-                    fire_after_v1(state, &raw_new);
                 }
             }
             Inner::Bb { prev_s, prev_y } => {
@@ -2562,32 +2835,84 @@ impl Solver {
         let line_search = matches!(self.inner, Inner::Lbfgs(_)) && self.accept != Accept::None;
         let retracted = !(self.manifold.is_flat() || line_search);
         if !retracted {
-            let delta = &*x - &start;
-            let y = self.manifold.retract(&start, &delta);
-            if y.iter().zip(x.iter()).any(|(a, b)| (*a - *b).abs() > 1e-15) {
-                *x = y;
+            let euclidean = matches!(self.manifold, ManifoldKind::Euclidean) && !self.project_rigid;
+            // `retract(start, x - start)` on a flat Euclidean step is
+            // `start + (x - start)`. One pass answers the drift test.
+            // The buffers are filled only when a coordinate actually moved
+            // off that reconstruction, which is the path that reevaluates.
+            let drifted = if euclidean {
+                start.iter().zip(x.iter()).any(|(s, xi)| {
+                    let d = *xi - *s;
+                    (*s + d - *xi).abs() > 1e-15
+                })
+            } else {
+                let delta = &mut self.scratch.delta;
+                crate::workspace::assign_fit(delta, x.view());
+                *delta -= &start;
+                false
+            };
+            let drifted = if euclidean {
+                drifted
+            } else {
+                let y = self.manifold.retract(&start, &self.scratch.delta);
+                let drifted = y.iter().zip(x.iter()).any(|(a, b)| (*a - *b).abs() > 1e-15);
+                if drifted {
+                    x.assign(&y);
+                }
+                drifted
+            };
+            if drifted && euclidean {
+                {
+                    let delta = &mut self.scratch.delta;
+                    crate::workspace::sub_into(delta, x, &start);
+                }
+                let StepScratch { delta, retract, .. } = &mut self.scratch;
+                crate::workspace::assign_fit(retract, start.view());
+                *retract += &*delta;
+                x.assign(&*retract);
                 let ev = obj.value_and_gradient(x.view());
                 value = ev.0;
-                grad = ev.1;
+                crate::workspace::absorb(&mut grad, ev.1);
+            } else if drifted {
+                let ev = obj.value_and_gradient(x.view());
+                value = ev.0;
+                crate::workspace::absorb(&mut grad, ev.1);
             }
         }
-        grad = self.horizontal_grad(x, &grad);
+        if !matches!(self.manifold, ManifoldKind::Euclidean) || self.project_rigid {
+            let projected = self.horizontal_grad(x, &grad);
+            crate::workspace::absorb(&mut grad, projected);
+        }
 
-        let pair = if matches!(self.inner, Inner::Lbfgs(_))
-            && x.iter().zip(start.iter()).any(|(a, b)| a != b)
+        if matches!(self.inner, Inner::Lbfgs(_)) && x.iter().zip(start.iter()).any(|(a, b)| a != b)
         {
-            let (s, y) = self.lbfgs_sy(&start, x, &gold, &grad);
-            Some((s, y, l2(&grad)))
-        } else {
-            None
-        };
-        if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
-            solver.replace_newest(s, y, Some(gn));
+            if matches!(self.manifold, ManifoldKind::Euclidean) && !self.project_rigid {
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    let gn = l2(&grad);
+                    solver.replace_euclidean(&start, x, &gold, &grad, gn);
+                }
+            } else {
+                let (s, y) = self.lbfgs_sy(&start, x, &gold, &grad);
+                let gn = l2(&grad);
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.replace_newest(s, y, Some(gn));
+                }
+            }
         }
 
         self.remember(x, value, &grad);
         self.steps += 1;
-        Ok(self.report(value, x, &grad))
+        let rep = self.report(value, x, &grad);
+        self.scratch.grad = grad;
+        self.scratch.start = start;
+        self.scratch.gold = gold;
+        self.scratch.raw = raw;
+        self.scratch.dx = dx_buf;
+        self.scratch.trial = trial_buf;
+        self.scratch.fwd = fwd;
+        self.scratch.corr = corr;
+        self.scratch.saved_vel = saved_vel;
+        Ok(rep)
     }
 
     fn step_pso<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>

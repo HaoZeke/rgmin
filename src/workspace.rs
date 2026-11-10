@@ -17,10 +17,25 @@ pub(crate) fn fit(buf: &mut Array1<f64>, n: usize) {
 
 /// Copy `src` into `buf`, allocating only when the length changes.
 pub(crate) fn assign_fit(buf: &mut Array1<f64>, src: ArrayView1<'_, f64>) {
+    let _phase = crate::phase::Guard::copy();
     if buf.len() != src.len() {
         *buf = src.to_owned();
+    } else if let (Some(dst), Some(src)) = (buf.as_slice_mut(), src.as_slice()) {
+        crate::vecops::copy_slice(dst, src);
     } else {
         buf.assign(&src);
+    }
+}
+
+/// `dst[i] = a[i] - b[i]` in one pass.
+pub(crate) fn sub_into(dst: &mut Array1<f64>, a: &Array1<f64>, b: &Array1<f64>) {
+    fit(dst, a.len());
+    match (dst.as_slice_mut(), a.as_slice(), b.as_slice()) {
+        (Some(d), Some(x), Some(y)) => crate::vecops::apply2(d, x, y, |d, x, y| *d = x - y),
+        _ => {
+            dst.assign(a);
+            *dst -= b;
+        }
     }
 }
 
@@ -90,4 +105,46 @@ impl Default for SearchBuffers {
     fn default() -> Self {
         Self::new(0)
     }
+}
+
+/// Copy `src` into `dst` when the lengths match. A length change takes
+/// ownership of `src`.
+pub(crate) fn absorb(dst: &mut Array1<f64>, src: Array1<f64>) {
+    if dst.len() == src.len() {
+        assign_fit(dst, src.view());
+        recycle_array(src);
+    } else {
+        *dst = src;
+    }
+}
+
+thread_local! {
+    static POOL: std::cell::RefCell<Vec<Array1<f64>>> =
+        std::cell::RefCell::new(Vec::with_capacity(32));
+}
+
+/// A length-n vector, reused after a previous owner recycled it.
+pub fn take_array(n: usize) -> Array1<f64> {
+    POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        if let Some(i) = pool.iter().position(|a| a.len() == n) {
+            pool.swap_remove(i)
+        } else {
+            drop(pool);
+            Array1::zeros(n)
+        }
+    })
+}
+
+/// Keep `array` for a later [`take_array`] of the same length.
+pub fn recycle_array(array: Array1<f64>) {
+    if array.is_empty() {
+        return;
+    }
+    POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        if pool.len() < 32 {
+            pool.push(array);
+        }
+    });
 }

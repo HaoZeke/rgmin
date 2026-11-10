@@ -20,7 +20,29 @@ pub(crate) fn project_box_tangent(
     x: &Array1<f64>,
     vector: &mut Array1<f64>,
 ) {
-    for k in 0..x.len() {
+    let _phase = crate::phase::Guard::elem();
+    let n = x.len();
+    #[cfg(feature = "par")]
+    if n >= 65_536 && rayon::current_num_threads() > 1 {
+        use rayon::prelude::*;
+        let low = bounds.low.as_slice().expect("contiguous");
+        let high = bounds.high.as_slice().expect("contiguous");
+        let xs = x.as_slice().expect("contiguous");
+        let vs = vector.as_slice_mut().expect("contiguous");
+        vs.par_chunks_mut(16_384)
+            .zip(xs.par_chunks(16_384))
+            .zip(low.par_chunks(16_384))
+            .zip(high.par_chunks(16_384))
+            .for_each(|(((v, xk), lo), hi)| {
+                for (((vk, &xk), &lo), &hi) in v.iter_mut().zip(xk).zip(lo).zip(hi) {
+                    if (xk <= lo && *vk < 0.0) || (xk >= hi && *vk > 0.0) {
+                        *vk = 0.0;
+                    }
+                }
+            });
+        return;
+    }
+    for k in 0..n {
         if (x[k] <= bounds.low[k] && vector[k] < 0.0) || (x[k] >= bounds.high[k] && vector[k] > 0.0)
         {
             vector[k] = 0.0;
@@ -55,6 +77,28 @@ pub enum FirePreset {
 /// ASE `ase/optimize/fire2.py` and LAMMPS `src/min_fire.cpp` floor
 /// `alpha` here so the bias correction stays finite.
 const ABC_ALPHA_FLOOR: f64 = 1e-10;
+
+/// Scalars saved around one FIRE step. The velocity is stored separately.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FireSnap {
+    kind: FireKind,
+    dt: f64,
+    dt_start: f64,
+    dt_min: f64,
+    dt_max: f64,
+    alpha: f64,
+    alpha_start: f64,
+    n_pos: usize,
+    n_neg: usize,
+    n_neg_max: usize,
+    steps: usize,
+    n_min: usize,
+    f_inc: f64,
+    f_dec: f64,
+    f_alpha: f64,
+    preset: FirePreset,
+    abc: bool,
+}
 
 /// Session memory for one FIRE or FIRE 2.0 solve.
 #[derive(Clone)]
@@ -151,6 +195,52 @@ impl FireState {
         self.preset
     }
 
+    /// Copy the scalars and the velocity. The velocity lands in `saved_vel`.
+    pub(crate) fn snap_into(&self, saved_vel: &mut Array1<f64>) -> FireSnap {
+        crate::workspace::assign_fit(saved_vel, self.vel.view());
+        FireSnap {
+            kind: self.kind,
+            dt: self.dt,
+            dt_start: self.dt_start,
+            dt_min: self.dt_min,
+            dt_max: self.dt_max,
+            alpha: self.alpha,
+            alpha_start: self.alpha_start,
+            n_pos: self.n_pos,
+            n_neg: self.n_neg,
+            n_neg_max: self.n_neg_max,
+            steps: self.steps,
+            n_min: self.n_min,
+            f_inc: self.f_inc,
+            f_dec: self.f_dec,
+            f_alpha: self.f_alpha,
+            preset: self.preset,
+            abc: self.abc,
+        }
+    }
+
+    /// Restore a [`Self::snap_into`] copy.
+    pub(crate) fn restore_snap(&mut self, snap: FireSnap, saved_vel: &Array1<f64>) {
+        self.kind = snap.kind;
+        self.dt = snap.dt;
+        self.dt_start = snap.dt_start;
+        self.dt_min = snap.dt_min;
+        self.dt_max = snap.dt_max;
+        self.alpha = snap.alpha;
+        self.alpha_start = snap.alpha_start;
+        self.n_pos = snap.n_pos;
+        self.n_neg = snap.n_neg;
+        self.n_neg_max = snap.n_neg_max;
+        self.steps = snap.steps;
+        self.n_min = snap.n_min;
+        self.f_inc = snap.f_inc;
+        self.f_dec = snap.f_dec;
+        self.f_alpha = snap.f_alpha;
+        self.preset = snap.preset;
+        self.abc = snap.abc;
+        crate::workspace::assign_fit(&mut self.vel, saved_vel.view());
+    }
+
     /// Drop velocity and mixing; keep the current `dt`.
     pub fn reset(&mut self) {
         self.vel.fill(0.0);
@@ -171,9 +261,10 @@ fn mix_velocity(state: &mut FireState, force: &Array1<f64>) {
         return;
     }
     let scale = state.alpha * vnorm / fnorm;
-    for i in 0..state.vel.len() {
-        state.vel[i] = (1.0 - state.alpha) * state.vel[i] + scale * force[i];
-    }
+    let keep = 1.0 - state.alpha;
+    let vel = state.vel.as_slice_mut().expect("contiguous");
+    let force = force.as_slice().expect("contiguous");
+    crate::vecops::blend(vel, keep, scale, force);
 }
 
 /// Norms the FIRE mix matches.
@@ -294,6 +385,93 @@ pub(crate) fn fire_prepare_v2(state: &mut FireState, force: &Array1<f64>) -> Fir
             FirePreparation::Ready
         }
     }
+}
+
+/// Outcome of [`fire_prepare_v2_into`]. A rollback leaves the shift in
+/// the caller buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Prepared {
+    /// Continue from the current point.
+    Ready,
+    /// Apply the buffer and refresh the force.
+    Rollback,
+    /// Consecutive uphill steps exceeded Guénolé's limit.
+    Stalled,
+}
+
+/// [`fire_prepare_v2`] writing the rollback into `correction`.
+pub(crate) fn fire_prepare_v2_into(
+    state: &mut FireState,
+    force: &Array1<f64>,
+    correction: &mut Array1<f64>,
+) -> Prepared {
+    if !matches!(state.kind, FireKind::V2) {
+        return Prepared::Ready;
+    }
+    let power = crate::vecops::dot(force.view(), state.vel.view());
+    if power > 0.0 {
+        state.n_pos += 1;
+        state.n_neg = 0;
+        if state.n_pos > state.n_min {
+            state.dt = (state.dt * state.f_inc).min(state.dt_max);
+            state.alpha *= state.f_alpha;
+        }
+        return Prepared::Ready;
+    }
+    state.n_pos = 0;
+    state.n_neg += 1;
+    if state.n_neg > state.n_neg_max {
+        return Prepared::Stalled;
+    }
+    if state.steps + 1 >= state.n_min {
+        let shrunk = state.dt * state.f_dec;
+        state.dt = match state.preset {
+            FirePreset::Default => shrunk.max(state.dt_min),
+            FirePreset::Guenole2020 if shrunk >= state.dt_min => shrunk,
+            FirePreset::Guenole2020 => state.dt,
+        };
+    }
+    crate::workspace::assign_fit(correction, state.vel.view());
+    *correction *= -0.5 * state.dt;
+    let moved = correction.iter().any(|v| *v != 0.0);
+    state.vel.fill(0.0);
+    state.alpha = state.alpha_start;
+    if moved {
+        Prepared::Rollback
+    } else {
+        Prepared::Ready
+    }
+}
+
+/// [`fire_displacement`] writing `dt * v` into `dx`.
+pub(crate) fn fire_displacement_into(
+    state: &mut FireState,
+    force: &Array1<f64>,
+    dx: &mut Array1<f64>,
+) {
+    fire_displacement_into_kind(state, force, dx);
+}
+
+fn fire_displacement_into_kind(state: &mut FireState, force: &Array1<f64>, dx: &mut Array1<f64>) {
+    let dt = state.dt;
+    {
+        let vel = state.vel.as_slice_mut().expect("contiguous");
+        let force = force.as_slice().expect("contiguous");
+        crate::vecops::add_scaled(vel, force, dt);
+    }
+    if matches!(state.kind, FireKind::V2) {
+        abc_floor(state);
+        mix_velocity(state, force);
+        abc_correct(state);
+        state.steps += 1;
+    }
+    let dt = state.dt;
+    crate::workspace::fit(dx, state.vel.len());
+    crate::vecops::apply1(
+        dx.as_slice_mut().expect("contiguous"),
+        state.vel.as_slice().expect("contiguous"),
+        |d, v| *d = v * dt,
+    );
 }
 
 /// Forward displacement `dx` from the current force `f = -g`.

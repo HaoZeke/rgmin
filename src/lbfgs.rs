@@ -187,6 +187,10 @@ struct Work {
     old_g: RefCell<Array1<f64>>,
     /// Buffers for [`Lbfgs::step_objective`]'s line search.
     search: crate::workspace::SearchBuffers,
+    /// Pre-sized `(s, y)` storage so a new pair does not allocate.
+    spare: RefCell<Vec<Array1<f64>>>,
+    /// Holds the direction while the line search borrows it.
+    dir_hold: RefCell<Array1<f64>>,
 }
 
 impl Work {
@@ -201,6 +205,8 @@ impl Work {
             old_x: RefCell::new(Array1::zeros(0)),
             old_g: RefCell::new(Array1::zeros(0)),
             search: crate::workspace::SearchBuffers::default(),
+            spare: RefCell::new(Vec::new()),
+            dir_hold: RefCell::new(Array1::zeros(0)),
         }
     }
 }
@@ -215,7 +221,7 @@ impl Lbfgs {
     /// Fresh solver with room for `max_pairs` curvature pairs.
     pub fn with_capacity(max_pairs: usize) -> Self {
         Self {
-            memory: Vec::new(),
+            memory: Vec::with_capacity(max_pairs.max(1)),
             max_pairs: max_pairs.max(1),
             gtol: 1e-6,
             armijo: 1e-4,
@@ -338,6 +344,7 @@ impl Lbfgs {
 
     /// Two-loop into [`Self::q`]. The vector stays in the solver.
     fn fill_direction(&self, g: ArrayView1<f64>, middle: Middle<'_>) {
+        self.ensure_slots(g.len());
         {
             let mut q = self.work.q.borrow_mut();
             crate::workspace::assign_fit(&mut q, g);
@@ -346,6 +353,7 @@ impl Lbfgs {
     }
 
     fn apply_two_loop(&self, middle: Middle<'_>) {
+        let _phase = crate::phase::Guard::two_loop();
         let m = self.memory.len();
         let mut idxs = self.work.idxs.borrow_mut();
         idxs.clear();
@@ -500,9 +508,85 @@ impl Lbfgs {
     /// one in place.
     pub(crate) fn replace_newest(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) {
         if self.stored {
-            let _ = self.memory.pop();
+            self.pop_newest_to_spare();
         }
         self.push_pair(s, y, gnorm);
+    }
+
+    /// Replace the newest pair with `s = x - old`, `y = g - gold`.
+    pub(crate) fn replace_euclidean(
+        &mut self,
+        old: &Array1<f64>,
+        new_x: &Array1<f64>,
+        gold: &Array1<f64>,
+        grad: &Array1<f64>,
+        gnorm: f64,
+    ) {
+        self.stage_arrays(new_x, old, grad, gold);
+        if self.stored {
+            self.pop_newest_to_spare();
+        }
+        let _ = self.store_loaded(Some(gnorm));
+    }
+
+    fn stage_arrays(
+        &self,
+        s_src: &Array1<f64>,
+        s_sub: &Array1<f64>,
+        y_src: &Array1<f64>,
+        y_sub: &Array1<f64>,
+    ) {
+        {
+            let mut s = self.work.s_buf.borrow_mut();
+            crate::workspace::sub_into(&mut s, s_src, s_sub);
+        }
+        let mut y = self.work.y_buf.borrow_mut();
+        crate::workspace::sub_into(&mut y, y_src, y_sub);
+    }
+
+    fn pop_newest_to_spare(&mut self) {
+        if let Some(pair) = self.memory.pop() {
+            self.recycle_buf(pair.s);
+            self.recycle_buf(pair.y);
+        }
+    }
+
+    fn recycle_buf(&self, array: Array1<f64>) {
+        if array.is_empty() {
+            return;
+        }
+        self.work.spare.borrow_mut().push(array);
+    }
+
+    fn take_spare(&self, n: usize) -> Array1<f64> {
+        let mut spare = self.work.spare.borrow_mut();
+        if let Some(i) = spare.iter().position(|a| a.len() == n) {
+            spare.swap_remove(i)
+        } else {
+            drop(spare);
+            Array1::zeros(n)
+        }
+    }
+
+    /// Allocate pair slots once, at the first length that is stored.
+    fn ensure_slots(&self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        let ready = self.work.spare.borrow().iter().any(|a| a.len() == n)
+            || self.memory.iter().any(|p| p.s.len() == n);
+        if ready {
+            return;
+        }
+        let count = self.max_pairs.max(1) * 2;
+        let mut spare = self.work.spare.borrow_mut();
+        spare.reserve(count);
+        for _ in 0..count {
+            spare.push(Array1::zeros(n));
+        }
+        let cap = self.max_pairs.max(1);
+        self.work.idxs.borrow_mut().reserve(cap);
+        self.work.alpha.borrow_mut().reserve(cap);
     }
 
     /// Store `(s, y)` unless the cautious or relative-curvature test
@@ -575,15 +659,17 @@ impl Lbfgs {
             pair.rho = rho;
             self.memory.push(pair);
         } else {
+            let n = self.work.s_buf.borrow().len();
+            self.ensure_slots(n);
             let s = {
                 let mut s = self.work.s_buf.borrow_mut();
-                let n = s.len();
-                std::mem::replace(&mut *s, Array1::zeros(n))
+                let replacement = self.take_spare(s.len());
+                std::mem::replace(&mut *s, replacement)
             };
             let y = {
                 let mut y = self.work.y_buf.borrow_mut();
-                let n = y.len();
-                std::mem::replace(&mut *y, Array1::zeros(n))
+                let replacement = self.take_spare(y.len());
+                std::mem::replace(&mut *y, replacement)
             };
             self.memory.push(Pair { s, y, rho });
             self.trim();
@@ -1042,6 +1128,7 @@ impl Lbfgs {
     ) where
         O: DifferentiableObjective<f64> + ?Sized,
     {
+        let _phase = crate::phase::Guard::line_search();
         self.fill_search_direction(pos.view(), grad.view());
         {
             let mut old = self.work.old_x.borrow_mut();
@@ -1070,7 +1157,7 @@ impl Lbfgs {
         }
         let ev = obj.value_and_gradient(pos.view());
         *value = ev.0;
-        *grad = ev.1;
+        crate::workspace::absorb(grad, ev.1);
         if moved {
             self.stage_secant(pos, grad);
             let _ = self.store_loaded(None);
@@ -1091,18 +1178,29 @@ impl Lbfgs {
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
-        let dir = std::mem::take(&mut *self.work.q.borrow_mut());
-        let outcome = take_step_reuse(
-            obj,
-            pos,
-            value,
-            dir.view(),
-            istep,
-            linesearch,
-            control,
-            &mut self.work.search,
-        );
-        *self.work.q.borrow_mut() = dir;
+        {
+            let mut q = self.work.q.borrow_mut();
+            let mut hold = self.work.dir_hold.borrow_mut();
+            std::mem::swap(&mut *q, &mut *hold);
+        }
+        let outcome = {
+            let hold = self.work.dir_hold.borrow();
+            take_step_reuse(
+                obj,
+                pos,
+                value,
+                hold.view(),
+                istep,
+                linesearch,
+                control,
+                &mut self.work.search,
+            )
+        };
+        {
+            let mut q = self.work.q.borrow_mut();
+            let mut hold = self.work.dir_hold.borrow_mut();
+            std::mem::swap(&mut *q, &mut *hold);
+        }
         outcome
     }
 
@@ -1112,20 +1210,10 @@ impl Lbfgs {
         let old_g = self.work.old_g.borrow();
         {
             let mut s = self.work.s_buf.borrow_mut();
-            if s.len() != pos.len() {
-                *s = pos - &*old_x;
-            } else {
-                s.assign(pos);
-                *s -= &*old_x;
-            }
+            crate::workspace::sub_into(&mut s, pos, &old_x);
         }
         let mut y = self.work.y_buf.borrow_mut();
-        if y.len() != grad.len() {
-            *y = grad - &*old_g;
-        } else {
-            y.assign(grad);
-            *y -= &*old_g;
-        }
+        crate::workspace::sub_into(&mut y, grad, &old_g);
     }
 }
 

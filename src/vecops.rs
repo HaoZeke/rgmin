@@ -21,6 +21,7 @@ use ndarray::{Array1, ArrayView1};
 /// `x . y`.
 #[cfg(not(feature = "par"))]
 pub fn dot(x: ArrayView1<f64>, y: ArrayView1<f64>) -> f64 {
+    let _phase = crate::phase::Guard::dot();
     x.dot(&y)
 }
 
@@ -35,15 +36,18 @@ const PAR_MIN_LEN: usize = 65_536;
 #[cfg(feature = "par")]
 pub fn dot(x: ArrayView1<f64>, y: ArrayView1<f64>) -> f64 {
     use rayon::prelude::*;
+    let _phase = crate::phase::Guard::dot();
     if x.len() < PAR_MIN_LEN {
         return x.dot(&y);
     }
     match (x.as_slice(), y.as_slice()) {
-        (Some(a), Some(b)) => a
-            .par_chunks(4096)
-            .zip(b.par_chunks(4096))
-            .map(|(ca, cb)| ca.iter().zip(cb).map(|(p, q)| p * q).sum::<f64>())
-            .sum(),
+        (Some(a), Some(b)) => {
+            let _join = crate::phase::Guard::rayon();
+            a.par_chunks(4096)
+                .zip(b.par_chunks(4096))
+                .map(|(ca, cb)| ca.iter().zip(cb).map(|(p, q)| p * q).sum::<f64>())
+                .sum()
+        }
         _ => x.dot(&y),
     }
 }
@@ -51,6 +55,7 @@ pub fn dot(x: ArrayView1<f64>, y: ArrayView1<f64>) -> f64 {
 /// `y += a x`.
 #[cfg(not(feature = "par"))]
 pub fn axpy(a: f64, x: ArrayView1<f64>, y: &mut Array1<f64>) {
+    let _phase = crate::phase::Guard::axpy();
     y.scaled_add(a, &x);
 }
 
@@ -58,19 +63,21 @@ pub fn axpy(a: f64, x: ArrayView1<f64>, y: &mut Array1<f64>) {
 #[cfg(feature = "par")]
 pub fn axpy(a: f64, x: ArrayView1<f64>, y: &mut Array1<f64>) {
     use rayon::prelude::*;
+    let _phase = crate::phase::Guard::axpy();
     if x.len() < PAR_MIN_LEN {
         y.scaled_add(a, &x);
         return;
     }
     match (x.as_slice(), y.as_slice_mut()) {
         (Some(xs), Some(ys)) => {
+            let _join = crate::phase::Guard::rayon();
             ys.par_chunks_mut(4096)
                 .zip(xs.par_chunks(4096))
                 .for_each(|(cy, cx)| {
                     for (p, q) in cy.iter_mut().zip(cx) {
                         *p += a * q;
                     }
-                })
+                });
         }
         _ => y.scaled_add(a, &x),
     }
@@ -90,8 +97,135 @@ pub fn sum(x: ArrayView1<f64>) -> f64 {
         return x.sum();
     }
     match x.as_slice() {
-        Some(a) => a.par_chunks(4096).map(|c| c.iter().sum::<f64>()).sum(),
+        Some(a) => {
+            let _join = crate::phase::Guard::rayon();
+            a.par_chunks(4096).map(|c| c.iter().sum::<f64>()).sum()
+        }
         None => x.sum(),
+    }
+}
+
+/// `dst[i] = src[i]`. A memcpy, not a rayon join: at n = 96_000 a join
+/// costs more than the copy.
+pub fn copy_slice(dst: &mut [f64], src: &[f64]) {
+    debug_assert_eq!(dst.len(), src.len());
+    dst.copy_from_slice(src);
+}
+
+/// `dst[i] = op(src[i])`, one pass.
+#[inline(always)]
+pub fn apply1(dst: &mut [f64], src: &[f64], op: impl Fn(&mut f64, f64) + Sync) {
+    debug_assert_eq!(dst.len(), src.len());
+    #[cfg(feature = "par")]
+    if dst.len() >= PAR_MIN_LEN && rayon::current_num_threads() > 1 {
+        use rayon::prelude::*;
+        let _join = crate::phase::Guard::rayon();
+        dst.par_chunks_mut(16_384)
+            .zip(src.par_chunks(16_384))
+            .for_each(|(d, s)| {
+                for (di, &si) in d.iter_mut().zip(s) {
+                    op(di, si);
+                }
+            });
+        return;
+    }
+    for (d, &s) in dst.iter_mut().zip(src) {
+        op(d, s);
+    }
+}
+
+/// `dst[i] = op(a[i], b[i])`, one pass.
+#[inline(always)]
+pub fn apply2(dst: &mut [f64], a: &[f64], b: &[f64], op: impl Fn(&mut f64, f64, f64) + Sync) {
+    debug_assert_eq!(dst.len(), a.len());
+    debug_assert_eq!(dst.len(), b.len());
+    #[cfg(feature = "par")]
+    if dst.len() >= PAR_MIN_LEN && rayon::current_num_threads() > 1 {
+        use rayon::prelude::*;
+        let _join = crate::phase::Guard::rayon();
+        dst.par_chunks_mut(16_384)
+            .zip(a.par_chunks(16_384))
+            .zip(b.par_chunks(16_384))
+            .for_each(|((d, x), y)| {
+                for ((di, &xi), &yi) in d.iter_mut().zip(x).zip(y) {
+                    op(di, xi, yi);
+                }
+            });
+        return;
+    }
+    for ((d, &x), &y) in dst.iter_mut().zip(a).zip(b) {
+        op(d, x, y);
+    }
+}
+
+/// `dst[i] = keep * dst[i] + scale * src[i]`.
+#[inline(always)]
+pub fn blend(dst: &mut [f64], keep: f64, scale: f64, src: &[f64]) {
+    debug_assert_eq!(dst.len(), src.len());
+    #[cfg(feature = "par")]
+    if dst.len() >= PAR_MIN_LEN && rayon::current_num_threads() > 1 {
+        use rayon::prelude::*;
+        let _join = crate::phase::Guard::rayon();
+        dst.par_chunks_mut(16_384)
+            .zip(src.par_chunks(16_384))
+            .for_each(|(d, s)| {
+                for (di, &si) in d.iter_mut().zip(s) {
+                    *di = keep * *di + scale * si;
+                }
+            });
+        return;
+    }
+    for (di, &si) in dst.iter_mut().zip(src) {
+        *di = keep * *di + scale * si;
+    }
+}
+
+/// `dst[i] += scale * src[i]`.
+#[inline(always)]
+pub fn add_scaled(dst: &mut [f64], src: &[f64], scale: f64) {
+    debug_assert_eq!(dst.len(), src.len());
+    #[cfg(feature = "par")]
+    if dst.len() >= PAR_MIN_LEN && rayon::current_num_threads() > 1 {
+        use rayon::prelude::*;
+        let _join = crate::phase::Guard::rayon();
+        dst.par_chunks_mut(16_384)
+            .zip(src.par_chunks(16_384))
+            .for_each(|(d, s)| {
+                for (di, &si) in d.iter_mut().zip(s) {
+                    *di += scale * si;
+                }
+            });
+        return;
+    }
+    for (di, &si) in dst.iter_mut().zip(src) {
+        *di += scale * si;
+    }
+}
+
+/// `dst[i] = pos[i] + t * dir[i]` in one pass.
+///
+/// A line-search trial used to copy `pos` and then axpy. That is two
+/// trips over three vectors and, under `par`, a rayon join on the
+/// second trip only. One pass writes the same bits.
+pub fn lincomb(dst: &mut [f64], pos: &[f64], t: f64, dir: &[f64]) {
+    debug_assert_eq!(dst.len(), pos.len());
+    debug_assert_eq!(dst.len(), dir.len());
+    #[cfg(feature = "par")]
+    if dst.len() >= PAR_MIN_LEN {
+        use rayon::prelude::*;
+        let _join = crate::phase::Guard::rayon();
+        dst.par_chunks_mut(4096)
+            .zip(pos.par_chunks(4096))
+            .zip(dir.par_chunks(4096))
+            .for_each(|((d, p), r)| {
+                for ((di, &pi), &ri) in d.iter_mut().zip(p).zip(r) {
+                    *di = pi + t * ri;
+                }
+            });
+        return;
+    }
+    for ((di, &pi), &ri) in dst.iter_mut().zip(pos).zip(dir) {
+        *di = pi + t * ri;
     }
 }
 

@@ -10,6 +10,10 @@ The L-BFGS two-loop, its curvature pairs and the line-search trial reuse their l
 A warm ~Lbfgs::minimize~ iteration allocates only inside the objective.
 The arithmetic is unchanged.
 
+A steady ~Solver::step~ for L-BFGS (~Accept::Energy~) and FIRE 2.0 returns its coordinates and gradient from a reused buffer.
+The first step at a length still allocates the scratch; later steps do not.
+The flat FIRE step writes the velocity update, the mix and the displacement in one pass each.
+
 ~Lbfgs::ftol~ is the opt-in relative-decrease stop of L-BFGS-B, and its default of zero turns it off.
 A line-search step from ~f_k~ to ~f_{k+1}~ ends ~minimize~, ~minimize_watched~ and ~minimize_recognized~ when ~f_k - f_{k+1} <= ftol * max(|f_k|, |f_{k+1}|, 1)~.
 ~LBFGSB_FTOL~ is the SciPy default, and @@rst::doc:`reference/sota`@@ measures what it saves.

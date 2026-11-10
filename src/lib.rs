@@ -58,6 +58,7 @@ mod minimize;
 /// Shifted Newton and Banerjee RFO on a dense Hessian.
 pub mod newton;
 mod oracle;
+mod phase;
 /// Universal exponential preconditioner (Packwood et al. 2016).
 pub mod precon;
 mod pso;
@@ -108,6 +109,8 @@ pub use minimize::{minimize, minimize_method, minimize_method_hess, minimize_met
 pub use newton::{HessianObjective, HessianOracle, NewtonKind, minimize_newton};
 pub use nlcg::{Conjugacy, ConjugacyContext, Restart};
 pub use oracle::Oracle;
+pub use phase::{PhaseTimes, enable as phase_enable, reset as phase_reset, times as phase_times};
+pub use workspace::{recycle_array as recycle_gradient, take_array as take_gradient};
 pub use precon::{Exp, ExpParams, Neighbours, estimate_mu, nearest_neighbour_distance, sine_probe};
 pub use pso::minimize_pso;
 pub use qn::{minimize_bfgs, minimize_lbfgs, minimize_sd, minimize_sr1, minimize_sr2};

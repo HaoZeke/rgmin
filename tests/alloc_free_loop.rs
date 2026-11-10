@@ -10,7 +10,6 @@ use rgmin::{Accept, Control, FireKind, Lbfgs, Method, Solver};
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 struct Counting;
 
 unsafe impl GlobalAlloc for Counting {
@@ -192,5 +191,56 @@ fn warm_lbfgs_iteration_allocates_only_inside_the_objective() {
     assert!(
         tail.iter().all(|n| *n == 0),
         "solver allocations per iteration after warm-up: {warm:?}"
+    );
+}
+
+fn session_solver_allocs(method: Method, accept: Accept) -> Vec<usize> {
+    let obj_allocs = AtomicUsize::new(0);
+    let obj = rgmin::Oracle::unbounded(2, |x: ArrayView1<f64>| {
+        let before = ALLOCS.load(Ordering::Relaxed);
+        let (f, g) = rosen(x);
+        obj_allocs.fetch_add(
+            ALLOCS.load(Ordering::Relaxed).saturating_sub(before),
+            Ordering::Relaxed,
+        );
+        (f, g)
+    });
+    let control = Control {
+        maxiter: 20,
+        gtol: 0.0,
+        istep: 0.1,
+        maxmove: None,
+        ..Default::default()
+    };
+    let mut solver = Solver::new(method, control, 2);
+    if accept == Accept::Energy {
+        solver.set_accept(Accept::Energy);
+    }
+    let mut x = array![-1.2, 1.0];
+    let mut counts = Vec::new();
+    for _ in 0..6 {
+        let obj0 = obj_allocs.load(Ordering::Relaxed);
+        let before = ALLOCS.load(Ordering::Relaxed);
+        let rep = solver.step(&obj, &mut x).unwrap();
+        drop(rep);
+        let total = ALLOCS.load(Ordering::Relaxed) - before;
+        let objective = obj_allocs.load(Ordering::Relaxed) - obj0;
+        counts.push(total.saturating_sub(objective));
+    }
+    counts
+}
+
+#[test]
+fn steady_solver_steps_allocate_nothing_outside_the_objective() {
+    let _hold = GATE.lock().unwrap();
+    let lbfgs = session_solver_allocs(Method::lbfgs(), Accept::Energy);
+    assert!(
+        lbfgs[1..].iter().all(|n| *n == 0),
+        "lbfgs solver allocations from step 0: {lbfgs:?}"
+    );
+    let fire = session_solver_allocs(Method::Fire { kind: FireKind::V2 }, Accept::None);
+    assert!(
+        fire[1..].iter().all(|n| *n == 0),
+        "fire2 solver allocations from step 0: {fire:?}"
     );
 }

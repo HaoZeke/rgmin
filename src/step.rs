@@ -13,6 +13,7 @@ pub(crate) fn l2(g: &Array1<f64>) -> f64 {
 
 /// An answer a decrease test may compare: value and gradient finite.
 pub(crate) fn finite(f: f64, g: ArrayView1<'_, f64>) -> bool {
+    let _phase = crate::phase::Guard::elem();
     f.is_finite() && g.iter().all(|v| v.is_finite())
 }
 
@@ -242,14 +243,15 @@ where
             }
             let initial_slope = initial_grad.dot(&bufs.delta);
             let trial_slope = grad.dot(&bufs.delta);
+            crate::workspace::recycle_array(initial_grad);
             initial_slope < 0.0
                 && crate::linesearch::conditions::armijo(nval, value, 1.0, initial_slope, c1)
                 && crate::linesearch::conditions::strong_curvature(trial_slope, initial_slope, c2)
         }
         _ => false,
     };
+    crate::workspace::recycle_array(grad);
     if finite && (nval < value || curvature_decrease) {
-        let _ = grad;
         (lsstep, true)
     } else {
         (0.0, false)
