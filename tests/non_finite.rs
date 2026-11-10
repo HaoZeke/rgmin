@@ -263,7 +263,12 @@ fn a_refused_first_step_leaves_the_session_new() {
             let mut x = Array1::from_elem(3, 0.99);
             probed.lock().unwrap().clear();
             let r = solver.step(&obj, &mut x).unwrap();
-            (r.value, r.coords.clone(), r.steps, probed.lock().unwrap().clone())
+            (
+                r.value,
+                r.coords.clone(),
+                r.steps,
+                probed.lock().unwrap().clone(),
+            )
         };
         assert_eq!(run(true), run(false), "{token}");
     }

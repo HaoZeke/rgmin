@@ -94,12 +94,277 @@ impl<'a> Middle<'a> {
     }
 }
 
+/// One backward or forward pass of the two-loop.
+///
+/// Each direction is a single team: the threads keep their chunks for
+/// every pair and meet on a barrier for the scalar `s·q` or `y·q`.
+/// The last forward update folds in `q = -q`.
+fn sweep_backward(memory: &[Pair], idxs: &[usize], alpha: &mut [f64], q: &mut Array1<f64>) {
+    if idxs.is_empty() {
+        return;
+    }
+    if !use_team(q.len()) {
+        let q = q.as_slice_mut().expect("contiguous");
+        for (k, &i) in idxs.iter().enumerate().rev() {
+            let pair = &memory[i];
+            let (s, y) = slices(&pair.s, &pair.y);
+            let a = pair.rho * crate::vecops::dot(pair.s.view(), ndarray::ArrayView1::from(&*q));
+            alpha[k] = a;
+            for (qi, yi) in q.iter_mut().zip(y) {
+                *qi -= a * *yi;
+            }
+            let _ = s;
+        }
+        return;
+    }
+    team_sweep(memory, idxs, alpha.as_mut_ptr(), q, false);
+}
+
+fn sweep_forward(memory: &[Pair], idxs: &[usize], alpha: &[f64], q: &mut Array1<f64>) {
+    if idxs.is_empty() {
+        q.mapv_inplace(|v| -v);
+        return;
+    }
+    if !use_team(q.len()) {
+        let q = q.as_slice_mut().expect("contiguous");
+        let last = idxs.len() - 1;
+        for (k, &i) in idxs.iter().enumerate() {
+            let pair = &memory[i];
+            let (s, _y) = slices(&pair.s, &pair.y);
+            let b = pair.rho * crate::vecops::dot(pair.y.view(), ndarray::ArrayView1::from(&*q));
+            let coeff = alpha[k] - b;
+            if k == last {
+                for (qi, si) in q.iter_mut().zip(s) {
+                    *qi = -(*qi + coeff * *si);
+                }
+            } else {
+                for (qi, si) in q.iter_mut().zip(s) {
+                    *qi += coeff * *si;
+                }
+            }
+        }
+        return;
+    }
+    team_sweep(memory, idxs, alpha.as_ptr() as *mut f64, q, true);
+}
+
+fn slices<'a>(s: &'a Array1<f64>, y: &'a Array1<f64>) -> (&'a [f64], &'a [f64]) {
+    (
+        s.as_slice().expect("contiguous"),
+        y.as_slice().expect("contiguous"),
+    )
+}
+
+fn use_team(n: usize) -> bool {
+    #[cfg(feature = "par")]
+    {
+        n >= crate::vecops::REDUCTION_MIN && rayon::current_num_threads() > 1
+    }
+    #[cfg(not(feature = "par"))]
+    {
+        let _ = n;
+        false
+    }
+}
+
+fn team_sweep(
+    memory: &[Pair],
+    idxs: &[usize],
+    alpha: *mut f64,
+    q: &mut Array1<f64>,
+    forward: bool,
+) {
+    #[cfg(feature = "par")]
+    {
+        team_sweep_par(memory, idxs, alpha, q, forward);
+    }
+    #[cfg(not(feature = "par"))]
+    {
+        let _ = (memory, idxs, alpha, q, forward);
+    }
+}
+
+#[cfg(feature = "par")]
+fn team_sweep_par(
+    memory: &[Pair],
+    idxs: &[usize],
+    alpha: *mut f64,
+    q: &mut Array1<f64>,
+    forward: bool,
+) {
+    use std::sync::Arc;
+
+    let n = q.len();
+    let nthreads = rayon::current_num_threads();
+    let nchunks = n.div_ceil(crate::vecops::REDUCTION_CHUNK);
+    let (barrier, coeff, parts) = team_sync(nthreads, nchunks);
+    let qptr = q.as_mut_ptr() as usize;
+    let alpha_ptr = alpha as usize;
+    rayon::scope(|scope| {
+        for id in 1..nthreads {
+            let parts = Arc::clone(&parts);
+            let barrier = Arc::clone(&barrier);
+            let coeff = Arc::clone(&coeff);
+            scope.spawn(move |_| {
+                team_worker(
+                    id, nthreads, n, nchunks, memory, idxs, alpha_ptr, qptr, &parts, &barrier,
+                    &coeff, forward,
+                );
+            });
+        }
+        team_worker(
+            0, nthreads, n, nchunks, memory, idxs, alpha_ptr, qptr, &parts, &barrier, &coeff,
+            forward,
+        );
+    });
+}
+
+#[cfg(feature = "par")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the worker is one rayon task and shares no struct"
+)]
+fn team_worker(
+    id: usize,
+    nthreads: usize,
+    n: usize,
+    nchunks: usize,
+    memory: &[Pair],
+    idxs: &[usize],
+    alpha_ptr: usize,
+    qptr: usize,
+    parts: &[std::sync::atomic::AtomicU64],
+    barrier: &std::sync::Barrier,
+    coeff: &std::sync::atomic::AtomicU64,
+    forward: bool,
+) {
+    use std::sync::atomic::Ordering;
+
+    let chunk = crate::vecops::REDUCTION_CHUNK;
+    let steps = idxs.len();
+    let last = steps - 1;
+    for step in 0..steps {
+        let k = if forward { step } else { steps - 1 - step };
+        let pair = &memory[idxs[k]];
+        let (s, y) = slices(&pair.s, &pair.y);
+        let vec = if forward { y } else { s };
+        let q = unsafe { std::slice::from_raw_parts(qptr as *const f64, n) };
+        for c in (0..nchunks).filter(|c| c % nthreads == id) {
+            let start = c * chunk;
+            let end = (start + chunk).min(n);
+            let mut acc = 0.0;
+            for i in start..end {
+                acc += vec[i] * q[i];
+            }
+            parts[c].store(acc.to_bits(), Ordering::Relaxed);
+        }
+        barrier.wait();
+        if id == 0 {
+            let dot = pairwise_atomics(parts);
+            let value = if forward {
+                let alpha_k = unsafe { *(alpha_ptr as *const f64).add(k) };
+                alpha_k - pair.rho * dot
+            } else {
+                let a = pair.rho * dot;
+                unsafe {
+                    *(alpha_ptr as *mut f64).add(k) = a;
+                }
+                a
+            };
+            coeff.store(value.to_bits(), Ordering::Relaxed);
+        }
+        barrier.wait();
+        let value = f64::from_bits(coeff.load(Ordering::Relaxed));
+        let q = unsafe { std::slice::from_raw_parts_mut(qptr as *mut f64, n) };
+        let upd = if forward { s } else { y };
+        let sign = if forward { 1.0 } else { -1.0 };
+        let negate = forward && k == last;
+        for c in (0..nchunks).filter(|c| c % nthreads == id) {
+            let start = c * chunk;
+            let end = (start + chunk).min(n);
+            for i in start..end {
+                q[i] += sign * value * upd[i];
+                if negate {
+                    q[i] = -q[i];
+                }
+            }
+        }
+        barrier.wait();
+    }
+}
+
+#[cfg(feature = "par")]
+fn pairwise_atomics(v: &[std::sync::atomic::AtomicU64]) -> f64 {
+    use std::sync::atomic::Ordering;
+    fn rec(v: &[std::sync::atomic::AtomicU64]) -> f64 {
+        match v.len() {
+            0 => 0.0,
+            1 => f64::from_bits(v[0].load(Ordering::Relaxed)),
+            n => {
+                let mid = n / 2;
+                rec(&v[..mid]) + rec(&v[mid..])
+            }
+        }
+    }
+    rec(v)
+}
+
+#[cfg(feature = "par")]
+fn team_sync(
+    nthreads: usize,
+    nchunks: usize,
+) -> (
+    std::sync::Arc<std::sync::Barrier>,
+    std::sync::Arc<std::sync::atomic::AtomicU64>,
+    std::sync::Arc<Vec<std::sync::atomic::AtomicU64>>,
+) {
+    use std::sync::atomic::AtomicU64;
+    use std::sync::{Arc, Barrier};
+    struct Sync {
+        nthreads: usize,
+        barrier: Arc<Barrier>,
+        coeff: Arc<AtomicU64>,
+        parts: Arc<Vec<AtomicU64>>,
+    }
+    thread_local! {
+        static SYNC: std::cell::RefCell<Option<Sync>> = const { std::cell::RefCell::new(None) };
+    }
+    SYNC.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let grow = match cell.as_ref() {
+            Some(sync) => sync.nthreads != nthreads || sync.parts.len() < nchunks,
+            None => true,
+        };
+        if grow {
+            let keep = cell
+                .as_ref()
+                .map(|sync| sync.parts.len())
+                .unwrap_or(0)
+                .max(nchunks);
+            let parts = (0..keep).map(|_| AtomicU64::new(0)).collect();
+            *cell = Some(Sync {
+                nthreads,
+                barrier: Arc::new(Barrier::new(nthreads)),
+                coeff: Arc::new(AtomicU64::new(0)),
+                parts: Arc::new(parts),
+            });
+        }
+        let sync = cell.as_ref().expect("team sync");
+        (
+            Arc::clone(&sync.barrier),
+            Arc::clone(&sync.coeff),
+            Arc::clone(&sync.parts),
+        )
+    })
+}
+
 /// γ `q` with γ = `(s·y) / (y·y)` of the newest pair.
 fn scale_gamma_into(memory: &[Pair], q: &mut Array1<f64>) {
     if let Some(p) = memory.last() {
-        let yy = p.y.dot(&p.y);
+        let yy = crate::vecops::dot(p.y.view(), p.y.view());
         if yy > 0.0 {
-            *q *= p.s.dot(&p.y) / yy;
+            let gamma = crate::vecops::dot(p.s.view(), p.y.view()) / yy;
+            q.mapv_inplace(|v| v * gamma);
         }
     }
 }
@@ -220,9 +485,13 @@ impl Default for Lbfgs {
 impl Lbfgs {
     /// Fresh solver with room for `max_pairs` curvature pairs.
     pub fn with_capacity(max_pairs: usize) -> Self {
+        let max_pairs = max_pairs.max(1);
+        // Each pair is two vectors. The recycle pool has to be able to
+        // hold the whole history or a later take allocates.
+        crate::workspace::note_buffer_need(max_pairs * 2);
         Self {
-            memory: Vec::with_capacity(max_pairs.max(1)),
-            max_pairs: max_pairs.max(1),
+            memory: Vec::with_capacity(max_pairs),
+            max_pairs,
             gtol: 1e-6,
             armijo: 1e-4,
             curvature: 0.9,
@@ -241,6 +510,31 @@ impl Lbfgs {
             stored: false,
             work: Box::new(Work::new()),
         }
+    }
+
+    /// Length-n vectors kept for the pair history and the two-loop scratch.
+    pub(crate) fn vector_slots(&self) -> usize {
+        let mut n = self.memory.len() * 2 + self.work.spare.borrow().len();
+        let search = &self.work.search;
+        for buf in [
+            search.anchor.len(),
+            search.trial.len(),
+            search.best.len(),
+            search.clipped.len(),
+            search.delta.len(),
+            self.work.q.borrow().len(),
+            self.work.s_buf.borrow().len(),
+            self.work.y_buf.borrow().len(),
+            self.work.old_x.borrow().len(),
+            self.work.old_g.borrow().len(),
+            self.work.dir_hold.borrow().len(),
+            self.work.probe.borrow().len(),
+        ] {
+            if buf > 0 {
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Install or clear the exponential \(H_0 = P^{-1}\).
@@ -369,13 +663,7 @@ impl Lbfgs {
             alpha.resize(nidx, 0.0);
         }
         let mut q = self.work.q.borrow_mut();
-        for k in (0..nidx).rev() {
-            let i = idxs[k];
-            let p = &self.memory[i];
-            let a = p.rho * crate::vecops::dot(p.s.view(), q.view());
-            alpha[k] = a;
-            crate::vecops::axpy(-a, p.y.view(), &mut q);
-        }
+        sweep_backward(&self.memory, &idxs[..nidx], &mut alpha[..nidx], &mut q);
         match middle {
             Middle::Precon(pmat) => match solve_dense(pmat, &q) {
                 Some(solved) => q.assign(&solved),
@@ -394,13 +682,7 @@ impl Lbfgs {
                 }
             }
         }
-        for k in 0..nidx {
-            let i = idxs[k];
-            let p = &self.memory[i];
-            let b = p.rho * crate::vecops::dot(p.y.view(), q.view());
-            crate::vecops::axpy(alpha[k] - b, p.s.view(), &mut q);
-        }
-        q.mapv_inplace(|v| -v);
+        sweep_forward(&self.memory, &idxs[..nidx], &alpha[..nidx], &mut q);
     }
 
     /// `P^{-1} v` when an exponential preconditioner is installed and the solve succeeds.
@@ -1298,5 +1580,27 @@ mod tests {
             held(&lbfgs),
             vec![older, (array![0.0, 1.0], array![0.0, 3.0])]
         );
+    }
+
+    #[cfg(feature = "par")]
+    #[test]
+    fn the_two_loop_direction_matches_at_one_thread_and_at_four() {
+        let n = 70_000;
+        let s = Array1::from((0..n).map(|i| (i as f64 * 0.001).sin()).collect::<Vec<_>>());
+        let y = Array1::from((0..n).map(|i| (i as f64 * 0.001).cos()).collect::<Vec<_>>());
+        let g = Array1::from((0..n).map(|i| (i as f64 * 0.002).sin()).collect::<Vec<_>>());
+        let run = |threads: usize| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut lbfgs = Lbfgs::with_capacity(4);
+                    assert!(lbfgs.push(s.clone(), &y * 0.5));
+                    assert!(lbfgs.push(&s * 0.25, y.clone()));
+                    lbfgs.two_loop(g.view())
+                })
+        };
+        assert_eq!(run(1), run(4));
     }
 }

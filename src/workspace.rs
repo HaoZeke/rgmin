@@ -1,3 +1,4 @@
+// Copyright (c) rgmin developers
 //! Buffers a solver reuses across iterations.
 //!
 //! The two-loop, a line-search trial and a curvature pair are length-n
@@ -118,17 +119,45 @@ pub(crate) fn absorb(dst: &mut Array1<f64>, src: Array1<f64>) {
     }
 }
 
+struct Pool {
+    bufs: Vec<Array1<f64>>,
+    /// How many buffers this thread retains. L-BFGS raises it to
+    /// `2 * max_pairs`, the pair history, when that exceeds the default.
+    keep: usize,
+}
+
 thread_local! {
-    static POOL: std::cell::RefCell<Vec<Array1<f64>>> =
-        std::cell::RefCell::new(Vec::with_capacity(32));
+    static POOL: std::cell::RefCell<Pool> = std::cell::RefCell::new(Pool {
+        bufs: Vec::with_capacity(32),
+        keep: 32,
+    });
+}
+
+/// Remember that the caller holds `count` length-n history buffers.
+///
+/// The pool keeps at least that many recycled buffers. A smaller cap
+/// would drop a pair and allocate it again on the next take.
+pub fn note_buffer_need(count: usize) {
+    POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        if count > pool.keep {
+            pool.keep = count;
+            pool.bufs.reserve(count);
+        }
+    });
+}
+
+/// How many recycled buffers this thread will retain.
+pub fn buffer_keep() -> usize {
+    POOL.with(|pool| pool.borrow().keep)
 }
 
 /// A length-n vector, reused after a previous owner recycled it.
 pub fn take_array(n: usize) -> Array1<f64> {
     POOL.with(|pool| {
         let mut pool = pool.borrow_mut();
-        if let Some(i) = pool.iter().position(|a| a.len() == n) {
-            pool.swap_remove(i)
+        if let Some(i) = pool.bufs.iter().position(|a| a.len() == n) {
+            pool.bufs.swap_remove(i)
         } else {
             drop(pool);
             Array1::zeros(n)
@@ -143,8 +172,11 @@ pub fn recycle_array(array: Array1<f64>) {
     }
     POOL.with(|pool| {
         let mut pool = pool.borrow_mut();
-        if pool.len() < 32 {
-            pool.push(array);
+        let n = array.len();
+        let held = pool.bufs.iter().filter(|buf| buf.len() == n).count();
+        let keep = pool.keep;
+        if held < keep {
+            pool.bufs.push(array);
         }
     });
 }

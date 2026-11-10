@@ -1,3 +1,4 @@
+// Copyright (c) rgmin developers
 //! The allocation-free loop keeps a recorded trajectory bit for bit,
 //! and a warm L-BFGS iteration does not allocate outside the objective.
 
@@ -194,6 +195,44 @@ fn warm_lbfgs_iteration_allocates_only_inside_the_objective() {
     );
 }
 
+fn session_fire(preset: rgmin::FirePreset, abc: bool, cap: Option<f64>) -> Vec<usize> {
+    let obj_allocs = AtomicUsize::new(0);
+    let obj = rgmin::Oracle::unbounded(2, |x: ArrayView1<f64>| {
+        let before = ALLOCS.load(Ordering::Relaxed);
+        let (f, g) = rosen(x);
+        obj_allocs.fetch_add(
+            ALLOCS.load(Ordering::Relaxed).saturating_sub(before),
+            Ordering::Relaxed,
+        );
+        (f, g)
+    });
+    let control = Control {
+        maxiter: 20,
+        gtol: 0.0,
+        istep: 0.1,
+        maxmove: None,
+        ..Default::default()
+    };
+    let mut solver = Solver::new(Method::Fire { kind: FireKind::V2 }, control, 2);
+    solver.set_fire_preset(preset).unwrap();
+    solver.set_fire_abc(abc).unwrap();
+    if let Some(cap) = cap {
+        solver.set_atom_maxmove(cap);
+    }
+    let mut x = array![-1.2, 1.0];
+    let mut counts = Vec::new();
+    for _ in 0..6 {
+        let obj0 = obj_allocs.load(Ordering::Relaxed);
+        let before = ALLOCS.load(Ordering::Relaxed);
+        let rep = solver.step(&obj, &mut x).unwrap();
+        drop(rep);
+        let total = ALLOCS.load(Ordering::Relaxed) - before;
+        let objective = obj_allocs.load(Ordering::Relaxed) - obj0;
+        counts.push(total.saturating_sub(objective));
+    }
+    counts
+}
+
 fn session_solver_allocs(method: Method, accept: Accept) -> Vec<usize> {
     let obj_allocs = AtomicUsize::new(0);
     let obj = rgmin::Oracle::unbounded(2, |x: ArrayView1<f64>| {
@@ -230,17 +269,132 @@ fn session_solver_allocs(method: Method, accept: Accept) -> Vec<usize> {
     counts
 }
 
+/// Counts recorded before the scratch fix, objective subtracted, six steps:
+/// L-BFGS `Accept::Energy` `[35, 0, 0, 0, 0, 0]`,
+/// FIRE 2.0 default `[2, 0, 0, 0, 0, 0]`,
+/// Guénolé 2020 `[3, 1, 1, 1, 1, 1]`,
+/// Guénolé 2020 with a 0.2 atom cap `[3, 1, 1, 1, 1, 1]`,
+/// Guénolé 2020 with ABC and that cap `[4, 2, 2, 2, 2, 2]`,
+/// FIRE 1.0 `[2, 0, 0, 0, 0, 0]`.
 #[test]
 fn steady_solver_steps_allocate_nothing_outside_the_objective() {
     let _hold = GATE.lock().unwrap();
-    let lbfgs = session_solver_allocs(Method::lbfgs(), Accept::Energy);
-    assert!(
-        lbfgs[1..].iter().all(|n| *n == 0),
-        "lbfgs solver allocations from step 0: {lbfgs:?}"
+    let cases = [
+        session_solver_allocs(Method::lbfgs(), Accept::Energy),
+        session_solver_allocs(Method::Fire { kind: FireKind::V2 }, Accept::None),
+        session_fire(rgmin::FirePreset::Guenole2020, false, None),
+        session_fire(rgmin::FirePreset::Guenole2020, false, Some(0.2)),
+        session_fire(rgmin::FirePreset::Guenole2020, true, Some(0.2)),
+        session_solver_allocs(Method::Fire { kind: FireKind::V1 }, Accept::None),
+    ];
+    for counts in cases {
+        assert!(
+            counts[1..].iter().all(|n| *n == 0),
+            "solver allocations from step 0: {counts:?}"
+        );
+    }
+}
+
+fn rosen_chain(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+    let n = x.len();
+    let mut f = 0.0;
+    let mut g = vec![0.0; n];
+    for i in 0..n - 1 {
+        let t = x[i + 1] - x[i] * x[i];
+        let u = 1.0 - x[i];
+        f += 100.0 * t * t + u * u;
+        g[i] += -400.0 * x[i] * t - 2.0 * u;
+        g[i + 1] += 200.0 * t;
+    }
+    (f, Array1::from(g))
+}
+
+/// `m = 20` keeps 40 pair vectors, more than the old 32-slot pool.
+#[test]
+fn a_long_history_stays_allocation_free_after_the_first_step() {
+    let _hold = GATE.lock().unwrap();
+    rgmin::note_buffer_need(40);
+    let fresh: Vec<Array1<f64>> = (0..40).map(|_| Array1::zeros(8)).collect();
+    let round = ALLOCS.load(Ordering::Relaxed);
+    for buf in fresh {
+        rgmin::recycle_gradient(buf);
+    }
+    for _ in 0..40 {
+        let buf = rgmin::take_gradient(8);
+        assert_eq!(buf.len(), 8);
+    }
+    assert_eq!(
+        ALLOCS.load(Ordering::Relaxed),
+        round,
+        "cold recycle of 40 then take allocated"
     );
-    let fire = session_solver_allocs(Method::Fire { kind: FireKind::V2 }, Accept::None);
+    let obj_allocs = AtomicUsize::new(0);
+    let obj = rgmin::Oracle::unbounded(8, |x: ArrayView1<f64>| {
+        let before = ALLOCS.load(Ordering::Relaxed);
+        let (f, g) = rosen_chain(x);
+        obj_allocs.fetch_add(
+            ALLOCS.load(Ordering::Relaxed).saturating_sub(before),
+            Ordering::Relaxed,
+        );
+        (f, g)
+    });
+    let control = Control {
+        maxiter: 80,
+        gtol: 0.0,
+        istep: 0.1,
+        maxmove: None,
+        ..Default::default()
+    };
+    let mut solver = Solver::new(Method::Lbfgs { memory: 20 }, control, 8);
+    solver.set_accept(Accept::Energy);
     assert!(
-        fire[1..].iter().all(|n| *n == 0),
-        "fire2 solver allocations from step 0: {fire:?}"
+        rgmin::buffer_keep() >= 40,
+        "pool keep {}",
+        rgmin::buffer_keep()
     );
+    let mut x = Array1::from(vec![-1.2, 1.0, -1.2, 1.0, -1.2, 1.0, -1.2, 1.0]);
+    let mut counts = Vec::new();
+    for _ in 0..40 {
+        let obj0 = obj_allocs.load(Ordering::Relaxed);
+        let before = ALLOCS.load(Ordering::Relaxed);
+        let rep = solver.step(&obj, &mut x).unwrap();
+        drop(rep);
+        let total = ALLOCS.load(Ordering::Relaxed) - before;
+        let objective = obj_allocs.load(Ordering::Relaxed) - obj0;
+        counts.push(total.saturating_sub(objective));
+    }
+    assert!(
+        solver.retained_vectors() > 32,
+        "retained {}",
+        solver.retained_vectors()
+    );
+    assert!(
+        counts[1..].iter().all(|n| *n == 0),
+        "solver allocations from step 0: {counts:?}"
+    );
+    loop {
+        let mark = ALLOCS.load(Ordering::Relaxed);
+        let buf = rgmin::take_gradient(8);
+        if ALLOCS.load(Ordering::Relaxed) != mark {
+            drop(buf);
+            break;
+        }
+    }
+    let held: Vec<Array1<f64>> = (0..40).map(|_| Array1::zeros(8)).collect();
+    let mut back = Vec::with_capacity(40);
+    let after_build = ALLOCS.load(Ordering::Relaxed);
+    for buf in held {
+        rgmin::recycle_gradient(buf);
+    }
+    let after_recycle = ALLOCS.load(Ordering::Relaxed);
+    for _ in 0..40 {
+        back.push(rgmin::take_gradient(8));
+    }
+    let after_take = ALLOCS.load(Ordering::Relaxed);
+    assert_eq!(
+        (after_recycle, after_take),
+        (after_build, after_build),
+        "recycle {after_recycle} take {after_take} build {after_build}"
+    );
+    assert!(back.iter().all(|buf| buf.len() == 8));
 }

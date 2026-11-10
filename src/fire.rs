@@ -503,9 +503,15 @@ pub fn fire_displacement(state: &mut FireState, force: &Array1<f64>) -> Array1<f
 
 /// ABC-FIRE cap: clip each velocity component to `cap / dt` and return
 /// the displacement `dt v`, as ASE `FIRE2` does with `use_abc`.
-pub(crate) fn fire_clip_components(state: &mut FireState, cap: f64) -> Array1<f64> {
+pub(crate) fn fire_clip_velocity(state: &mut FireState, cap: f64) {
     let vmax = cap / state.dt;
-    state.vel.mapv_inplace(|v| v.max(-vmax).min(vmax));
+    if vmax.is_finite() {
+        state.vel.mapv_inplace(|v| v.max(-vmax).min(vmax));
+    }
+}
+
+pub(crate) fn fire_clip_components(state: &mut FireState, cap: f64) -> Array1<f64> {
+    fire_clip_velocity(state, cap);
     &state.vel * state.dt
 }
 

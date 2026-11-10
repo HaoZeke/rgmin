@@ -1,3 +1,4 @@
+// Copyright (c) rgmin developers
 //! Inclusive wall-time counters for a scaling profile.
 //!
 //! The counters stay at zero until [`enable`]. A region that calls

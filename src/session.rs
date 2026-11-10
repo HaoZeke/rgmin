@@ -19,8 +19,9 @@ use crate::control::{Control, StopNorm};
 use crate::error::{Error, Result};
 use crate::fire::{
     FireKind, FireMix, FirePreparation, FirePreset, FireState, Prepared, fire_after_v1,
-    fire_after_v1_metric, fire_clip_components, fire_displacement, fire_displacement_into,
-    fire_displacement_metric, fire_prepare_v2, fire_prepare_v2_into, project_box_tangent,
+    fire_after_v1_metric, fire_clip_components, fire_clip_velocity, fire_displacement,
+    fire_displacement_into, fire_displacement_metric, fire_prepare_v2, fire_prepare_v2_into,
+    project_box_tangent,
 };
 use crate::holonomic::DistanceConstraints;
 use crate::hvp::{
@@ -106,6 +107,8 @@ struct StepScratch {
     saved_vel: Array1<f64>,
     delta: Array1<f64>,
     retract: Array1<f64>,
+    /// Trial copy used to see whether a cap or a clip moved FIRE.
+    free: Array1<f64>,
 }
 
 impl StepScratch {
@@ -122,6 +125,7 @@ impl StepScratch {
             saved_vel: Array1::zeros(n),
             delta: Array1::zeros(n),
             retract: Array1::zeros(n),
+            free: Array1::zeros(n),
         }
     }
 }
@@ -149,6 +153,7 @@ fn flat_fire<O>(
     fwd: &mut Array1<f64>,
     corr: &mut Array1<f64>,
     saved_vel: &mut Array1<f64>,
+    free: &mut Array1<f64>,
     atom_maxmove: Option<f64>,
     maxmove: Option<f64>,
 ) -> Result<()>
@@ -182,7 +187,7 @@ where
     let (atom_cap, cap) = if state.abc {
         if let Some(limit) = atom_maxmove.or(maxmove) {
             // ABC clips velocity, then the displacement is `dt * v`.
-            let _ = fire_clip_components(state, limit);
+            fire_clip_velocity(state, limit);
             crate::workspace::assign_fit(dx, state.vel.view());
             *dx *= state.dt;
         }
@@ -192,9 +197,8 @@ where
     };
     let plain = state.preset() == FirePreset::Default && !state.abc;
     add_into(trial, x, dx);
-    let mut free_buf = empty_array();
     if !plain {
-        crate::workspace::assign_fit(&mut free_buf, trial.view());
+        crate::workspace::assign_fit(free, trial.view());
     }
     if let Some(limit) = atom_cap {
         scale_step_atom(x, trial, limit);
@@ -202,7 +206,7 @@ where
         scale_step(x, trial, limit);
     }
     clip_in_place(obj.bounds(), trial);
-    let moved = plain || trial != &free_buf;
+    let moved = plain || trial != free;
     if matches!(state.kind, FireKind::V2) && state.dt > 0.0 && moved {
         // secant = (trial - forward_start) / dt
         crate::workspace::assign_fit(corr, trial.view());
@@ -648,6 +652,16 @@ impl Solver {
     /// Packed length of `x` this session was created with.
     pub fn dim(&self) -> usize {
         self.dim
+    }
+
+    /// Length-n vectors the session is holding for scratch and history.
+    pub fn retained_vectors(&self) -> usize {
+        let scratch = 13;
+        let history = match &self.inner {
+            Inner::Lbfgs(solver) => solver.vector_slots(),
+            _ => 0,
+        };
+        scratch + history
     }
 
     /// Gradient evaluations charged to this session.
@@ -2663,6 +2677,7 @@ impl Solver {
                         &mut fwd,
                         &mut corr,
                         &mut saved_vel,
+                        &mut self.scratch.free,
                         self.atom_maxmove,
                         self.control.maxmove,
                     )?;

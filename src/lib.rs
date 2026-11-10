@@ -110,7 +110,6 @@ pub use newton::{HessianObjective, HessianOracle, NewtonKind, minimize_newton};
 pub use nlcg::{Conjugacy, ConjugacyContext, Restart};
 pub use oracle::Oracle;
 pub use phase::{PhaseTimes, enable as phase_enable, reset as phase_reset, times as phase_times};
-pub use workspace::{recycle_array as recycle_gradient, take_array as take_gradient};
 pub use precon::{Exp, ExpParams, Neighbours, estimate_mu, nearest_neighbour_distance, sine_probe};
 pub use pso::minimize_pso;
 pub use qn::{minimize_bfgs, minimize_lbfgs, minimize_sd, minimize_sr1, minimize_sr2};
@@ -123,5 +122,8 @@ pub use report::Report;
 pub use scg::{DirectionalCurvature, ScgParams, minimize_scg, minimize_scg_exact};
 pub use sella_step::{prfo_restricted, ras_clip, rfo_get_s, rfo_restricted, ts_bfgs_update};
 pub use session::Solver;
+pub use workspace::{
+    buffer_keep, note_buffer_need, recycle_array as recycle_gradient, take_array as take_gradient,
+};
 
 mod sphere_lbfgs;
