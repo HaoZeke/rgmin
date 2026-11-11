@@ -7,6 +7,10 @@ Unreleased
 
 ~~~~~~~~~~
 
+Opt-in ``Lbfgs::minimize_box`` and ``Lbfgs::minimize_box_watched`` relax inside a box ``lower <= x <= upper`` with the generalized Cauchy point and the subspace minimization of L-BFGS-B (Byrd, Lu, Nocedal and Zhu 1995).
+Each direction ends at the subspace minimizer from the Cauchy point, and the strong Wolfe search stops at the box.
+``Lbfgs::minimize`` keeps the eOn cap. ``LbfgsStep::Wolfe`` remains opt-in.
+
 ``Lbfgs::ftol`` is the opt-in relative-decrease stop of L-BFGS-B, and its default of zero turns it off.
 A line-search step from ``f_k`` to ``f_{k+1}`` ends ``minimize``, ``minimize_watched`` and ``minimize_recognized`` when ``f_k - f_{k+1} <= ftol * max(|f_k|, |f_{k+1}|, 1)``.
 ``LBFGSB_FTOL`` is the SciPy default, and :doc:`reference/sota` measures what it saves.
