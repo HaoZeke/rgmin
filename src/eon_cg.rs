@@ -153,8 +153,10 @@ where
         if curv > 0.0 && curv.is_finite() {
             step = p1 / curv;
         }
+        // std::copysign(mag, sign): magnitude of the cap, sign of the
+        // model step. `step.copysign(cap)` keeps the long model length.
         if step.abs() > opts.max_move {
-            step = step.copysign(opts.max_move);
+            step = opts.max_move.copysign(step);
         }
         for d in &mut direction {
             *d *= inv * step;
@@ -199,6 +201,41 @@ mod tests {
             g[i + 1] += 200.0 * b;
         }
         f
+    }
+
+    /// Two atoms, isotropic spring. The model step is longer than
+    /// `max_move`. The displacement has that length, not the length that
+    /// would put the largest atom on the cap.
+    #[test]
+    fn a_long_model_step_is_capped_before_the_atom_cap() {
+        fn spring(x: &[f64], g: &mut [f64]) -> f64 {
+            let k = 0.1;
+            let mut f = 0.0;
+            for i in 0..x.len() {
+                g[i] = k * x[i];
+                f += 0.5 * k * x[i] * x[i];
+            }
+            f
+        }
+        let mut x = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let opts = EonCg {
+            max_move: 0.2,
+            gtol: 1e-12,
+            max_iter: 1,
+            cluster: true,
+        };
+        let _ = minimize_eon_cg(&mut x, spring, &opts);
+        let mut n2 = 0.0;
+        let start = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        for i in 0..6 {
+            let d = x[i] - start[i];
+            n2 += d * d;
+        }
+        let disp = n2.sqrt();
+        assert!(
+            (disp - 0.2).abs() < 1e-12,
+            "scalar cap 0.2, displacement {disp} x {x:?}"
+        );
     }
 
     #[test]
