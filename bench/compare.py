@@ -239,7 +239,10 @@ def run_scipy():
 
 def merge():
     lines = ["problem,arm,library,evals,energy,grad,median_ms,converged"]
-    for path in sorted(RAW.glob("*.csv")):
+    for name in ("ase.csv", "eon.csv", "rgmin.csv", "scipy.csv"):
+        path = RAW / name
+        if not path.exists():
+            continue
         body = path.read_text().splitlines()[1:]
         lines.extend(row for row in body if row.strip())
     text = [

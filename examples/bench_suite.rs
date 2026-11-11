@@ -58,7 +58,7 @@ fn lennard_jones(x: ArrayView1<f64>, g: &mut [f64]) -> f64 {
         for j in (i + 1)..n {
             let d: [f64; 3] = std::array::from_fn(|a| x[3 * i + a] - x[3 * j + a]);
             let r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-            let s6 = r2.powi(-3);
+            let s6 = r2.powf(-3.0);
             e += 4.0 * (s6 * s6 - s6);
             let du_over_r = 24.0 * (s6 - 2.0 * s6 * s6) / r2;
             for a in 0..3 {
