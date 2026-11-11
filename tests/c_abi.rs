@@ -907,7 +907,7 @@ fn lowest_eigenpair_elpa_is_unavailable() {
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 32);
+    assert_eq!(stamp.abi_minor, 33);
     assert_eq!(stamp.layout_revision, 4);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
 }
@@ -2694,4 +2694,71 @@ fn c_abi_constraint_failures_are_typed_and_leave_x() {
         );
         assert!(rgmin_constraints_excess(std::ptr::null(), x.as_ptr(), 6).is_nan());
     }
+}
+
+/// The first capped step on `f = 1/2 ||x||^2` from `(1, 0, 0)` is
+/// `(-0.2, 0, 0)`. A null session and a FIRE session refuse the setter.
+#[test]
+fn c_abi_capped_lbfgs_moves_one_atom_by_the_cap() {
+    use rgmin::ffi::rgmin_solver_set_lbfgs_capped;
+    assert_eq!(
+        unsafe { rgmin_solver_set_lbfgs_capped(std::ptr::null_mut(), 0.2) },
+        1
+    );
+    let ctrl = rgmin_control_t {
+        maxiter: 10,
+        gtol: 1e-12,
+        istep: 0.1,
+        memory: 8,
+        maxmove: 0.0,
+    };
+    let fire = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_FIRE, &ctrl, 3) };
+    assert_eq!(unsafe { rgmin_solver_set_lbfgs_capped(fire, 0.2) }, 1);
+    unsafe { rgmin_solver_free(fire) };
+
+    let mut x = [1.0, 0.0, 0.0];
+    let xt = unsafe { rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), 3) };
+    let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_LBFGS, &ctrl, 3) };
+    assert_eq!(unsafe { rgmin_solver_set_lbfgs_capped(session, 0.2) }, 0);
+    let mut out = rgmin_report_t {
+        value: 0.0,
+        steps: 0,
+        grad_norm: 0.0,
+    };
+    let st = unsafe {
+        rgmin_solver_step_fg(
+            session,
+            Some(quad3_evalgrad),
+            std::ptr::null_mut(),
+            xt,
+            &mut out,
+        )
+    };
+    unsafe {
+        rgmin_solver_free(session);
+        rgmin_tensor_free(xt);
+    }
+    assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+    assert!((x[0] - 0.8).abs() <= 1e-12, "{x:?}");
+    assert!(x[1].abs() <= 1e-12 && x[2].abs() <= 1e-12, "{x:?}");
+}
+
+unsafe extern "C" fn quad3_evalgrad(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    value_out: *mut f64,
+    g: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let (p, n) = unsafe { cpu_f64(x) };
+    let (gp, gn) = unsafe { cpu_f64(g) };
+    assert_eq!((n, gn), (3, 3));
+    let mut f = 0.0;
+    let gp = gp as *mut f64;
+    for i in 0..3 {
+        let xi = unsafe { *p.add(i) };
+        f += 0.5 * xi * xi;
+        unsafe { *gp.add(i) = xi };
+    }
+    unsafe { *value_out = f };
+    rgmin_status_t::RGMIN_SUCCESS
 }

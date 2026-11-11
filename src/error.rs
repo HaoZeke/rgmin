@@ -90,6 +90,13 @@ pub enum Error {
     /// `fire2`.
     #[error("FIRE 2.0 preset or ABC requires fire2")]
     NeedFire2,
+    /// Capped L-BFGS was asked for where it cannot run, or a capped
+    /// step could not be formed.
+    #[error("capped L-BFGS: {what}")]
+    LbfgsCap {
+        /// What was refused.
+        what: &'static str,
+    },
     /// A FIRE step or an L-BFGS step under `Accept::None` on a curved
     /// kind found no retracted trial inside the box and the displacement
     /// cap.

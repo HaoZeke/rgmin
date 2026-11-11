@@ -27,7 +27,7 @@ use crate::hvp::{
     FiniteDifference, HessianVector, NewtonCgRequest, OptionalAction, newton_cg_step,
     sym_eig_jacobi,
 };
-use crate::lbfgs::{GradNorm, Lbfgs};
+use crate::lbfgs::{GradNorm, Lbfgs, LbfgsStep};
 use crate::linesearch::LineSearch;
 use crate::lowest_mode::{ApplyHessian, lowest_eigenpair};
 use crate::manifold::{Manifold, ManifoldKind};
@@ -57,6 +57,14 @@ const RADIUS_START: f64 = 1e-8;
 const RADIUS_GROWTH: f64 = 8.0;
 /// Saddle-escape kicks from one stationary point.
 const SADDLE_KICKS: u8 = 4;
+
+/// Why a capped trial did not move.
+enum CappedMiss {
+    /// The quasi-Newton trial was non-finite. Try the force once.
+    Retry,
+    /// Stop and restore the pairs.
+    Stop(Error),
+}
 
 /// `P^{-1} v` when an exponential metric is installed, otherwise `v`.
 fn metric_vector(exp: &Option<ExpState>, v: &Array1<f64>) -> Array1<f64> {
@@ -369,6 +377,71 @@ impl Solver {
     /// eOn `lbfgs_accept`. Default is take the clipped step.
     pub fn set_accept(&mut self, accept: Accept) {
         self.accept = accept;
+    }
+
+    /// Step-length rule for an L-BFGS session.
+    ///
+    /// [`LbfgsStep::Wolfe`] is the default. On a Euclidean session it
+    /// leaves the geometry step, selected by [`Self::set_atom_maxmove`],
+    /// and the strong Wolfe search where they are.
+    /// [`LbfgsStep::Capped`] replaces both for [`Self::step`]: one
+    /// evaluation, no line search, and the Nocedal-Wright scale of `H0`.
+    /// The cap is `max_atom` on that variant. It does not read
+    /// [`Self::set_atom_maxmove`]. A non-positive `max_atom` selects
+    /// [`LbfgsStep::Wolfe`]. A non-finite `max_atom`, a session that is
+    /// not L-BFGS, a non-Euclidean manifold, a distance-constraint set,
+    /// or a HiGHS feasible set is an error.
+    pub fn set_lbfgs_step(&mut self, step: LbfgsStep) -> Result<()> {
+        let step = match step {
+            LbfgsStep::Capped { max_atom } if !max_atom.is_finite() => {
+                return Err(Error::LbfgsCap {
+                    what: "max_atom is not finite",
+                });
+            }
+            LbfgsStep::Capped { max_atom } if max_atom <= 0.0 => LbfgsStep::Wolfe,
+            other => other,
+        };
+        if !matches!(self.inner, Inner::Lbfgs(_)) {
+            return Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            });
+        }
+        if matches!(step, LbfgsStep::Capped { .. }) {
+            if !matches!(self.manifold, ManifoldKind::Euclidean) {
+                return Err(Error::LbfgsCap {
+                    what: "requires Euclidean coordinates",
+                });
+            }
+            if self.constraints.is_some() {
+                return Err(Error::LbfgsCap {
+                    what: "distance constraints are set",
+                });
+            }
+            #[cfg(feature = "highs")]
+            if self.highs {
+                return Err(Error::LbfgsCap {
+                    what: "HiGHS projection is set",
+                });
+            }
+        }
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => solver.step = step,
+            _ => {
+                return Err(Error::LbfgsCap {
+                    what: "requires an L-BFGS session",
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Step-length rule stored on an L-BFGS session.
+    /// Other methods report [`LbfgsStep::Wolfe`].
+    pub fn lbfgs_step(&self) -> LbfgsStep {
+        match &self.inner {
+            Inner::Lbfgs(solver) => solver.step,
+            _ => LbfgsStep::Wolfe,
+        }
     }
 
     /// Under `Accept::Energy` or `Accept::Nonmonotone`, set the step
@@ -1176,6 +1249,11 @@ impl Solver {
         O: DifferentiableObjective<f64> + ?Sized,
     {
         if self.constraints.is_some() {
+            if self.lbfgs_step().capped_limit().is_some() {
+                return Err(Error::LbfgsCap {
+                    what: "distance constraints are set",
+                });
+            }
             return self.constrained_step(x, |s, x| s.step_constrained(obj, x));
         }
         if matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. }) {
@@ -1398,6 +1476,176 @@ impl Solver {
         } else if sy > 0.0 && yy > 0.0 {
             *h0 = sy / yy;
         }
+    }
+
+    fn shape_step(&self, x: &Array1<f64>, mut direction: Array1<f64>) -> Array1<f64> {
+        if self.project_rigid {
+            project_out_rot_trans(&mut direction, x.view());
+        }
+        self.project_vec(x, &direction)
+    }
+
+    /// Search direction of one capped step, after rigid and manifold projection.
+    fn capped_search(&mut self, x: &Array1<f64>, g: &Array1<f64>) -> Option<(Array1<f64>, bool)> {
+        let (direction, full) = match &mut self.inner {
+            Inner::Lbfgs(solver) => solver.capped_direction(g.view())?,
+            _ => return None,
+        };
+        let direction = self.shape_step(x, direction);
+        let slope = crate::vecops::dot(direction.view(), g.view());
+        if slope.is_finite() && slope < 0.0 {
+            return Some((direction, full));
+        }
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.forget();
+        }
+        let direction = self.shape_step(x, g.mapv(|v| -v));
+        let slope = crate::vecops::dot(direction.view(), g.view());
+        (slope.is_finite() && slope < 0.0).then_some((direction, true))
+    }
+
+    /// Trial point of a capped displacement. `steepest` reports that the
+    /// direction had no quasi-Newton length, so a non-finite answer is
+    /// not retried.
+    fn capped_trial<O>(
+        &self,
+        obj: &O,
+        x: &Array1<f64>,
+        step: &Array1<f64>,
+        steepest: bool,
+    ) -> Result<(Array1<f64>, f64, Array1<f64>, bool)>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let motion = max_atom_displacement(step);
+        if !motion.is_finite() || motion <= 0.0 {
+            return Err(Error::LbfgsCap {
+                what: "the capped step is zero",
+            });
+        }
+        let trial = obj.bounds().clip((x + step).view());
+        let taken = max_atom_displacement(&(&trial - x));
+        if !taken.is_finite() || taken <= 0.0 {
+            return Err(Error::OffManifold {
+                kind: self.manifold.as_str(),
+            });
+        }
+        let (value, grad) = obj.value_and_gradient(trial.view());
+        if !finite(value, grad.view()) {
+            return Err(if steepest {
+                non_finite()
+            } else {
+                Error::Oracle {
+                    what: "non-finite quasi-Newton trial",
+                }
+            });
+        }
+        Ok((trial, value, grad, steepest))
+    }
+
+    fn propose_capped<O>(
+        &mut self,
+        obj: &O,
+        x: &Array1<f64>,
+        grad: &Array1<f64>,
+        cap: f64,
+    ) -> std::result::Result<(Array1<f64>, f64, Array1<f64>), CappedMiss>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let Some((direction, full)) = self.capped_search(x, grad) else {
+            return Err(CappedMiss::Stop(Error::LbfgsCap {
+                what: "the gradient is not a descent direction",
+            }));
+        };
+        let step = Lbfgs::apply_atom_cap(&direction, cap, full);
+        match self.capped_trial(obj, x, &step, full) {
+            Ok((trial, value, grad, _)) => Ok((trial, value, grad)),
+            Err(Error::Oracle {
+                what: "non-finite quasi-Newton trial",
+            }) => Err(CappedMiss::Retry),
+            Err(err) => Err(CappedMiss::Stop(err)),
+        }
+    }
+
+    /// One ASE-style L-BFGS step. The two-loop direction keeps its pairs
+    /// when it is shortened to the cap. A non-finite quasi-Newton trial
+    /// is retried once along the force. A second non-finite trial restores
+    /// the pairs and returns [`Error::Oracle`].
+    fn capped_lbfgs_step<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        _value: f64,
+        grad: Array1<f64>,
+    ) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let Some(cap) = self.lbfgs_step().capped_limit() else {
+            return Err(Error::LbfgsCap {
+                what: "the cap is not positive",
+            });
+        };
+        let saved = match &self.inner {
+            Inner::Lbfgs(solver) => solver.curvature(),
+            _ => {
+                return Err(Error::LbfgsCap {
+                    what: "requires an L-BFGS session",
+                });
+            }
+        };
+        if !self.same_last_x(x)
+            && let Some(previous) = self.last_pos.clone()
+        {
+            let s = &*x - &previous;
+            let y = &grad - &self.last_grad;
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.push(s, y);
+            }
+        }
+        let proposed = match self.propose_capped(obj, x, &grad, cap) {
+            Ok(point) => point,
+            Err(CappedMiss::Retry) => {
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.forget();
+                }
+                match self.propose_capped(obj, x, &grad, cap) {
+                    Ok(point) => point,
+                    Err(CappedMiss::Retry) => {
+                        if let Inner::Lbfgs(solver) = &mut self.inner {
+                            solver.restore(saved);
+                        }
+                        return Err(non_finite());
+                    }
+                    Err(CappedMiss::Stop(err)) => {
+                        if let Inner::Lbfgs(solver) = &mut self.inner {
+                            solver.restore(saved);
+                        }
+                        return Err(err);
+                    }
+                }
+            }
+            Err(CappedMiss::Stop(err)) => {
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.restore(saved);
+                }
+                return Err(err);
+            }
+        };
+        let (trial, tval, tgrad) = proposed;
+        let old = x.clone();
+        let gold = grad;
+        *x = trial;
+        let grad = self.horizontal_grad(x, &tgrad);
+        let s = &*x - &old;
+        let y = &grad - &gold;
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.push(s, y);
+        }
+        self.remember(x, tval, &grad);
+        self.steps += 1;
+        Ok(self.report(tval, x, &grad))
     }
 
     /// Capped Cartesian L-BFGS step: severely clipped starts estimate inverse
@@ -1990,6 +2238,21 @@ impl Solver {
             return Ok(self.report(value, x, &grad));
         }
         self.refresh_exp(obj, x, &grad)?;
+
+        if self.lbfgs_step().capped_limit().is_some() {
+            if !matches!(self.manifold, ManifoldKind::Euclidean) {
+                return Err(Error::LbfgsCap {
+                    what: "requires Euclidean coordinates",
+                });
+            }
+            #[cfg(feature = "highs")]
+            if self.highs {
+                return Err(Error::LbfgsCap {
+                    what: "HiGHS projection is set",
+                });
+            }
+            return self.capped_lbfgs_step(obj, x, value, grad);
+        }
 
         if matches!(self.manifold, ManifoldKind::Sphere | ManifoldKind::Stiefel)
             && matches!(self.inner, Inner::Lbfgs(_))

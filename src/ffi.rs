@@ -74,7 +74,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 32;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 33;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -1862,6 +1862,37 @@ pub unsafe extern "C" fn rgmin_solver_set_fire_abc(solver: *mut rgmin_solver_t, 
         return 1;
     }
     match unsafe { (*solver).solver.set_fire_abc(on != 0) } {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            1
+        }
+    }
+}
+
+/// Capped L-BFGS. `max_atom > 0` drops the line search and shortens each
+/// two-loop step to that per-atom length, with the Nocedal-Wright scale
+/// of `H0`. A non-positive `max_atom` restores the strong Wolfe search.
+/// Returns 0, or 1 on a null session or a session that cannot run the
+/// capped step. ABI minor 33.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_lbfgs_capped(
+    solver: *mut rgmin_solver_t,
+    max_atom: f64,
+) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_lbfgs_capped: null solver");
+        return 1;
+    }
+    let step = if max_atom > 0.0 {
+        crate::LbfgsStep::Capped { max_atom }
+    } else {
+        crate::LbfgsStep::Wolfe
+    };
+    match unsafe { (*solver).solver.set_lbfgs_step(step) } {
         Ok(()) => 0,
         Err(e) => {
             set_last_error(&e.to_string());

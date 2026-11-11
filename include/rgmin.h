@@ -61,7 +61,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 32
+#define RGMIN_ABI_VERSION_MINOR 33
 #define RGMIN_ABI_LAYOUT_REVISION 4
 
 /** Solver selector. \c RGMIN_LBFGS is the production unconstrained method. */
@@ -296,6 +296,15 @@ int32_t rgmin_solver_set_fire_preset(rgmin_solver_t *solver, rgmin_fire_preset_t
  *  \c maxmove, bounds each displacement component. Returns 0, or 1 on
  *  a null session or a session that is not RGMIN_FIRE2. ABI minor 30. */
 int32_t rgmin_solver_set_fire_abc(rgmin_solver_t *solver, int32_t on);
+/** Capped L-BFGS on an L-BFGS session. The line search is dropped.
+ *  The two-loop step is shortened so the longest atomic displacement
+ *  is at most \c max_atom, and the initial inverse Hessian is the
+ *  Nocedal-Wright scale (s·y)/(y·y). A non-positive \c max_atom
+ *  restores the strong Wolfe search. Returns 0, or 1 on a null
+ *  session, a session that is not RGMIN_LBFGS, a non-finite cap, a
+ *  non-Euclidean manifold, a distance-constraint set, or HiGHS.
+ *  ABI minor 33. */
+int32_t rgmin_solver_set_lbfgs_capped(rgmin_solver_t *solver, double max_atom);
 /** Per-atom cap (eOn \c maxAtomMotionAppliedV). On Euclidean L-BFGS
  *  without a distance constraint set this selects the geometry step and
  *  ignores \ref rgmin_solver_set_accept. With a set, L-BFGS keeps its
