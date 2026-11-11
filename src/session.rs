@@ -1,7 +1,7 @@
 //! Persistent solver session. One [`Solver::step`] is one outer iteration.
 
 mod constrained;
-mod drive;
+pub(crate) mod drive;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -151,6 +151,14 @@ pub struct Solver {
     last_grad: Array1<f64>,
     /// When set, [`Self::report`] skips the coordinate and gradient copies.
     brief: bool,
+    /// Optional trace of the eOn fill step, for the cap and reset study.
+    eon_log: Option<Vec<crate::session::drive::EonFeat>>,
+    /// Ratio test on the capped two-loop step. Off by default.
+    trust: bool,
+    /// Current trust radius, in the same length as the cap.
+    trust_delta: f64,
+    /// Largest trust radius. The cap selected at construction.
+    trust_max: f64,
     /// Reused buffers for the Euclidean FIRE and L-BFGS steps.
     scratch: Array1<f64>,
     scratch_b: Array1<f64>,
@@ -296,6 +304,10 @@ impl Solver {
             last_value: 0.0,
             last_grad: Array1::zeros(dim),
             brief: false,
+            eon_log: None,
+            trust: false,
+            trust_delta: 0.0,
+            trust_max: 0.0,
             scratch: Array1::zeros(dim),
             scratch_b: Array1::zeros(dim),
             saved_x: Array1::zeros(dim),
@@ -590,6 +602,54 @@ impl Solver {
                 what: "requires an L-BFGS session",
             }),
         }
+    }
+
+    /// Measure the L-BFGS cap by the Euclidean length of the step.
+    /// The default is the longest per-atom displacement. Only an
+    /// L-BFGS session.
+    pub fn set_lbfgs_euclidean_cap(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.euclidean_cap = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Trust-region radius on the capped two-loop step.
+    ///
+    /// A long direction is scaled to the radius and the pairs are kept.
+    /// The radius starts at the cap. A ratio below `0.1` rejects the
+    /// trial and shrinks the radius. A ratio above `0.75` on a step
+    /// that meets the radius grows it, up to the cap. Off by default.
+    /// The predicted reduction is the Newton model `−½ g·s`
+    /// (Nocedal and Wright, algorithm 4.1,
+    /// <https://doi.org/10.1007/978-0-387-40065-5>).
+    /// This is the radius update, not the compact subproblem solve of
+    /// Burdakov, Gong, Yuan and Zikrin
+    /// (<https://doi.org/10.1007/s12532-016-0109-7>)
+    /// or Brust, Erway and Marcia
+    /// (<https://doi.org/10.1007/s10589-016-9868-3>).
+    pub fn set_lbfgs_trust(&mut self, on: bool) -> Result<()> {
+        if !matches!(self.inner, Inner::Lbfgs(_)) {
+            return Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            });
+        }
+        let cap = self
+            .lbfgs_step()
+            .capped_limit()
+            .unwrap_or(crate::lbfgs::EON_MAX_MOVE);
+        self.trust = on;
+        self.trust_delta = cap;
+        self.trust_max = cap;
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.keep_long = on;
+        }
+        Ok(())
     }
 
     /// eOn `lbfgs_project_rigid`. Isolated clusters only.

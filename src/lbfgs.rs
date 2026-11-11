@@ -317,6 +317,14 @@ pub struct Lbfgs {
     work: Array1<f64>,
     /// Curvature vectors waiting to be written again.
     pool: Vec<Array1<f64>>,
+    /// The last [`Self::forget_txn`] cleared the pairs.
+    pub(crate) forgot: bool,
+    /// Cap the whole displacement by its Euclidean length.
+    /// The default measures the longest atom.
+    pub(crate) euclidean_cap: bool,
+    /// A long quasi-Newton step is scaled and kept. The default clears
+    /// the pairs and steps along the force.
+    pub(crate) keep_long: bool,
 }
 
 impl Default for Lbfgs {
@@ -351,6 +359,9 @@ impl Lbfgs {
             stored: false,
             work: Array1::zeros(0),
             pool: Vec::new(),
+            forgot: false,
+            euclidean_cap: false,
+            keep_long: false,
         }
     }
 
@@ -424,7 +435,8 @@ impl Lbfgs {
         }
     }
 
-    pub(crate) fn begin_txn(&self) -> Txn {
+    pub(crate) fn begin_txn(&mut self) -> Txn {
+        self.forgot = false;
         Txn {
             sy: self.last_sy,
             yy: self.last_yy,
@@ -440,6 +452,7 @@ impl Lbfgs {
 
     /// Clear the pairs but keep them in `txn` until commit or rollback.
     pub(crate) fn forget_txn(&mut self, txn: &mut Txn) {
+        self.forgot = true;
         if txn.parked.is_none() {
             txn.pre_trimmed = std::mem::take(&mut txn.trimmed);
             txn.pre_pushed = txn.pushed;
@@ -925,7 +938,7 @@ impl Lbfgs {
             EonSeed::Steepest => {
                 self.forget_txn(txn);
                 let force = g.mapv(|v| -v);
-                let step = cap_displacement_atom(&(EON_STEEP_SCALE * &force), max_atom);
+                let step = self.apply_cap(&(EON_STEEP_SCALE * &force), max_atom);
                 self.work.assign(&step);
                 Some(true)
             }
@@ -944,15 +957,15 @@ impl Lbfgs {
                     let direction = self.direction_h0(g, h0);
                     self.work.assign(&direction);
                 }
-                let distance = max_atom_displacement(&self.work);
+                let distance = self.motion(&self.work);
                 let along = self.work.dot(&force);
                 let uphill = l2(&self.work) > 0.0 && l2(&force) > 0.0 && along < 0.0;
                 if !distance.is_finite() {
                     return None;
                 }
-                if distance >= max_atom || uphill {
+                if uphill || (distance >= max_atom && !self.keep_long) {
                     self.forget_txn(txn);
-                    let step = cap_displacement_atom(&(h0 * &force), max_atom);
+                    let step = self.apply_cap(&(h0 * &force), max_atom);
                     self.work.assign(&step);
                     Some(true)
                 } else {
@@ -979,9 +992,32 @@ impl Lbfgs {
         self.recycle_vec(v);
     }
 
-    /// Shorten `work` so its longest atom move is at most `cap`.
+    /// Length the cap compares with. The default is the longest atom.
+    fn motion(&self, step: &Array1<f64>) -> f64 {
+        if self.euclidean_cap {
+            l2(step)
+        } else {
+            max_atom_displacement(step)
+        }
+    }
+
+    /// Shorten `step` to `cap` in the length [`Self::motion`] uses.
+    fn apply_cap(&self, step: &Array1<f64>, cap: f64) -> Array1<f64> {
+        if self.euclidean_cap {
+            let motion = l2(step);
+            if motion > cap && motion > 0.0 && cap > 0.0 {
+                step * (cap / motion)
+            } else {
+                step.clone()
+            }
+        } else {
+            cap_displacement_atom(step, cap)
+        }
+    }
+
+    /// Shorten `work` so its measured length is at most `cap`.
     fn cap_work(&mut self, cap: f64) {
-        let motion = max_atom_displacement(&self.work);
+        let motion = self.motion(&self.work);
         if motion > cap && motion > 0.0 && cap > 0.0 {
             self.work *= cap / motion;
         }

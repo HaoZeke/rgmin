@@ -13,9 +13,103 @@ use crate::fire::{
 };
 use crate::lbfgs::{EON_FINITE_DIFFERENCE, EON_INVERSE_CURVATURE, EonSeed};
 use crate::report::Report;
+
+/// One eOn fill step, for the reset and cap study.
+#[derive(Clone, Copy, Debug)]
+pub struct EonFeat {
+    /// `(g+ - g) · s / s·s`, the directional curvature.
+    pub curvature: f64,
+    /// `|F|` before the step.
+    pub fnorm: f64,
+    /// `|F|` after the step.
+    pub fnorm_next: f64,
+    /// Cosine of the angle between the force and the step.
+    pub cos_angle: f64,
+    /// Largest per-atom displacement divided by the cap.
+    pub cap_ratio: f64,
+    /// Mean per-atom displacement.
+    pub atom_mean: f64,
+    /// Largest per-atom displacement.
+    pub atom_max: f64,
+    /// Euclidean length of the step.
+    pub step_len: f64,
+    /// The step cleared the curvature pairs.
+    pub reset: u8,
+}
 use crate::step::{finite, non_finite, scale_step, scale_step_atom};
 
+fn feat_of(
+    step: &Array1<f64>,
+    gold: &Array1<f64>,
+    gnew: &Array1<f64>,
+    cap: f64,
+    reset: bool,
+) -> EonFeat {
+    let n = step.len();
+    let mut ss = 0.0;
+    let mut sy = 0.0;
+    let mut gs = 0.0;
+    let mut gg = 0.0;
+    let mut gn = 0.0;
+    let mut atom_sum = 0.0;
+    let mut atom_max = 0.0_f64;
+    let mut atoms = 0.0;
+    let mut i = 0;
+    while i < n {
+        let end = (i + 3).min(n);
+        let mut a2 = 0.0;
+        for k in i..end {
+            let s = step[k];
+            let y = gnew[k] - gold[k];
+            let f = -gold[k];
+            ss += s * s;
+            sy += s * y;
+            gs += f * s;
+            gg += f * f;
+            gn += gnew[k] * gnew[k];
+            a2 += s * s;
+        }
+        let a = a2.sqrt();
+        atom_sum += a;
+        atom_max = atom_max.max(a);
+        atoms += 1.0;
+        i = end;
+    }
+    let fnorm = gg.sqrt();
+    let snorm = ss.sqrt();
+    EonFeat {
+        curvature: if ss > 0.0 { sy / ss } else { 0.0 },
+        fnorm,
+        fnorm_next: gn.sqrt(),
+        cos_angle: if fnorm > 0.0 && snorm > 0.0 {
+            gs / (fnorm * snorm)
+        } else {
+            0.0
+        },
+        cap_ratio: if cap > 0.0 { atom_max / cap } else { 0.0 },
+        atom_mean: if atoms > 0.0 { atom_sum / atoms } else { 0.0 },
+        atom_max,
+        step_len: snorm,
+        reset: u8::from(reset),
+    }
+}
+
+struct FillEnd {
+    value: f64,
+    rejected: bool,
+}
+
 impl Solver {
+    /// Start recording eOn fill steps. The next [`Self::run_fill`] appends.
+    pub fn start_eon_log(&mut self) {
+        self.eon_log = Some(Vec::new());
+    }
+
+    /// Take the recorded steps, if logging was started.
+    pub fn take_eon_log(&mut self) -> Vec<EonFeat> {
+        self.eon_log.take().unwrap_or_default()
+    }
+
     /// Minimize, with `fill` writing the gradient into the buffer it is given.
     ///
     /// The eOn cap and default FIRE reuse that buffer. Other methods copy
@@ -67,7 +161,16 @@ impl Solver {
             if self.stop_norm.of(self.last_grad.view()) < tol {
                 break;
             }
-            value = self.eon_fill_step(x, cap, fill)?;
+            let use_cap = if self.trust {
+                self.trust_delta.min(cap).max(1.0e-8)
+            } else {
+                cap
+            };
+            let end = self.eon_fill_step(x, use_cap, value, fill)?;
+            if end.rejected {
+                continue;
+            }
+            value = end.value;
         }
         self.last_value = value;
         self.store_x(x);
@@ -82,7 +185,13 @@ impl Solver {
         }
     }
 
-    fn eon_fill_step<F>(&mut self, x: &mut Array1<f64>, cap: f64, fill: &mut F) -> Result<f64>
+    fn eon_fill_step<F>(
+        &mut self,
+        x: &mut Array1<f64>,
+        cap: f64,
+        fold: f64,
+        fill: &mut F,
+    ) -> Result<FillEnd>
     where
         F: FnMut(ArrayView1<f64>, &mut Array1<f64>) -> f64,
     {
@@ -122,16 +231,39 @@ impl Solver {
         };
         self.saved_x.assign(x);
         x.scaled_add(1.0, &take.step);
-        if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.recycle(take.step);
-        }
+        let step_owned = take.step;
+        let reset = match &self.inner {
+            Inner::Lbfgs(solver) => solver.forgot,
+            _ => false,
+        };
         let new_value = fill(x.view(), &mut self.scratch);
         if !finite(new_value, self.scratch.view()) {
             x.assign(&self.saved_x);
             if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.recycle(step_owned);
                 solver.rollback_txn(txn);
             }
             return Err(non_finite());
+        }
+        if self.trust && self.trust_reject(&step_owned, fold, new_value, cap) {
+            x.assign(&self.saved_x);
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.recycle(step_owned);
+                solver.rollback_txn(txn);
+            }
+            return Ok(FillEnd {
+                value: fold,
+                rejected: true,
+            });
+        }
+        if self.eon_log.is_some() {
+            let feat = feat_of(&step_owned, &self.last_grad, &self.scratch, cap, reset);
+            if let Some(log) = self.eon_log.as_mut() {
+                log.push(feat);
+            }
+        }
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.recycle(step_owned);
         }
         {
             let prev = self.saved_x.as_slice().unwrap();
@@ -145,7 +277,50 @@ impl Solver {
         }
         std::mem::swap(&mut self.last_grad, &mut self.scratch);
         self.steps += 1;
-        Ok(new_value)
+        Ok(FillEnd {
+            value: new_value,
+            rejected: false,
+        })
+    }
+
+    /// `true` when the Newton-model ratio rejects this trial.
+    /// A rejection shrinks the radius. An accepted step may shrink or
+    /// grow it. The radius never leaves `(1e-8, trust_max)`.
+    fn trust_reject(&mut self, step: &Array1<f64>, fold: f64, fnew: f64, cap: f64) -> bool {
+        let mut gdot = 0.0;
+        let mut atom_max = 0.0_f64;
+        let mut i = 0;
+        let n = step.len();
+        while i < n {
+            let end = (i + 3).min(n);
+            let mut a2 = 0.0;
+            for k in i..end {
+                gdot += self.last_grad[k] * step[k];
+                a2 += step[k] * step[k];
+            }
+            atom_max = atom_max.max(a2.sqrt());
+            i = end;
+        }
+        let pred = if gdot < 0.0 { -0.5 * gdot } else { 0.0 };
+        let ared = fold - fnew;
+        let rho = if pred > 1.0e-16 {
+            ared / pred
+        } else if ared > 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let on_bound = cap > 0.0 && atom_max >= 0.99 * cap;
+        if rho < 0.1 && self.trust_delta > 1.0e-6 {
+            self.trust_delta = (self.trust_delta * 0.25).max(1.0e-8);
+            return true;
+        }
+        if rho < 0.25 {
+            self.trust_delta = (self.trust_delta * 0.25).max(1.0e-8);
+        } else if rho > 0.75 && on_bound {
+            self.trust_delta = (self.trust_delta * 2.0).min(self.trust_max);
+        }
+        false
     }
 
     /// First-step curvature probe. The box is not applied: [`Solver::run_fill`]
