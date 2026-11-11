@@ -46,8 +46,9 @@ There is no second solver implementation in C++.
 @@rst::doc:`reference/architecture`@@ draws these layers.
 
 The production unconstrained local method is limited-memory BFGS
-without a line search: the eOn cap of 0.2, the Nocedal-Wright scale
-of ~H0~, and a memory reset when the direction is not descent.
+without a line search: the eOn cap of 0.2, a curvature probe on the
+first step, and a memory reset when the proposal is at least that
+long. ~LbfgsStep::Scaled~ keeps a shortened pair.
 ~LbfgsStep::Wolfe~ opts into the strong Wolfe search (Nocedal and
 Wright algorithms 3.5--3.6). Hopping chains keep that solver's pair
 history on ~Lbfgs~; anneal's ~WarmLbfgs~ is a thin handle around it.

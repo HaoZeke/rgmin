@@ -1,0 +1,18 @@
+# Benchmarks
+
+Force calls and median wall time for L-BFGS, FIRE and conjugate gradients on the extended Rosenbrock function, Lennard-Jones clusters and the periodic Morse platinum cluster.
+
+Raw rows are `raw/rgmin.csv`, `raw/ase.csv`, `raw/scipy.csv` and `raw/eon.csv`. The table is `results.md`.
+
+`eon_ref.cpp` is the eOn client step from TheochemUI/eOn commit `579738a9387e8d0ea55496f45dd057812cfab892`: `LBFGS::getStep`, `FIRE::step` and `ConjugateGradients::single_step`, with that commit's default parameters.
+
+```
+env -i PATH HOME LANG cargo run --release --example bench_suite -- bench/raw/rgmin.csv
+g++ -O2 -std=c++20 -o /tmp/eon_ref bench/eon_ref.cpp
+env -i PATH HOME LANG /tmp/eon_ref "$PWD" bench/raw/eon.csv
+python3 -m venv /tmp/rgmin-bench-venv
+/tmp/rgmin-bench-venv/bin/pip install ase scipy numpy
+env -i PATH="/tmp/rgmin-bench-venv/bin:$PATH" HOME="$HOME" LANG="${LANG:-C.UTF-8}" python bench/compare.py
+```
+
+`compare.py` rewrites `results.md` from every CSV in `raw/`.

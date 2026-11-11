@@ -119,6 +119,7 @@ typedef rgmin_constraints_t xts_constraints_t;
 #define xts_solver_set_fire_preset rgmin_solver_set_fire_preset
 #define xts_solver_set_fire_abc rgmin_solver_set_fire_abc
 #define xts_solver_set_lbfgs_capped rgmin_solver_set_lbfgs_capped
+#define xts_solver_set_lbfgs_scaled rgmin_solver_set_lbfgs_scaled
 #define xts_solver_set_lbfgs_wolfe rgmin_solver_set_lbfgs_wolfe
 #define xts_solver_report_gradient rgmin_solver_report_gradient
 #define xts_solver_push_pair rgmin_solver_push_pair

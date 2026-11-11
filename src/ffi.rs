@@ -74,7 +74,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 34;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 35;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -127,6 +127,10 @@ pub enum rgmin_method_t {
     RGMIN_NEWTON_CG = 21,
     /// Steihaug-Toint Newton-CG with a Nyström preconditioner.
     RGMIN_NEWTON_PCG = 22,
+    /// Polak-Ribiere-Polyak, `max(0, β)`. SciPy `method="CG"`.
+    RGMIN_POLAK_RIBIERE_PLUS = 23,
+    /// Polak-Ribiere with the eOn Powell restart at threshold 0.5.
+    RGMIN_EON_CG = 24,
 }
 
 /// Closed leaf conjugacy. Integers match dest [`Conjugacy`] declaration
@@ -142,6 +146,7 @@ pub enum rgmin_conjugacy_t {
     RGMIN_CONJUGACY_HAGER_ZHANG = 5,
     RGMIN_CONJUGACY_LIU_STOREY = 6,
     RGMIN_CONJUGACY_FR_PR = 7,
+    RGMIN_CONJUGACY_POLAK_RIBIERE_PLUS = 8,
 }
 
 /// HiGHS `solver`. Integers match [`crate::HighsSolverKind`].
@@ -376,6 +381,7 @@ fn conjugacy_from_c(raw: i32) -> Result<Conjugacy, rgmin_status_t> {
         5 => Ok(Conjugacy::HagerZhang),
         6 => Ok(Conjugacy::LiuStorey),
         7 => Ok(Conjugacy::FrPr),
+        8 => Ok(Conjugacy::PolakRibierePlus),
         other => {
             set_last_error(&format!("rgmin_minimize_scg: unknown conjugacy {other}"));
             Err(rgmin_status_t::RGMIN_INVALID_PARAMETER)
@@ -418,21 +424,29 @@ fn method_from_c(m: rgmin_method_t, memory: usize) -> Method {
         },
         rgmin_method_t::RGMIN_NEWTON_CG => Method::NewtonCg,
         rgmin_method_t::RGMIN_NEWTON_PCG => Method::NewtonPcg,
+        rgmin_method_t::RGMIN_POLAK_RIBIERE_PLUS => Method::polak_ribiere_plus(),
+        rgmin_method_t::RGMIN_EON_CG => Method::eon_cg(),
     }
 }
 
 fn method_to_c(method: &Method) -> Result<rgmin_method_t, ()> {
     let tag = match method {
-        Method::Nlcg { conjugacy, .. } => match conjugacy {
-            Conjugacy::FletcherReeves => rgmin_method_t::RGMIN_FLETCHER_REEVES,
-            Conjugacy::PolakRibiere => rgmin_method_t::RGMIN_POLAK_RIBIERE,
-            Conjugacy::HestenesStiefel => rgmin_method_t::RGMIN_HESTENES_STIEFEL,
-            Conjugacy::DaiYuan => rgmin_method_t::RGMIN_DAI_YUAN,
-            Conjugacy::ConjugateDescent => rgmin_method_t::RGMIN_CONJUGATE_DESCENT,
-            Conjugacy::HagerZhang => rgmin_method_t::RGMIN_HAGER_ZHANG,
-            Conjugacy::LiuStorey => rgmin_method_t::RGMIN_LIU_STOREY,
-            Conjugacy::FrPr => rgmin_method_t::RGMIN_FR_PR,
-            Conjugacy::Hybrid { .. } => return Err(()),
+        Method::Nlcg { conjugacy, restart } => match (conjugacy, restart) {
+            (Conjugacy::PolakRibiere, crate::Restart::Powell { threshold })
+                if *threshold == 0.5 =>
+            {
+                rgmin_method_t::RGMIN_EON_CG
+            }
+            (Conjugacy::FletcherReeves, _) => rgmin_method_t::RGMIN_FLETCHER_REEVES,
+            (Conjugacy::PolakRibiere, _) => rgmin_method_t::RGMIN_POLAK_RIBIERE,
+            (Conjugacy::PolakRibierePlus, _) => rgmin_method_t::RGMIN_POLAK_RIBIERE_PLUS,
+            (Conjugacy::HestenesStiefel, _) => rgmin_method_t::RGMIN_HESTENES_STIEFEL,
+            (Conjugacy::DaiYuan, _) => rgmin_method_t::RGMIN_DAI_YUAN,
+            (Conjugacy::ConjugateDescent, _) => rgmin_method_t::RGMIN_CONJUGATE_DESCENT,
+            (Conjugacy::HagerZhang, _) => rgmin_method_t::RGMIN_HAGER_ZHANG,
+            (Conjugacy::LiuStorey, _) => rgmin_method_t::RGMIN_LIU_STOREY,
+            (Conjugacy::FrPr, _) => rgmin_method_t::RGMIN_FR_PR,
+            (Conjugacy::Hybrid { .. }, _) => return Err(()),
         },
         Method::Bfgs => rgmin_method_t::RGMIN_BFGS,
         Method::Lbfgs { .. } => rgmin_method_t::RGMIN_LBFGS,
@@ -1870,10 +1884,10 @@ pub unsafe extern "C" fn rgmin_solver_set_fire_abc(solver: *mut rgmin_solver_t, 
     }
 }
 
-/// Per-atom cap of the default line-search-free L-BFGS step.
+/// Per-atom cap of the default eOn L-BFGS step.
 /// `max_atom > 0` sets that cap. A non-positive value restores
 /// [`crate::EON_MAX_MOVE`]. Returns 0, or 1 on a null session or a
-/// session that cannot run the capped step. ABI minor 34.
+/// session that cannot run the capped step. ABI minor 35.
 ///
 /// # Safety
 /// `solver` is null or a live session from [`rgmin_solver_create`].
@@ -1887,6 +1901,38 @@ pub unsafe extern "C" fn rgmin_solver_set_lbfgs_capped(
         return 1;
     }
     let step = crate::LbfgsStep::Capped {
+        max_atom: if max_atom > 0.0 {
+            max_atom
+        } else {
+            crate::EON_MAX_MOVE
+        },
+    };
+    match unsafe { (*solver).solver.set_lbfgs_step(step) } {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            1
+        }
+    }
+}
+
+/// ASE length control on an L-BFGS session: shorten the two-loop step
+/// and keep the pairs. `max_atom > 0` sets the cap. A non-positive
+/// value restores [`crate::EON_MAX_MOVE`]. Returns 0, or 1 on a null
+/// session or a session that cannot run the scaled step. ABI minor 35.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_lbfgs_scaled(
+    solver: *mut rgmin_solver_t,
+    max_atom: f64,
+) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_lbfgs_scaled: null solver");
+        return 1;
+    }
+    let step = crate::LbfgsStep::Scaled {
         max_atom: if max_atom > 0.0 {
             max_atom
         } else {
@@ -3617,6 +3663,7 @@ mod conjugacy_abi_tests {
         assert_eq!(conjugacy_from_c(5).unwrap(), Conjugacy::HagerZhang);
         assert_eq!(conjugacy_from_c(6).unwrap(), Conjugacy::LiuStorey);
         assert_eq!(conjugacy_from_c(7).unwrap(), Conjugacy::FrPr);
+        assert_eq!(conjugacy_from_c(8).unwrap(), Conjugacy::PolakRibierePlus);
         assert_ne!(conjugacy_from_c(7).unwrap(), {
             Conjugacy::hybrid(Conjugacy::FletcherReeves, Conjugacy::PolakRibiere, true)
         });
@@ -3624,7 +3671,7 @@ mod conjugacy_abi_tests {
 
     #[test]
     fn conjugacy_from_c_rejects_unknown_and_method_t_codes() {
-        for raw in [-1, 8, 99, 13] {
+        for raw in [-1, 9, 99, 13] {
             assert_eq!(
                 conjugacy_from_c(raw),
                 Err(rgmin_status_t::RGMIN_INVALID_PARAMETER)

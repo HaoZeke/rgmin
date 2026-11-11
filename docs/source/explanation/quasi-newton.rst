@@ -27,10 +27,12 @@ rho   = 1 / (y . s).
 
 The update preserves positive definiteness exactly when the curvature
 pair condition y . s > 0 holds, which the strong Wolfe curvature
-condition guarantees at an accepted line-search point. That is the
-architectural reason the crate pairs ``Lbfgs`` with ``LineSearch::Wolfe``
-by default: the line search is not a convenience, it is the
-hypothesis of the update's soundness.
+condition guarantees at an accepted line-search point. The default
+step does not search the line. It is the eOn cap: the first step
+probes curvature, and a proposal at least as long as the cap clears
+the memory. ``LbfgsStep::Wolfe`` is the opt-in search that enforces the
+condition before the step is accepted. ``LbfgsStep::Scaled`` shortens
+the two-loop step and keeps the pair.
 
 2 The two-loop recursion
 ------------------------

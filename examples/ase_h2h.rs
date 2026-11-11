@@ -237,11 +237,7 @@ where
     F: Fn(ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync + Copy,
 {
     let (e0, g0) = fg(x0.view());
-    println!(
-        "init\t{problem}\t{:.16e}\t{:.16e}",
-        e0,
-        fmax_of(&g0)
-    );
+    println!("init\t{problem}\t{:.16e}\t{:.16e}", e0, fmax_of(&g0));
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let mut rows = Vec::new();
     for arm in ARMS {

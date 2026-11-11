@@ -13,13 +13,19 @@ and on @@rst::doc:`reference/bibliography <bibliography>`@@ after
 The production method for a smooth unconstrained problem with an
 analytic or fused gradient is limited-memory BFGS without a line
 search. The eOn client does not line-search its L-BFGS step
-(<https://github.com/TheochemUI/eOn>, ~client/LBFGS.cpp~). The default
-cap is that client's ~max_move~, 0.2. The initial inverse Hessian is
-the Nocedal-Wright scale ~(s · y) / (y · y)~. A direction that is not
-descent clears the memory, which is the client's ~angle_reset~. The
-client's ~distance_reset~ also clears the memory when the proposed
-step is longer than the cap; this crate shortens the step and keeps
-the pairs. ~LbfgsStep::Wolfe~ opts into the strong Wolfe search.
+(<https://github.com/TheochemUI/eOn>, ~client/LBFGS.cpp~, commit
+579738a9387e8d0ea55496f45dd057812cfab892). The default cap is that
+client's ~max_move~, 0.2. The first step estimates curvature with a
+finite difference of length 0.01 and sets ~H0 = 1/C~. Later steps use
+~(s · y) / (y · y)~ when that quotient is positive, and the client's
+~inverse_curvature~ 0.01 otherwise. A proposal whose longest atom
+move is at least the cap clears the memory and steps along ~H0~
+times the force (~distance_reset~). A direction that is not descent
+does the same (~angle_reset~). Negative curvature clears the memory
+and steps along the force at the cap. ~LbfgsStep::Scaled~ is the ASE
+length control: shorten the two-loop step and keep the pairs.
+~LbfgsStep::Wolfe~ opts into the strong Wolfe search.
+The force counts are ~bench/results.md~.
 
 - Nocedal 1980 introduced the limited-memory update
   ([[https://doi.org/10.1090/s0025-5718-1980-0572855-7][10.1090/s0025-5718-1980-0572855-7]]).
@@ -123,10 +129,12 @@ when the step is shortened. The geometry step selected by
 step is longer than its cap, and it can spend further evaluations
 on backtracking. The capped rule does neither.
 
-That cap is the default. ~LbfgsStep::Wolfe~ is the opt-in search,
-and ~set_atom_maxmove~ selects the geometry step only after that
-opt-in. The cap is 0.2, the eOn ~max_move~ and the length ASE
-publishes as ~maxstep~, and it is not refitted per problem.
+~LbfgsStep::Scaled~ is the step in the table below, not the default.
+The default is the eOn reset described above.
+~LbfgsStep::Wolfe~ is the opt-in search, and ~set_atom_maxmove~
+selects the geometry step only after that opt-in. The cap is 0.2,
+the eOn ~max_move~ and the length ASE publishes as ~maxstep~, and it
+is not refitted per problem.
 ~cargo run --release --example lbfgs_capped~ repeats each arm
 seven times, serially, and the wall time below is the median.
 Evaluations do not change across repeats. Wolfe and capped rows

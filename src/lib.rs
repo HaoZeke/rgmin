@@ -10,8 +10,10 @@
 //! and the one-shot `rgmin_minimize` wrappers.
 //!
 //! The production unconstrained local method is [`Lbfgs`] with the
-//! line-search-free cap ([`EON_MAX_MOVE`], Nocedal-Wright 7.4 and the
-//! scale 7.20). The strong Wolfe search is [`LbfgsStep::Wolfe`].
+//! eOn line-search-free cap ([`EON_MAX_MOVE`]). The first step probes
+//! curvature. A proposal at least as long as the cap clears the memory.
+//! [`LbfgsStep::Scaled`] keeps a shortened pair. [`LbfgsStep::Wolfe`]
+//! is the strong Wolfe search.
 //! [`minimize_lbfgs`] is the cold-start dispatch used by [`minimize_method`].
 
 #![warn(missing_docs)]
@@ -92,7 +94,10 @@ pub use hvp::{
     minimize_newton_cg, steihaug_cg, steihaug_pcg,
 };
 pub use irc_trust::{IrcTrust, sqrt_masses_3n};
-pub use lbfgs::{EON_MAX_MOVE, GradNorm, LBFGSB_FACTR, LBFGSB_FTOL, Lbfgs, LbfgsStep};
+pub use lbfgs::{
+    EON_FINITE_DIFFERENCE, EON_INVERSE_CURVATURE, EON_MAX_MOVE, GradNorm, LBFGSB_FACTR,
+    LBFGSB_FTOL, Lbfgs, LbfgsStep,
+};
 #[cfg(feature = "highs")]
 pub use lbfgs_qp::HighsStep;
 pub use linesearch::LineSearch;

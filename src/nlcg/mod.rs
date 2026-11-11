@@ -43,7 +43,11 @@ pub enum Conjugacy {
     /// in *A New Conjugate Gradient Method with Guaranteed Descent and an
     /// Efficient Line Search*, <https://doi.org/10.1137/030601880>.
     ConjugateDescent,
-    /// Hager-Zhang (2005) eq. 1.3 / NJWS 5.50.
+    /// Hager-Zhang (2005) eq. 1.3, truncated by eq. 1.6.
+    ///
+    /// `β = max(β_N, -1 / (||d|| min(0.01, ||g_old||)))`. The truncation
+    /// is what keeps the direction a descent direction in CG_DESCENT.
+    /// The formula without it is NJWS 5.50.
     ///
     /// Hager and Zhang, *A New Conjugate Gradient Method with Guaranteed
     /// Descent and an Efficient Line Search*,
@@ -59,6 +63,13 @@ pub enum Conjugacy {
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
     FrPr,
+    /// Polak-Ribiere-Polyak `max(0, β_PR)`. SciPy `method="CG"` uses this
+    /// form. A negative coefficient is replaced by a restart.
+    ///
+    /// Gilbert and Nocedal, *Global convergence properties of conjugate
+    /// gradient methods for optimization*,
+    /// <https://doi.org/10.1137/0802003>.
+    PolakRibierePlus,
     /// xtsci `HybridizedConj`: `max` or `min` of two child β formulas.
     ///
     /// This is not the Gilbert-Nocedal FR-PR hybrid ([`Self::FrPr`]).
@@ -88,12 +99,23 @@ pub enum Restart {
         /// ν; book default is 0.1.
         threshold: f64,
     },
+    /// eOn `ConjugateGradients::getStep`: restart when
+    /// `|g·g_old| >= threshold * ||g_old||^2`. The client uses 0.5.
+    Powell {
+        /// Fraction of `||g_old||^2`. The eOn value is 0.5.
+        threshold: f64,
+    },
 }
 
 impl Restart {
     /// Default NJWS restart with ν = 0.1.
     pub fn njws() -> Self {
         Self::Njws { threshold: 0.1 }
+    }
+
+    /// eOn conjugate-gradient restart, threshold 0.5.
+    pub fn powell() -> Self {
+        Self::Powell { threshold: 0.5 }
     }
 
     /// True when the next step should reset to steepest descent.
@@ -127,7 +149,25 @@ impl Restart {
                 let dev = dot(g, z_old).abs() / gg;
                 dev >= threshold
             }
+            Self::Powell { threshold } => {
+                let gold = dot(g_old, z_old);
+                if gold.is_nan() || gold <= 0.0 {
+                    return true;
+                }
+                dot(g, z_old).abs() >= threshold * gold
+            }
         }
+    }
+}
+
+/// CG_DESCENT floor, Hager and Zhang eq. 1.6 with `η = 0.01`.
+fn hz_floor(direction: ArrayView1<'_, f64>, gnorm: f64) -> f64 {
+    let length = dot(direction, direction).sqrt();
+    let scale = length * gnorm.min(0.01);
+    if !(scale.is_finite() && scale > 0.0) {
+        0.0
+    } else {
+        -1.0 / scale
     }
 }
 
@@ -153,6 +193,7 @@ impl Conjugacy {
         match self {
             Self::FletcherReeves => div(gg, gg_old),
             Self::PolakRibiere => div(y_g, gg_old),
+            Self::PolakRibierePlus => div(y_g, gg_old).max(0.0),
             Self::HestenesStiefel => {
                 let y_d = dot(y.view(), d);
                 div(y_g, y_d)
@@ -169,7 +210,8 @@ impl Conjugacy {
                 }
                 let yy = dot(y.view(), y.view());
                 let d_g = dot(d, g);
-                y_g / y_d - 2.0 * yy * d_g / (y_d * y_d)
+                let beta = y_g / y_d - 2.0 * yy * d_g / (y_d * y_d);
+                beta.max(hz_floor(d, gg_old.sqrt()))
             }
             Self::LiuStorey => div(-y_g, dot(d, gold)),
             Self::FrPr => {
@@ -220,6 +262,7 @@ impl Conjugacy {
         match self {
             Self::FletcherReeves => div(gz, gz_old),
             Self::PolakRibiere => div(zy, gz_old),
+            Self::PolakRibierePlus => div(zy, gz_old).max(0.0),
             Self::HestenesStiefel => div(zy, y_d),
             Self::DaiYuan => div(gz, y_d),
             Self::ConjugateDescent => div(gz, -dot(d, gold)),
@@ -228,7 +271,8 @@ impl Conjugacy {
                     return 0.0;
                 }
                 let d_g = dot(d, g);
-                zy / y_d - 2.0 * yy * d_g / (y_d * y_d)
+                let beta = zy / y_d - 2.0 * yy * d_g / (y_d * y_d);
+                beta.max(hz_floor(d, gz_old.sqrt()))
             }
             Self::LiuStorey => div(-zy, dot(d, gold)),
             Self::FrPr => {
@@ -463,6 +507,7 @@ mod tests {
         for method in [
             Conjugacy::FletcherReeves,
             Conjugacy::PolakRibiere,
+            Conjugacy::PolakRibierePlus,
             Conjugacy::HestenesStiefel,
             Conjugacy::DaiYuan,
             Conjugacy::ConjugateDescent,
@@ -478,5 +523,64 @@ mod tests {
             Restart::njws().should_restart_metric(g.view(), g.view(), gold.view(), gold.view()),
             Restart::njws().should_restart(&ctx)
         );
+    }
+
+    /// SciPy drops a negative Polak-Ribiere coefficient.
+    #[test]
+    fn polak_ribiere_plus_restarts_when_the_coefficient_is_negative() {
+        let g = array![1.0, 0.0];
+        let gold = array![2.0, 0.0];
+        let d = array![-1.0, 0.0];
+        let ctx = ConjugacyContext {
+            current_gradient: g.view(),
+            previous_gradient: gold.view(),
+            previous_direction: d.view(),
+        };
+        assert!((Conjugacy::PolakRibiere.beta(&ctx) + 0.25).abs() < 1e-12);
+        assert_eq!(Conjugacy::PolakRibierePlus.beta(&ctx), 0.0);
+    }
+
+    /// The raw Hager-Zhang coefficient here is -2010. CG_DESCENT raises
+    /// it to `-1 / (||d|| * 0.01) = -1000`.
+    #[test]
+    fn hager_zhang_truncates_below_the_descent_floor() {
+        let g = array![1.0, 0.0];
+        let gold = array![0.0, 10.0];
+        let d = array![0.1, 0.0];
+        let ctx = ConjugacyContext {
+            current_gradient: g.view(),
+            previous_gradient: gold.view(),
+            previous_direction: d.view(),
+        };
+        let beta = Conjugacy::HagerZhang.beta(&ctx);
+        assert!((beta + 1000.0).abs() < 1e-8, "beta {beta}");
+    }
+
+    /// eOn restarts when `|g·g_old|` reaches half of `||g_old||^2`.
+    /// NJWS with ν = 0.1 does not, because that test divides by `||g||^2`.
+    #[test]
+    fn powell_restart_matches_the_eon_threshold() {
+        let g = array![1.0, 0.0];
+        let gold = array![0.5, 0.0];
+        let d = array![-1.0, 0.0];
+        let ctx = ConjugacyContext {
+            current_gradient: g.view(),
+            previous_gradient: gold.view(),
+            previous_direction: d.view(),
+        };
+        // |g·g_old| = 0.5, ||g_old||^2 = 0.25, ratio against the old norm is 2.
+        // Against ||g||^2 = 1 the NJWS ratio is 0.5, above 0.1.
+        assert!(Restart::powell().should_restart(&ctx));
+        assert!(Restart::njws().should_restart(&ctx));
+        let g = array![0.2, 0.0];
+        let ctx = ConjugacyContext {
+            current_gradient: g.view(),
+            previous_gradient: gold.view(),
+            previous_direction: d.view(),
+        };
+        // |g·g_old| = 0.1, half of 0.25 is 0.125, so Powell does not restart.
+        // NJWS ratio is 0.1 / 0.04 = 2.5, so it does.
+        assert!(!Restart::powell().should_restart(&ctx));
+        assert!(Restart::njws().should_restart(&ctx));
     }
 }

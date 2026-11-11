@@ -6,6 +6,16 @@
 
 ** Unreleased
 
+The default L-BFGS step follows the eOn client, including the finite-difference curvature probe and ~distance_reset~.
+A proposal at least as long as the cap clears the memory and steps along ~H0~ times the force.
+~LbfgsStep::Scaled~ and ~rgmin_solver_set_lbfgs_scaled~ keep the previous shorten-and-retain rule.
+~Conjugacy::PolakRibierePlus~ is SciPy's ~max(0, β_PR)~.
+~Restart::powell~ is the eOn conjugate-gradient restart at 0.5, and the method token is ~eon-cg~.
+Hager-Zhang applies the CG_DESCENT floor.
+FIRE 1.0 treats a zero power as downhill.
+The comparison is ~bench/results.md~, with the raw rows in ~bench/raw/~.
+~abi_minor~ 35.
+
 L-BFGS does not line-search by default.
 The default step is the eOn cap: the longest atom moves at most ~EON_MAX_MOVE~ (0.2), ~H0~ is the Nocedal-Wright scale ~(s · y) / (y · y)~, shortened steps keep their pairs, and a direction that is not descent clears the memory.
 ~LbfgsStep::Wolfe~ and ~rgmin_solver_set_lbfgs_wolfe~ opt into the strong Wolfe search.

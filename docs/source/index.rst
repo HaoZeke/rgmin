@@ -39,10 +39,13 @@ Vectors cross it as DLPack ``DLManagedTensorVersioned`` tensors from the **dlpk*
 There is no second solver implementation in C++.
 :doc:`reference/architecture` draws these layers.
 
-The production unconstrained local method is limited-memory BFGS with
-the strong Wolfe conditions (Nocedal and Wright 7.4 and algorithms
-3.5--3.6). Hopping chains keep that solver's pair history on ``Lbfgs``;
-anneal's ``WarmLbfgs`` is a thin handle around it.
+The production unconstrained local method is limited-memory BFGS
+without a line search: the eOn cap of 0.2, a curvature probe on the
+first step, and a memory reset when the proposal is at least that
+long. ``LbfgsStep::Wolfe`` opts into the strong Wolfe search (Nocedal
+and Wright algorithms 3.5--3.6). Hopping chains keep that solver's
+pair history on ``Lbfgs``; anneal's ``WarmLbfgs`` is a thin handle
+around it.
 
 Saddle, band, and IRC sessions live in ``rgsaddle``. They consume this
 crate's ``Solver``; they do not grow a second optimizer.

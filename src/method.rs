@@ -146,6 +146,24 @@ impl Method {
         }
     }
 
+    /// SciPy `method="CG"`: Polak-Ribiere-Polyak, `max(0, β_PR)`.
+    pub fn polak_ribiere_plus() -> Self {
+        Self::Nlcg {
+            conjugacy: Conjugacy::PolakRibierePlus,
+            restart: Restart::Never,
+        }
+    }
+
+    /// eOn conjugate gradients: Polak-Ribiere with the Powell restart
+    /// at threshold 0.5. The client's step length is a separate secant
+    /// probe; this token is the coefficient and the restart.
+    pub fn eon_cg() -> Self {
+        Self::Nlcg {
+            conjugacy: Conjugacy::PolakRibiere,
+            restart: Restart::powell(),
+        }
+    }
+
     /// L-BFGS with `m = 10` correction pairs.
     pub fn lbfgs() -> Self {
         Self::Lbfgs { memory: 10 }
@@ -185,16 +203,22 @@ impl Method {
     /// default parameters and with no NLCG restart.
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Nlcg { conjugacy, .. } => match conjugacy {
-                Conjugacy::FletcherReeves => "fletcher-reeves",
-                Conjugacy::PolakRibiere => "cg",
-                Conjugacy::HestenesStiefel => "hestenes-stiefel",
-                Conjugacy::DaiYuan => "dai-yuan",
-                Conjugacy::ConjugateDescent => "conjugate-descent",
-                Conjugacy::HagerZhang => "hager-zhang",
-                Conjugacy::LiuStorey => "liu-storey",
-                Conjugacy::FrPr => "fr-pr",
-                Conjugacy::Hybrid { .. } => "hybrid",
+            Self::Nlcg { conjugacy, restart } => match (conjugacy, restart) {
+                (Conjugacy::PolakRibiere, Restart::Powell { threshold }) if *threshold == 0.5 => {
+                    "eon-cg"
+                }
+                (conjugacy, _) => match conjugacy {
+                    Conjugacy::FletcherReeves => "fletcher-reeves",
+                    Conjugacy::PolakRibiere => "cg",
+                    Conjugacy::PolakRibierePlus => "prp",
+                    Conjugacy::HestenesStiefel => "hestenes-stiefel",
+                    Conjugacy::DaiYuan => "dai-yuan",
+                    Conjugacy::ConjugateDescent => "conjugate-descent",
+                    Conjugacy::HagerZhang => "hager-zhang",
+                    Conjugacy::LiuStorey => "liu-storey",
+                    Conjugacy::FrPr => "fr-pr",
+                    Conjugacy::Hybrid { .. } => "hybrid",
+                },
             },
             Self::Bfgs => "bfgs",
             Self::Lbfgs { .. } => "lbfgs",
@@ -234,6 +258,8 @@ impl Method {
             "adam" => Self::adam(),
             "sd" | "steepest" | "steepest_descent" => Self::Steepest,
             "cg" | "pr" | "polak_ribiere" => Self::polak_ribiere(),
+            "prp" | "polak_ribiere_plus" => Self::polak_ribiere_plus(),
+            "eon_cg" | "eon_cg_pr" => Self::eon_cg(),
             "fletcher_reeves" | "fr" => Self::nlcg(Conjugacy::FletcherReeves),
             "hestenes_stiefel" | "hs" => Self::nlcg(Conjugacy::HestenesStiefel),
             "dai_yuan" | "dy" => Self::nlcg(Conjugacy::DaiYuan),
@@ -312,6 +338,13 @@ mod tests {
         assert_eq!(Method::from_name("dogleg").unwrap(), Method::Dogleg);
         assert_eq!(Method::from_name("lbfgs").unwrap(), Method::lbfgs());
         assert_eq!(Method::from_name("CG").unwrap(), Method::polak_ribiere());
+        assert_eq!(
+            Method::from_name("prp").unwrap(),
+            Method::polak_ribiere_plus()
+        );
+        assert_eq!(Method::from_name("eon-cg").unwrap(), Method::eon_cg());
+        assert_eq!(Method::eon_cg().as_str(), "eon-cg");
+        assert_eq!(Method::polak_ribiere_plus().as_str(), "prp");
         assert_eq!(Method::from_name("sd").unwrap(), Method::Steepest);
         assert_eq!(Method::from_name("fire2").unwrap().as_str(), "fire2");
         let err = Method::from_name("not-a-solver").unwrap_err();

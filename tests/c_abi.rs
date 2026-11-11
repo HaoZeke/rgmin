@@ -907,7 +907,7 @@ fn lowest_eigenpair_elpa_is_unavailable() {
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 34);
+    assert_eq!(stamp.abi_minor, 35);
     assert_eq!(stamp.layout_revision, 4);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
 }
@@ -1088,7 +1088,10 @@ fn c_abi_default_lbfgs_step_respects_the_eon_cap() {
     unsafe { rgmin_tensor_free(xt) };
     assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
     let motion = ((x[0] - 1.0).powi(2) + x[1].powi(2)).sqrt();
-    assert!(motion <= rgmin::EON_MAX_MOVE + 1e-12, "motion {motion} x={x:?}");
+    assert!(
+        motion <= rgmin::EON_MAX_MOVE + 1e-12,
+        "motion {motion} x={x:?}"
+    );
     assert!(motion > 0.0, "the default step did not move");
 }
 

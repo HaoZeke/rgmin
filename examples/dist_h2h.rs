@@ -193,14 +193,14 @@ fn stats(calls: &[usize], energy: &[f64], conv: &[bool]) -> (f64, usize, f64, us
     c.sort_unstable();
     let q1 = c[n / 4];
     let q3 = c[3 * n / 4];
-    let med = if n % 2 == 0 {
+    let med = if n.is_multiple_of(2) {
         (c[n / 2 - 1] + c[n / 2]) as f64 / 2.0
     } else {
         c[n / 2] as f64
     };
     let mut e = energy.to_vec();
     e.sort_by(f64::total_cmp);
-    let em = if n % 2 == 0 {
+    let em = if n.is_multiple_of(2) {
         0.5 * (e[n / 2 - 1] + e[n / 2])
     } else {
         e[n / 2]
@@ -250,5 +250,10 @@ fn main() {
         bench(&format!("LJ{n}"), &starts, lj, &mut starts_out);
     }
     let (x0, cell) = read_con("morse_pos_0000.con");
-    bench("MorsePt256", &[x0], move |x| morse(cell, x), &mut starts_out);
+    bench(
+        "MorsePt256",
+        &[x0],
+        move |x| morse(cell, x),
+        &mut starts_out,
+    );
 }

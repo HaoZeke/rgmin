@@ -11,8 +11,12 @@ Unconstrained local minimization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The production method for a smooth unconstrained problem with an
-analytic or fused gradient is limited-memory BFGS with the strong Wolfe
-conditions.
+analytic or fused gradient is limited-memory BFGS without a line
+search. The default step is the eOn cap: a curvature probe on the
+first step, then a memory reset when the proposal is at least as
+long as the cap. ``LbfgsStep::Wolfe`` is the opt-in search.
+``LbfgsStep::Scaled`` shortens the two-loop step and keeps the pairs.
+The force counts are ``bench/results.md``.
 
 - Nocedal 1980 introduced the limited-memory update
   (`10.1090/s0025-5718-1980-0572855-7 <https://doi.org/10.1090/s0025-5718-1980-0572855-7>`_).
@@ -391,12 +395,11 @@ reject a 3N cluster.
 Defaults in this crate
 ~~~~~~~~~~~~~~~~~~~~~~
 
-- Method: ``Lbfgs`` / ``Method::Lbfgs { memory: 8 }``
+- Method: ``Lbfgs`` / ``Method::Lbfgs { memory: 8 }``, the eOn cap at 0.2
 
-- Line search: ``LineSearch::Wolfe { c1: 1e-4, c2: 0.9, maxiter: 20 }``
+- Opt-in line search: ``LbfgsStep::Wolfe``, constants ``c1 = 1e-4``, ``c2 = 0.9``
 
-- First trial step: ``1`` when the memory is occupied (the Newton step);
-  ``1 / norm(d)`` when the memory is empty (raw steepest descent)
+- ASE length control: ``LbfgsStep::Scaled``, which keeps a shortened pair
 
 - Relative-decrease stop: off on ``Lbfgs`` (``ftol: 0.0``);
   ``LBFGSB_FTOL`` is the SciPy L-BFGS-B default

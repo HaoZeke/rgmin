@@ -61,7 +61,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 34
+#define RGMIN_ABI_VERSION_MINOR 35
 #define RGMIN_ABI_LAYOUT_REVISION 4
 
 /** Solver selector. \c RGMIN_LBFGS is the production unconstrained method. */
@@ -90,7 +90,11 @@ typedef enum rgmin_method_t {
     /** Steihaug-Toint Newton-CG. Products only; no dense Hessian. */
     RGMIN_NEWTON_CG = 21,
     /** Newton-CG with a Nyström preconditioner. The trust ceiling stays Euclidean. */
-    RGMIN_NEWTON_PCG = 22
+    RGMIN_NEWTON_PCG = 22,
+    /** Polak-Ribiere-Polyak, max(0, beta). SciPy method="CG". ABI minor 35. */
+    RGMIN_POLAK_RIBIERE_PLUS = 23,
+    /** Polak-Ribiere with the eOn Powell restart at 0.5. ABI minor 35. */
+    RGMIN_EON_CG = 24
 } rgmin_method_t;
 
 /** Parse a method token. Case is ignored; hyphens and spaces match underscores.
@@ -109,7 +113,9 @@ typedef enum rgmin_conjugacy_t {
     RGMIN_CONJUGACY_CONJUGATE_DESCENT = 4,
     RGMIN_CONJUGACY_HAGER_ZHANG = 5,
     RGMIN_CONJUGACY_LIU_STOREY = 6,
-    RGMIN_CONJUGACY_FR_PR = 7
+    RGMIN_CONJUGACY_FR_PR = 7,
+    /** max(0, Polak-Ribiere). Leaf 8. ABI minor 35. */
+    RGMIN_CONJUGACY_POLAK_RIBIERE_PLUS = 8
 } rgmin_conjugacy_t;
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(rgmin_conjugacy_t) == sizeof(int32_t),
@@ -296,12 +302,18 @@ int32_t rgmin_solver_set_fire_preset(rgmin_solver_t *solver, rgmin_fire_preset_t
  *  \c maxmove, bounds each displacement component. Returns 0, or 1 on
  *  a null session or a session that is not RGMIN_FIRE2. ABI minor 30. */
 int32_t rgmin_solver_set_fire_abc(rgmin_solver_t *solver, int32_t on);
-/** Per-atom cap of the default line-search-free L-BFGS step.
- *  A positive \c max_atom sets the cap. A non-positive value restores
- *  the eOn default, 0.2. Returns 0, or 1 on a null session, a session
- *  that is not RGMIN_LBFGS, a non-finite cap, a non-Euclidean manifold,
- *  a distance-constraint set, or HiGHS. ABI minor 34. */
+/** Per-atom cap of the default eOn L-BFGS step. The first step probes
+ *  curvature. A proposal at least as long as the cap clears the memory
+ *  and steps along H0 times the force. A positive \c max_atom sets the
+ *  cap. A non-positive value restores 0.2. Returns 0, or 1 on a null
+ *  session, a session that is not RGMIN_LBFGS, a non-finite cap, a
+ *  non-Euclidean manifold, a distance-constraint set, or HiGHS.
+ *  ABI minor 35. */
 int32_t rgmin_solver_set_lbfgs_capped(rgmin_solver_t *solver, double max_atom);
+/** ASE length control: shorten the two-loop step and keep the pairs.
+ *  A non-positive cap restores 0.2. Same refusal rules as
+ *  rgmin_solver_set_lbfgs_capped. ABI minor 35. */
+int32_t rgmin_solver_set_lbfgs_scaled(rgmin_solver_t *solver, double max_atom);
 /** Opt into the strong Wolfe line search. The default L-BFGS session
  *  does not search a line. Returns 0, or 1 on a null session or a
  *  session that is not RGMIN_LBFGS. ABI minor 34. */

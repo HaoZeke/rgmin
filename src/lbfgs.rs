@@ -1,15 +1,20 @@
 //! Persistent limited-memory BFGS (Nocedal-Wright 7.4, scaling 7.20).
 //!
-//! The default step is the line-search-free cap used by the eOn client
-//! ([`EON_MAX_MOVE`], no line search, Nocedal-Wright `H0`, reset when the
-//! direction is not descent). The strong Wolfe search is
-//! [`LbfgsStep::Wolfe`].
+//! The default step is the line-search-free cap of the eOn client
+//! ([`EON_MAX_MOVE`], no line search). The first step estimates
+//! curvature with a finite difference of length [`EON_FINITE_DIFFERENCE`]
+//! and sets `H0 = 1/C`. Later steps use `(s·y)/(y·y)` when that
+//! quotient is positive, and [`EON_INVERSE_CURVATURE`] otherwise.
+//! A proposal whose longest atom move is at least the cap clears the
+//! memory and steps along `H0` times the force (`distance_reset`).
+//! A direction that is not descent does the same (`angle_reset`).
+//! Negative curvature clears the memory and steps along the force at
+//! the cap. The cap only shortens a step. [`LbfgsStep::Scaled`] is the
+//! ASE length control: shorten the two-loop step and keep the pairs.
+//! [`LbfgsStep::Wolfe`] is the strong Wolfe search.
 //!
-//! eOn client `LBFGS::getStep`, <https://github.com/TheochemUI/eOn>.
-//! The client's `distance_reset` clears the memory when the proposed
-//! step is longer than `max_move`. This crate shortens that step and
-//! keeps the pairs. A direction that is not descent still clears the
-//! memory, which is the client's `angle_reset`.
+//! eOn client `LBFGS::getStep` and `ParametersSSOTDefaults.h`,
+//! <https://github.com/TheochemUI/eOn>.
 //!
 //! Liu and Nocedal, *On the limited memory BFGS method for large scale
 //! optimization*, <https://doi.org/10.1007/BF01589116>.
@@ -39,22 +44,41 @@ use eindir_core::{DifferentiableObjective, Objective};
 /// eOn client, <https://github.com/TheochemUI/eOn>.
 pub const EON_MAX_MOVE: f64 = 0.2;
 
+/// eOn `lbfgs_inverse_curvature`. The scalar `H0` before a positive
+/// curvature pair, and the fallback when auto-scaling has no quotient.
+pub const EON_INVERSE_CURVATURE: f64 = 0.01;
+
+/// eOn `finite_difference`. The first capped step probes curvature
+/// over a displacement of this length along the force.
+pub const EON_FINITE_DIFFERENCE: f64 = 0.01;
+
+/// eOn multiplies the force by this before the negative-curvature cap,
+/// so the cap binds and the step follows the force.
+const EON_STEEP_SCALE: f64 = 1000.0;
+
 /// How [`Lbfgs`] chooses the length of a step.
 ///
-/// [`LbfgsStep::Capped`] is the default: no line search. [`LbfgsStep::Wolfe`]
-/// is the strong Wolfe search.
+/// [`LbfgsStep::Capped`] is the default: the eOn step, no line search.
+/// [`LbfgsStep::Wolfe`] is the strong Wolfe search.
+/// [`LbfgsStep::Scaled`] is the ASE length control.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LbfgsStep {
     /// Strong Wolfe line search. Nocedal and Wright, algorithms 3.5 and 3.6.
     /// Opt in with this variant. It is not the default.
     Wolfe,
-    /// No line search. Shorten the two-loop step so the longest per-atom
-    /// displacement is at most `max_atom`. The initial inverse Hessian is
-    /// `(s · y) / (y · y)` on the latest stored pair (Nocedal and Wright,
-    /// eq. 7.20). An empty memory follows the force and the step has
-    /// length `max_atom`. A direction that is not descent clears the
-    /// memory. Pairs from a shortened step are kept.
+    /// eOn `LBFGS::getStep` with the client's default switches:
+    /// `auto_scale`, `distance_reset`, `angle_reset`, curvature `reset`.
+    /// No line search. See the module docs.
     Capped {
+        /// Longest displacement of one atom, in the coordinate length.
+        max_atom: f64,
+    },
+    /// ASE `LBFGS` length control. No line search. Shorten the two-loop
+    /// step so the longest per-atom displacement is at most `max_atom`,
+    /// and keep the pairs. An empty memory follows the force and the
+    /// step has that length. A direction that is not descent clears the
+    /// memory. This is not the eOn step and not the default.
+    Scaled {
         /// Longest displacement of one atom, in the coordinate length.
         max_atom: f64,
     },
@@ -69,14 +93,35 @@ impl Default for LbfgsStep {
 }
 
 impl LbfgsStep {
-    /// Positive finite cap, when this rule is [`Self::Capped`].
+    /// Positive finite cap of a line-search-free rule.
     #[must_use]
     pub fn capped_limit(self) -> Option<f64> {
         match self {
-            Self::Capped { max_atom } if max_atom.is_finite() && max_atom > 0.0 => Some(max_atom),
+            Self::Capped { max_atom } | Self::Scaled { max_atom }
+                if max_atom.is_finite() && max_atom > 0.0 =>
+            {
+                Some(max_atom)
+            }
             _ => None,
         }
     }
+}
+
+/// Scalar seed for one eOn step, or the negative-curvature fallback.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum EonSeed {
+    /// Two-loop with this `H0`. A long or uphill proposal becomes `H0 f`.
+    Scale(f64),
+    /// Clear the memory and step along the force at the cap.
+    Steepest,
+}
+
+/// Displacement proposed by [`Lbfgs::eon_step_from_seed`].
+pub(crate) struct EonTake {
+    pub step: Array1<f64>,
+    /// The proposal is already the force fallback, so a non-finite
+    /// trial is not retried along that same direction.
+    pub fallback: bool,
 }
 
 /// How [`Lbfgs`] compares the gradient to [`Lbfgs::gtol`].
@@ -123,6 +168,11 @@ pub(crate) struct Curvature {
     stored: bool,
 }
 
+enum FreeRule {
+    Eon(f64),
+    Scaled(f64),
+}
+
 enum CappedIter {
     Moved { stalled: bool, evals: usize },
     Stop { evals: usize },
@@ -164,7 +214,8 @@ pub struct Lbfgs {
     /// not positive. [`LBFGSB_FTOL`] is the SciPy default.
     pub ftol: f64,
     /// Step-length rule. The default is [`LbfgsStep::Capped`] at
-    /// [`EON_MAX_MOVE`]. [`LbfgsStep::Wolfe`] opts into the line search.
+    /// [`EON_MAX_MOVE`], the eOn step. [`LbfgsStep::Wolfe`] opts into
+    /// the line search. [`LbfgsStep::Scaled`] is the ASE length control.
     pub step: LbfgsStep,
     /// Fixed initial inverse-Hessian scale. `None`, the default, uses
     /// the Nocedal-Wright scale `(s · y) / (y · y)`. `Some(1/70)` is the
@@ -233,6 +284,16 @@ impl Lbfgs {
     pub fn capped(max_atom: f64) -> Self {
         Self {
             step: LbfgsStep::Capped { max_atom },
+            ..Self::default()
+        }
+    }
+
+    /// [`LbfgsStep::Scaled`] with room for eight pairs. A non-positive
+    /// or non-finite `max_atom` keeps the Wolfe search.
+    #[must_use]
+    pub fn scaled(max_atom: f64) -> Self {
+        Self {
+            step: LbfgsStep::Scaled { max_atom },
             ..Self::default()
         }
     }
@@ -542,19 +603,137 @@ impl Lbfgs {
         true
     }
 
-    /// Positive finite cap of [`LbfgsStep::Capped`], if that rule is selected.
+    /// Positive finite cap of a line-search-free rule, if one is selected.
     pub(crate) fn capped_limit(&self) -> Option<f64> {
         self.step.capped_limit()
     }
 
-    /// Cap used by [`Self::minimize`]. An installed HiGHS step keeps the
-    /// line search: the QP already enforces its trust region and box.
-    fn line_search_free(&self) -> Option<f64> {
+    /// Line-search-free rule used by [`Self::minimize`]. An installed
+    /// HiGHS step keeps the line search: the QP already enforces its
+    /// trust region and box.
+    fn line_search_free(&self) -> Option<FreeRule> {
         #[cfg(feature = "highs")]
         if self.highs.is_some() {
             return None;
         }
-        self.capped_limit()
+        let cap = self.capped_limit()?;
+        match self.step {
+            LbfgsStep::Capped { .. } => Some(FreeRule::Eon(cap)),
+            LbfgsStep::Scaled { .. } => Some(FreeRule::Scaled(cap)),
+            LbfgsStep::Wolfe => None,
+        }
+    }
+
+    /// The first eOn step has no pair and no fixed scale, so it spends
+    /// one finite-difference probe. A preconditioner supplies `H0`.
+    pub(crate) fn eon_wants_fd(&self) -> bool {
+        self.fixed_scale().is_none()
+            && self.h0.is_none()
+            && !self.have_curvature
+            && self.memory.is_empty()
+    }
+
+    /// `H0` for the next eOn step, before a finite-difference probe.
+    pub(crate) fn eon_seed(&self) -> EonSeed {
+        let fallback = self.fixed_scale().unwrap_or(EON_INVERSE_CURVATURE);
+        if self.have_curvature {
+            let sy = self.last_sy;
+            let yy = self.last_yy;
+            let curvature = if sy.is_finite() && yy.is_finite() && sy != 0.0 {
+                yy / sy
+            } else {
+                -1.0
+            };
+            if curvature < 0.0 {
+                return EonSeed::Steepest;
+            }
+            if let Some(fixed) = self.fixed_scale() {
+                return EonSeed::Scale(fixed);
+            }
+            if sy > 0.0 && yy > 0.0 {
+                return EonSeed::Scale(sy / yy);
+            }
+            return EonSeed::Scale(EON_INVERSE_CURVATURE);
+        }
+        if let Some(fixed) = self.fixed_scale() {
+            return EonSeed::Scale(fixed);
+        }
+        if let Some(pair) = self.memory.last() {
+            let yy = pair.y.dot(&pair.y);
+            let h0 = if yy > 0.0 {
+                pair.s.dot(&pair.y) / yy
+            } else {
+                -1.0
+            };
+            if h0 > 0.0 && h0.is_finite() {
+                return EonSeed::Scale(h0);
+            }
+            return EonSeed::Steepest;
+        }
+        EonSeed::Scale(fallback)
+    }
+
+    /// Displacement of one eOn step. `None` when that displacement is zero.
+    /// A long or uphill quasi-Newton direction clears the memory first.
+    pub(crate) fn eon_step_from_seed(
+        &mut self,
+        g: ArrayView1<f64>,
+        max_atom: f64,
+        seed: EonSeed,
+    ) -> Option<EonTake> {
+        let force = g.mapv(|v| -v);
+        let (step, fallback) = match seed {
+            EonSeed::Steepest => {
+                self.forget();
+                (
+                    cap_displacement_atom(&(EON_STEEP_SCALE * &force), max_atom),
+                    true,
+                )
+            }
+            EonSeed::Scale(h0) => {
+                if !(h0.is_finite() && h0 > 0.0 && max_atom.is_finite() && max_atom > 0.0) {
+                    return None;
+                }
+                let direction = self.direction_h0(g, h0);
+                let distance = max_atom_displacement(&direction);
+                let along = direction.dot(&force);
+                let uphill = l2(&direction) > 0.0 && l2(&force) > 0.0 && along < 0.0;
+                if !distance.is_finite() {
+                    return None;
+                }
+                if distance >= max_atom || uphill {
+                    self.forget();
+                    (cap_displacement_atom(&(h0 * &force), max_atom), true)
+                } else {
+                    (cap_displacement_atom(&direction, max_atom), false)
+                }
+            }
+        };
+        let motion = max_atom_displacement(&step);
+        (motion.is_finite() && motion > 0.0).then_some(EonTake { step, fallback })
+    }
+
+    /// Store `(s, y)` the way eOn `curvature = "reset"` does.
+    /// `|s·y| < 1e-30` clears the memory and keeps the curvature note,
+    /// so the next step still sees a negative or vanished quotient.
+    /// A negative pair is stored; the next step's curvature test drops it
+    /// before the two-loop reads it.
+    pub(crate) fn push_eon(&mut self, s: Array1<f64>, y: Array1<f64>) {
+        self.note_curvature(&s, &y);
+        let sy = s.dot(&y);
+        if !sy.is_finite() || sy.abs() < 1e-30 {
+            let note = (self.last_sy, self.last_yy, self.have_curvature);
+            self.forget();
+            (self.last_sy, self.last_yy, self.have_curvature) = note;
+            return;
+        }
+        self.memory.push(Pair {
+            s,
+            y,
+            rho: 1.0 / sy,
+        });
+        self.trim();
+        self.stored = true;
     }
 
     /// Two-loop direction, restarted along the force when it is not descent.
@@ -608,7 +787,144 @@ impl Lbfgs {
         }
     }
 
-    /// One capped iteration. A non-finite trial of a quasi-Newton step is
+    /// Curvature `C = (g(x + δu) - g) · u / δ` along the unit force.
+    /// A positive finite `C` is `H0 = 1/C`. A non-positive or non-finite
+    /// answer is the steepest fallback. A missing answer keeps
+    /// [`EON_INVERSE_CURVATURE`] and spends no evaluation.
+    fn fd_seed<F>(&self, x: &Array1<f64>, g: &Array1<f64>, fg: &mut F) -> (EonSeed, usize)
+    where
+        F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
+    {
+        let force = g.mapv(|v| -v);
+        let norm = l2(&force);
+        if !(norm.is_finite() && norm > 0.0) {
+            return (EonSeed::Scale(EON_INVERSE_CURVATURE), 0);
+        }
+        let u = &force / norm;
+        let probe = x + &(EON_FINITE_DIFFERENCE * &u);
+        let Some((value, grad)) = fg(probe.view()) else {
+            return (EonSeed::Scale(EON_INVERSE_CURVATURE), 0);
+        };
+        if !finite(value, grad.view()) {
+            return (EonSeed::Steepest, 1);
+        }
+        let curvature = (&grad - g).dot(&u) / EON_FINITE_DIFFERENCE;
+        if curvature.is_finite() && curvature > 0.0 {
+            (EonSeed::Scale(1.0 / curvature), 1)
+        } else {
+            (EonSeed::Steepest, 1)
+        }
+    }
+
+    fn take_free<F>(
+        &mut self,
+        x: &mut Array1<f64>,
+        f: &mut f64,
+        g: &mut Array1<f64>,
+        fg: &mut F,
+    ) -> Option<CappedIter>
+    where
+        F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
+    {
+        match self.line_search_free()? {
+            FreeRule::Eon(max_atom) => Some(self.eon_iterate(x, f, g, max_atom, fg)),
+            FreeRule::Scaled(max_atom) => Some(self.capped_iterate(x, f, g, max_atom, fg)),
+        }
+    }
+
+    /// One eOn iteration. The finite-difference probe, when it runs,
+    /// is one evaluation and does not move `x`. A non-finite trial of a
+    /// quasi-Newton step is retried once along `H0` times the force.
+    fn eon_iterate<F>(
+        &mut self,
+        x: &mut Array1<f64>,
+        f: &mut f64,
+        g: &mut Array1<f64>,
+        max_atom: f64,
+        fg: &mut F,
+    ) -> CappedIter
+    where
+        F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
+    {
+        let saved = self.curvature();
+        let mut evals = 0usize;
+        let mut seed = self.eon_seed();
+        if self.eon_wants_fd() {
+            let (probed, used) = self.fd_seed(x, g, fg);
+            seed = probed;
+            evals += used;
+        }
+        let h0 = match seed {
+            EonSeed::Scale(h) => h,
+            EonSeed::Steepest => EON_INVERSE_CURVATURE,
+        };
+        let Some(take) = self.eon_step_from_seed(g.view(), max_atom, seed) else {
+            self.restore(saved);
+            return CappedIter::Stop { evals };
+        };
+        match self.accept_eon(x, f, g, &take.step, &mut evals, fg) {
+            CappedProbe::Moved { stalled } => CappedIter::Moved { stalled, evals },
+            CappedProbe::Stop => {
+                self.restore(saved);
+                CappedIter::Stop { evals }
+            }
+            CappedProbe::NonFinite if take.fallback => {
+                self.restore(saved);
+                CappedIter::Stop { evals }
+            }
+            CappedProbe::NonFinite => {
+                self.forget();
+                let force = g.mapv(|v| -v);
+                let step = cap_displacement_atom(&(h0 * &force), max_atom);
+                match self.accept_eon(x, f, g, &step, &mut evals, fg) {
+                    CappedProbe::Moved { stalled } => CappedIter::Moved { stalled, evals },
+                    CappedProbe::Stop | CappedProbe::NonFinite => {
+                        self.restore(saved);
+                        CappedIter::Stop { evals }
+                    }
+                }
+            }
+        }
+    }
+
+    fn accept_eon<F>(
+        &mut self,
+        x: &mut Array1<f64>,
+        f: &mut f64,
+        g: &mut Array1<f64>,
+        step: &Array1<f64>,
+        evals: &mut usize,
+        fg: &mut F,
+    ) -> CappedProbe
+    where
+        F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
+    {
+        let motion = max_atom_displacement(step);
+        if !motion.is_finite() || motion <= 0.0 {
+            return CappedProbe::Stop;
+        }
+        let mut trial = x.clone();
+        trial.scaled_add(1.0, step);
+        let Some((fv, gv)) = fg(trial.view()) else {
+            return CappedProbe::Stop;
+        };
+        *evals += 1;
+        if !finite(fv, gv.view()) {
+            return CappedProbe::NonFinite;
+        }
+        let s = &trial - &*x;
+        let y = &gv - &*g;
+        let f_old = *f;
+        self.push_eon(s, y);
+        *x = trial;
+        *f = fv;
+        *g = gv;
+        CappedProbe::Moved {
+            stalled: self.stalled(f_old, fv),
+        }
+    }
+
+    /// One scaled iteration. A non-finite trial of a quasi-Newton step is
     /// retried once along the force. A second non-finite trial, a spent
     /// budget, or a zero step leaves `x` and the pairs as they were.
     fn capped_iterate<F>(
@@ -905,8 +1221,11 @@ impl Lbfgs {
     /// trial step shortens the step; at `x0` it ends the relaxation there
     /// with value `+inf`, as a spent budget does.
     ///
-    /// [`LbfgsStep::Capped`] takes one evaluation per accepted step and
-    /// does not search the line. A non-finite quasi-Newton trial is
+    /// [`LbfgsStep::Capped`] is the eOn step. The first iteration spends
+    /// one finite-difference probe, then one evaluation per accepted
+    /// step. A proposal at least as long as the cap clears the memory.
+    /// [`LbfgsStep::Scaled`] takes one evaluation per accepted step and
+    /// keeps a shortened pair. A non-finite quasi-Newton trial is
     /// retried once along the force. A second non-finite trial ends the
     /// relaxation at the last finite point.
     pub fn minimize<F>(
@@ -956,8 +1275,8 @@ impl Lbfgs {
             if stalled || self.gnorm(&g) < self.gtol {
                 break;
             }
-            if let Some(max_atom) = self.line_search_free() {
-                match self.capped_iterate(&mut x, &mut f, &mut g, max_atom, &mut fg) {
+            if let Some(taken) = self.take_free(&mut x, &mut f, &mut g, &mut fg) {
+                match taken {
                     CappedIter::Moved {
                         stalled: now,
                         evals: used,
@@ -1044,8 +1363,8 @@ impl Lbfgs {
             if stalled || self.gnorm(&g) < self.gtol {
                 break;
             }
-            if let Some(max_atom) = self.line_search_free() {
-                match self.capped_iterate(&mut x, &mut f, &mut g, max_atom, &mut fg) {
+            if let Some(taken) = self.take_free(&mut x, &mut f, &mut g, &mut fg) {
+                match taken {
                     CappedIter::Moved {
                         stalled: now,
                         evals: used,
@@ -1201,7 +1520,7 @@ mod tests {
     use ndarray::{Array1, ArrayView1, array};
 
     use super::{LBFGSB_FTOL, Lbfgs, LbfgsStep};
-    use crate::step::max_atom_displacement;
+    use crate::step::{l2, max_atom_displacement};
 
     /// Above `|f| = 1` the threshold scales with `|f|`; below, it is
     /// `ftol` itself. A value that is not positive passes no step.
@@ -1270,14 +1589,14 @@ mod tests {
         (f, g)
     }
 
-    /// The first capped step has length `max_atom` along the force, and
+    /// The first scaled step has length `max_atom` along the force, and
     /// the next direction is the two-loop with `H0 = (s·y)/(y·y) I`.
     /// The pair stays stored when that direction is longer than the cap.
     #[test]
-    fn the_second_capped_step_uses_the_nocedal_wright_scale_and_keeps_the_pair() {
+    fn the_second_scaled_step_uses_the_nocedal_wright_scale_and_keeps_the_pair() {
         let cap = 0.25;
         let mut opt = Lbfgs::with_capacity(4);
-        opt.step = LbfgsStep::Capped { max_atom: cap };
+        opt.step = LbfgsStep::Scaled { max_atom: cap };
         let x0 = array![1.0, 1.0, 1.0];
         let (f0, g0) = stiff(x0.view());
         let (d0, full) = opt.capped_direction(g0.view()).unwrap();
@@ -1326,10 +1645,11 @@ mod tests {
         let _ = f0;
     }
 
-    /// On `f = 1/2 ||x||^2` every accepted capped step costs one
-    /// evaluation, the history is kept, and the run reaches the origin.
+    /// On `f = 1/2 ||x||^2` the eOn step probes curvature once, then
+    /// moves 0.2 toward the origin until the Newton step fits in the
+    /// cap. Each long proposal clears the pair it just stored.
     #[test]
-    fn capped_quadratic_spends_one_evaluation_per_accepted_step() {
+    fn eon_quadratic_probes_once_and_reaches_the_origin() {
         let mut opt = Lbfgs {
             step: LbfgsStep::Capped { max_atom: 0.2 },
             gtol: 1e-8,
@@ -1337,15 +1657,69 @@ mod tests {
             ..Lbfgs::default()
         };
         let mut calls = 0usize;
-        let (f, x, evals) = opt.minimize(array![1.0, 1.0, 1.0].view(), 100, |v| {
+        let (f, x, evals) = opt.minimize(array![1.0, 0.0, 0.0].view(), 20, |v| {
             calls += 1;
             Some((0.5 * v.dot(&v), v.to_owned()))
         });
         assert_eq!(calls, evals);
-        assert!(evals > 2, "the cap must bind, evals {evals}");
+        // Start, one probe, five accepted steps of 0.2 from 1 to 0.
+        assert_eq!(evals, 7, "evals {evals} x {x}");
+        assert!(f.abs() < 1e-16, "f {f} x {x}");
+        assert!(x.iter().all(|v| v.abs() < 1e-12), "{x}");
+    }
+
+    /// A quasi-Newton direction longer than the cap is discarded.
+    /// The step that replaces it follows the force, and the old pair is gone.
+    #[test]
+    fn a_long_eon_direction_steps_along_the_force_and_clears_the_pair() {
+        let mut opt = Lbfgs::default();
+        let x0 = array![1.0, 1.0, 1.0];
+        let (_f, x1, evals) = opt.minimize(x0.view(), 1, |v| Some(stiff(v)));
+        assert_eq!(evals, 3, "start, probe, step");
+        let g0 = stiff(x0.view()).1;
+        let force0 = g0.mapv(|v| -v);
+        let s1 = &x1 - &x0;
+        let align = s1.dot(&force0) / (l2(&s1) * l2(&force0));
+        assert!((align - 1.0).abs() < 1e-12, "first step align {align}");
+        assert!((max_atom_displacement(&s1) - 0.2).abs() < 1e-12);
+        assert_eq!(opt.len(), 1);
+
+        let g1 = stiff(x1.view()).1;
+        let h0 = opt.last_sy / opt.last_yy;
+        let quasi = opt.direction_h0(g1.view(), h0);
+        assert!(max_atom_displacement(&quasi) > 0.2);
+        let force1 = g1.mapv(|v| -v);
+        let quasi_align = quasi.dot(&force1) / (l2(&quasi) * l2(&force1));
+        assert!(
+            quasi_align < 0.99,
+            "the fixture quasi-Newton step must leave the force, align {quasi_align}"
+        );
+
+        let (_f, x2, _) = opt.minimize(x1.view(), 1, |v| Some(stiff(v)));
+        let s2 = &x2 - &x1;
+        let align2 = s2.dot(&force1) / (l2(&s2) * l2(&force1));
+        assert!(
+            (align2 - 1.0).abs() < 1e-9,
+            "distance_reset step align {align2} s {s2}"
+        );
+        assert_eq!(opt.len(), 1, "the quasi-Newton pair must not survive");
+    }
+
+    /// Scaled L-BFGS keeps the pair a long direction would have cleared.
+    #[test]
+    fn scaled_quadratic_keeps_more_than_one_pair() {
+        let mut opt = Lbfgs {
+            step: LbfgsStep::Scaled { max_atom: 0.2 },
+            gtol: 1e-8,
+            norm: super::GradNorm::Euclidean,
+            ..Lbfgs::default()
+        };
+        let (f, x, evals) = opt.minimize(array![1.0, 1.0, 1.0].view(), 100, |v| {
+            Some((0.5 * v.dot(&v), v.to_owned()))
+        });
+        assert!(evals > 2, "evals {evals}");
         assert!(opt.len() > 1, "pairs were dropped, len {}", opt.len());
         assert!(f < 1e-16, "f {f} x {x}");
-        assert!(x.iter().all(|v| v.abs() < 1e-8));
     }
 
     /// A non-positive cap does not select the capped step.
@@ -1376,7 +1750,8 @@ mod tests {
             Some((0.5 * v.dot(&v), v.to_owned()))
         });
         assert_eq!(calls, evals);
-        assert_eq!(evals, 2);
+        // The start, the curvature probe, and the accepted step.
+        assert_eq!(evals, 3);
         assert!((x[0] - (1.0 - super::EON_MAX_MOVE)).abs() <= 1e-12, "{x}");
     }
     /// A fallible transport that succeeds but drops the newest pair also

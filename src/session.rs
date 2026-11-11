@@ -382,22 +382,30 @@ impl Solver {
     /// Step-length rule for an L-BFGS session.
     ///
     /// [`LbfgsStep::Capped`] at [`crate::EON_MAX_MOVE`] is the default:
-    /// one evaluation, no line search, the Nocedal-Wright scale of `H0`,
-    /// and a memory reset when the direction is not descent.
-    /// [`LbfgsStep::Wolfe`] opts into the strong Wolfe search.
-    /// A non-positive `max_atom` restores [`crate::EON_MAX_MOVE`].
-    /// [`Self::set_atom_maxmove`] replaces the cap while the step is
-    /// capped. A non-finite `max_atom`, a session that is not L-BFGS,
-    /// a non-Euclidean manifold, a distance-constraint set, or a HiGHS
-    /// feasible set is an error when selecting the cap.
+    /// the eOn step, no line search. The first step probes curvature.
+    /// A proposal at least as long as the cap clears the memory and
+    /// steps along `H0` times the force. [`LbfgsStep::Scaled`] shortens
+    /// the two-loop step and keeps the pairs. [`LbfgsStep::Wolfe`] opts
+    /// into the strong Wolfe search.
+    /// A non-positive `max_atom` restores [`crate::EON_MAX_MOVE`] on
+    /// that same rule. [`Self::set_atom_maxmove`] replaces the cap
+    /// while the step is line-search-free. A non-finite `max_atom`, a
+    /// session that is not L-BFGS, a non-Euclidean manifold, a
+    /// distance-constraint set, or a HiGHS feasible set is an error
+    /// when selecting a cap.
     pub fn set_lbfgs_step(&mut self, step: LbfgsStep) -> Result<()> {
         let step = match step {
-            LbfgsStep::Capped { max_atom } if !max_atom.is_finite() => {
+            LbfgsStep::Capped { max_atom } | LbfgsStep::Scaled { max_atom }
+                if !max_atom.is_finite() =>
+            {
                 return Err(Error::LbfgsCap {
                     what: "max_atom is not finite",
                 });
             }
             LbfgsStep::Capped { max_atom } if max_atom <= 0.0 => LbfgsStep::Capped {
+                max_atom: crate::lbfgs::EON_MAX_MOVE,
+            },
+            LbfgsStep::Scaled { max_atom } if max_atom <= 0.0 => LbfgsStep::Scaled {
                 max_atom: crate::lbfgs::EON_MAX_MOVE,
             },
             other => other,
@@ -407,7 +415,7 @@ impl Solver {
                 what: "requires an L-BFGS session",
             });
         }
-        if matches!(step, LbfgsStep::Capped { .. }) {
+        if matches!(step, LbfgsStep::Capped { .. } | LbfgsStep::Scaled { .. }) {
             if !matches!(self.manifold, ManifoldKind::Euclidean) {
                 return Err(Error::LbfgsCap {
                     what: "requires Euclidean coordinates",
@@ -547,9 +555,12 @@ impl Solver {
     pub fn set_atom_maxmove(&mut self, maxmove: f64) {
         self.atom_maxmove = if maxmove > 0.0 { Some(maxmove) } else { None };
         if let Inner::Lbfgs(solver) = &mut self.inner {
-            if matches!(solver.step, LbfgsStep::Capped { .. }) {
-                let cap = self.atom_maxmove.unwrap_or(crate::lbfgs::EON_MAX_MOVE);
-                solver.step = LbfgsStep::Capped { max_atom: cap };
+            let cap = self.atom_maxmove.unwrap_or(crate::lbfgs::EON_MAX_MOVE);
+            match &mut solver.step {
+                LbfgsStep::Capped { max_atom } | LbfgsStep::Scaled { max_atom } => {
+                    *max_atom = cap;
+                }
+                LbfgsStep::Wolfe => {}
             }
         }
         #[cfg(feature = "highs")]
@@ -1604,11 +1615,183 @@ impl Solver {
         }
     }
 
+    /// One line-search-free L-BFGS step. [`LbfgsStep::Capped`] follows
+    /// eOn. [`LbfgsStep::Scaled`] shortens the two-loop step and keeps
+    /// the pairs.
+    fn capped_lbfgs_step<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        value: f64,
+        grad: Array1<f64>,
+    ) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        if matches!(self.lbfgs_step(), LbfgsStep::Capped { .. }) {
+            return self.eon_lbfgs_step(obj, x, value, grad);
+        }
+        self.scaled_lbfgs_step(obj, x, value, grad)
+    }
+
+    /// Curvature probe of the first eOn step, clipped to the box.
+    /// The quotient uses the displacement that remains inside the box.
+    fn eon_fd_seed<O>(&self, obj: &O, x: &Array1<f64>, g: &Array1<f64>) -> crate::lbfgs::EonSeed
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        use crate::lbfgs::{EON_FINITE_DIFFERENCE, EON_INVERSE_CURVATURE, EonSeed};
+        let force = g.mapv(|v| -v);
+        let norm = l2(&force);
+        if !(norm.is_finite() && norm > 0.0) {
+            return EonSeed::Scale(EON_INVERSE_CURVATURE);
+        }
+        let u = &force / norm;
+        let raw = x + &(EON_FINITE_DIFFERENCE * &u);
+        let probe = obj.bounds().clip(raw.view());
+        let along = (&probe - x).dot(&u);
+        if !(along.is_finite() && along > 0.0) {
+            return EonSeed::Scale(EON_INVERSE_CURVATURE);
+        }
+        let (value, grad) = obj.value_and_gradient(probe.view());
+        if !finite(value, grad.view()) {
+            return EonSeed::Steepest;
+        }
+        let curvature = (&grad - g).dot(&u) / along;
+        if curvature.is_finite() && curvature > 0.0 {
+            EonSeed::Scale(1.0 / curvature)
+        } else {
+            EonSeed::Steepest
+        }
+    }
+
+    /// One eOn L-BFGS step. A non-finite quasi-Newton trial is retried
+    /// once along `H0` times the force. A second non-finite trial
+    /// restores the pairs and returns [`Error::Oracle`].
+    fn eon_lbfgs_step<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        _value: f64,
+        grad: Array1<f64>,
+    ) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        use crate::lbfgs::{EON_INVERSE_CURVATURE, EonSeed};
+        let Some(cap) = self.lbfgs_step().capped_limit() else {
+            return Err(Error::LbfgsCap {
+                what: "the cap is not positive",
+            });
+        };
+        let saved = match &self.inner {
+            Inner::Lbfgs(solver) => solver.curvature(),
+            _ => {
+                return Err(Error::LbfgsCap {
+                    what: "requires an L-BFGS session",
+                });
+            }
+        };
+        if !self.same_last_x(x)
+            && let Some(previous) = self.last_pos.clone()
+        {
+            let s = &*x - &previous;
+            let y = &grad - &self.last_grad;
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.push_eon(s, y);
+            }
+        }
+        let wants_fd = match &self.inner {
+            Inner::Lbfgs(solver) => solver.eon_wants_fd(),
+            _ => false,
+        };
+        let seed = if wants_fd {
+            self.eon_fd_seed(obj, x, &grad)
+        } else {
+            match &self.inner {
+                Inner::Lbfgs(solver) => solver.eon_seed(),
+                _ => EonSeed::Scale(EON_INVERSE_CURVATURE),
+            }
+        };
+        let h0 = match seed {
+            EonSeed::Scale(h) => h,
+            EonSeed::Steepest => EON_INVERSE_CURVATURE,
+        };
+        let proposed = match self.eon_propose(obj, x, &grad, cap, seed) {
+            Ok(point) => point,
+            Err(CappedMiss::Retry) => {
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.forget();
+                }
+                let force = grad.mapv(|v| -v);
+                let step = self.shape_step(x, cap_displacement_atom(&(h0 * &force), cap));
+                match self.capped_trial(obj, x, &step, true) {
+                    Ok((trial, value, grad, _)) => (trial, value, grad),
+                    Err(err) => {
+                        if let Inner::Lbfgs(solver) = &mut self.inner {
+                            solver.restore(saved);
+                        }
+                        return Err(err);
+                    }
+                }
+            }
+            Err(CappedMiss::Stop(err)) => {
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.restore(saved);
+                }
+                return Err(err);
+            }
+        };
+        let (trial, tval, tgrad) = proposed;
+        let old = x.clone();
+        let gold = grad;
+        *x = trial;
+        let grad = self.horizontal_grad(x, &tgrad);
+        let s = &*x - &old;
+        let y = &grad - &gold;
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.push_eon(s, y);
+        }
+        self.remember(x, tval, &grad);
+        self.steps += 1;
+        Ok(self.report(tval, x, &grad))
+    }
+
+    fn eon_propose<O>(
+        &mut self,
+        obj: &O,
+        x: &Array1<f64>,
+        grad: &Array1<f64>,
+        cap: f64,
+        seed: crate::lbfgs::EonSeed,
+    ) -> std::result::Result<(Array1<f64>, f64, Array1<f64>), CappedMiss>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let take = match &mut self.inner {
+            Inner::Lbfgs(solver) => solver.eon_step_from_seed(grad.view(), cap, seed),
+            _ => None,
+        };
+        let Some(take) = take else {
+            return Err(CappedMiss::Stop(Error::LbfgsCap {
+                what: "the capped step is zero",
+            }));
+        };
+        let step = self.shape_step(x, take.step);
+        match self.capped_trial(obj, x, &step, take.fallback) {
+            Ok((trial, value, grad, _)) => Ok((trial, value, grad)),
+            Err(Error::Oracle {
+                what: "non-finite quasi-Newton trial",
+            }) => Err(CappedMiss::Retry),
+            Err(err) => Err(CappedMiss::Stop(err)),
+        }
+    }
+
     /// One ASE-style L-BFGS step. The two-loop direction keeps its pairs
     /// when it is shortened to the cap. A non-finite quasi-Newton trial
     /// is retried once along the force. A second non-finite trial restores
     /// the pairs and returns [`Error::Oracle`].
-    fn capped_lbfgs_step<O>(
+    fn scaled_lbfgs_step<O>(
         &mut self,
         obj: &O,
         x: &mut Array1<f64>,

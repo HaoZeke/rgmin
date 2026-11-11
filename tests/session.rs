@@ -2075,7 +2075,12 @@ fn rebase_keeps_curvature_and_drops_the_point() {
 
     let first = Shifted(0.0);
     let second = Shifted(0.3);
+    // Scaled keeps a shortened pair. The default eOn step clears the
+    // memory when the proposal is longer than the cap, so a warm start
+    // on that rule does not keep the pairs this test is measuring.
     let mut warm = Solver::new(Method::lbfgs(), control(), 2).with_gtol(1e-10);
+    warm.set_lbfgs_step(rgmin::LbfgsStep::Scaled { max_atom: 0.2 })
+        .unwrap();
     let mut x = array![2.0, -3.0];
     for _ in 0..80 {
         let rep = warm.step(&first, &mut x).unwrap();
@@ -2109,6 +2114,8 @@ fn rebase_keeps_curvature_and_drops_the_point() {
     assert!((x[0] - 0.3).abs() < 1e-6 && (x[1] + 0.3).abs() < 1e-6);
 
     let mut cold = Solver::new(Method::lbfgs(), control(), 2).with_gtol(1e-10);
+    cold.set_lbfgs_step(rgmin::LbfgsStep::Scaled { max_atom: 0.2 })
+        .unwrap();
     let mut y = start.clone();
     let mut cold_steps = 0usize;
     for _ in 0..80 {

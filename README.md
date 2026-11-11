@@ -29,10 +29,11 @@ CPU f64 is wired now. A non-CPU tensor returns `RGMIN_UNSUPPORTED_DEVICE`
 so a CUDA path does not change the ABI.
 
 The production unconstrained local method is [`Lbfgs`] without a line
-search. The step is shortened so the longest atom move is at most 0.2,
-the eOn `max_move`. The initial inverse Hessian is the Nocedal-Wright
-scale `(s·y)/(y·y)`. A direction that is not descent clears the memory.
-`LbfgsStep::Wolfe` opts into the strong Wolfe search.
+search. The default step is the eOn cap. The longest atom move is at
+most 0.2. The first step probes curvature. A longer proposal clears
+the memory and steps along `H0` times the force. `LbfgsStep::Scaled`
+shortens the quasi-Newton step and keeps the pairs. `LbfgsStep::Wolfe`
+opts into the strong Wolfe search.
 anneal `WarmLbfgs` holds
 that type so hopping does not ship a second two-loop. Feature `highs` keeps the two-loop direction and projects it with
 HiGHS (`Q = I`) onto a box, trust region, or equalities.

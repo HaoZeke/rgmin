@@ -226,7 +226,9 @@ fn abc_correct(state: &mut FireState) {
 }
 
 fn adapt(state: &mut FireState, power: f64) {
-    if power > 0.0 {
+    // eOn FIRE treats a zero power as downhill (`P >= 0`). ASE FIRE 2.0
+    // uses a strict `>`. This function is the FIRE 1.0 adapt.
+    if power >= 0.0 {
         state.n_pos += 1;
         if state.n_pos > state.n_min {
             state.dt = (state.dt * state.f_inc).min(state.dt_max);
@@ -413,6 +415,21 @@ mod tests {
         let dx = fire_displacement(&mut state, &force);
         assert!(dx[0] > 0.0);
         assert!(dx[1].abs() < 1e-15);
+    }
+
+    /// A force orthogonal to the velocity has power zero. eOn keeps the
+    /// step. A strict `>` test would zero the velocity.
+    #[test]
+    fn v1_zero_power_keeps_the_velocity() {
+        let mut state = FireState::new(FireKind::V1, 2, 0.1);
+        state.vel = array![0.0, 1.0];
+        fire_after_v1(&mut state, &array![1.0, 0.0]);
+        assert_eq!(state.n_pos, 1);
+        assert!(
+            state.vel[1].abs() > 0.0,
+            "velocity was cleared: {}",
+            state.vel
+        );
     }
 
     #[test]

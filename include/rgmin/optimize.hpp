@@ -351,9 +351,12 @@ public:
     }
     /// ABC-FIRE on a FIRE 2.0 session. Returns 0, or 1 on a non-FIRE 2.0 session.
     int set_fire_abc(bool on) { return rgmin_solver_set_fire_abc(ptr_, on ? 1 : 0); }
-    /// Capped L-BFGS. A non-positive cap restores the Wolfe search.
+    /// eOn L-BFGS cap. A non-positive cap restores 0.2.
     /// Returns 0, or 1 when the session cannot run the capped step.
     int set_lbfgs_capped(double max_atom) { return rgmin_solver_set_lbfgs_capped(ptr_, max_atom); }
+    /// ASE length control. A non-positive cap restores 0.2.
+    /// Returns 0, or 1 when the session cannot run the scaled step.
+    int set_lbfgs_scaled(double max_atom) { return rgmin_solver_set_lbfgs_scaled(ptr_, max_atom); }
     /// Strong Wolfe line search. The default session does not search a line.
     int set_lbfgs_wolfe() { return rgmin_solver_set_lbfgs_wolfe(ptr_); }
     /// Copy the gradient behind the last step report. n is the session dimension.

@@ -1,10 +1,11 @@
 // Copyright (c) rgmin developers
 
-//! Capped L-BFGS keeps its pairs when the step is shortened.
+//! Scaled L-BFGS keeps its pairs when the step is shortened.
 //!
 //! The geometry step selected by `set_atom_maxmove` forgets the history
-//! whenever the quasi-Newton step is longer than the cap. The capped
-//! step shortens that direction and stores the pair.
+//! whenever the quasi-Newton step is longer than the cap. The scaled
+//! step shortens that direction and stores the pair. The default step
+//! is the eOn cap, which clears that history.
 
 use ndarray::{Array1, ArrayView1, array};
 use rgmin::{Control, FireKind, LbfgsStep, Method, Oracle, Solver};
@@ -13,7 +14,7 @@ fn quadratic(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
     (0.5 * x.dot(&x), x.to_owned())
 }
 
-fn session(capped: bool) -> Solver {
+fn session(scaled: bool) -> Solver {
     let control = Control {
         maxiter: 20,
         gtol: 1e-12,
@@ -21,9 +22,9 @@ fn session(capped: bool) -> Solver {
         ..Control::default()
     };
     let mut solver = Solver::new(Method::Lbfgs { memory: 8 }, control, 3);
-    if capped {
+    if scaled {
         solver
-            .set_lbfgs_step(LbfgsStep::Capped { max_atom: 0.2 })
+            .set_lbfgs_step(LbfgsStep::Scaled { max_atom: 0.2 })
             .unwrap();
     } else {
         solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
@@ -34,9 +35,9 @@ fn session(capped: bool) -> Solver {
 
 /// Four steps from `(2, 0, 0)` on `f = 1/2 ||x||^2`. The Newton step
 /// stays longer than the cap, so the geometry step retains one pair
-/// and the capped step retains the window.
+/// and the scaled step retains the window.
 #[test]
-fn capped_keeps_the_history_the_geometry_step_drops() {
+fn scaled_keeps_the_history_the_geometry_step_drops() {
     let obj = Oracle::unbounded(3, quadratic);
     let mut x_cap = array![2.0, 0.0, 0.0];
     let mut x_geo = x_cap.clone();
@@ -48,7 +49,7 @@ fn capped_keeps_the_history_the_geometry_step_drops() {
     }
     assert!(
         capped.pair_count() >= 3,
-        "capped history {}",
+        "scaled history {}",
         capped.pair_count()
     );
     assert!(
@@ -64,10 +65,10 @@ fn capped_keeps_the_history_the_geometry_step_drops() {
     assert!(x_cap[1].abs() <= 1e-12 && x_cap[2].abs() <= 1e-12);
 }
 
-/// The first capped session step moves the atom by the cap, and each
+/// The first scaled session step moves the atom by the cap, and each
 /// later step adds one oracle call.
 #[test]
-fn a_capped_session_step_costs_one_evaluation() {
+fn a_scaled_session_step_costs_one_evaluation() {
     let calls = std::sync::atomic::AtomicUsize::new(0);
     let obj = Oracle::unbounded(3, |x: ArrayView1<f64>| {
         calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -102,16 +103,31 @@ fn a_non_positive_cap_restores_the_eon_default() {
 }
 
 /// A session that never selects a step rule uses the eOn cap.
+/// The first step spends a curvature probe, so the oracle runs three
+/// times, and the atom moves by `EON_MAX_MOVE`.
 #[test]
-fn the_default_session_moves_one_atom_by_the_eon_cap() {
+fn the_default_session_probes_then_moves_by_the_eon_cap() {
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let obj = Oracle::unbounded(3, |x: ArrayView1<f64>| {
+        calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        quadratic(x)
+    });
     let control = Control {
         gtol: 1e-12,
         ..Control::default()
     };
     let mut solver = Solver::new(Method::Lbfgs { memory: 8 }, control, 3);
     assert_eq!(solver.lbfgs_step(), LbfgsStep::default());
-    let obj = Oracle::unbounded(3, quadratic);
     let mut x = array![1.0, 0.0, 0.0];
     solver.step(&obj, &mut x).unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 3);
     assert!((x[0] - (1.0 - rgmin::EON_MAX_MOVE)).abs() <= 1e-12, "{x}");
+    solver.step(&obj, &mut x).unwrap();
+    let force_step = 0.8 - x[0];
+    assert!((force_step - rgmin::EON_MAX_MOVE).abs() <= 1e-12, "{x}");
+    assert_eq!(
+        solver.pair_count(),
+        1,
+        "a step of length 0.2 from 0.8 clears the quasi-Newton pair"
+    );
 }
