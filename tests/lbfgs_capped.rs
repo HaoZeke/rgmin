@@ -131,3 +131,40 @@ fn the_default_session_probes_then_moves_by_the_eon_cap() {
         "a step of length 0.2 from 0.8 clears the quasi-Newton pair"
     );
 }
+
+/// The buffer-filling driver takes the same 66 evaluations as eOn on
+/// Rosenbrock 2 with memory 20.
+#[test]
+fn run_fill_matches_the_eon_rosenbrock2_count() {
+    let mut calls = 0usize;
+    let mut x = array![-1.2, 1.0];
+    let control = Control {
+        maxiter: 20_000,
+        gtol: 1e-5,
+        istep: 1.0,
+        stop_norm: rgmin::StopNorm::Inf,
+        ..Control::default()
+    };
+    let mut solver = Solver::new(Method::Lbfgs { memory: 20 }, control, 2);
+    solver
+        .set_lbfgs_step(LbfgsStep::Capped { max_atom: 0.2 })
+        .unwrap();
+    let rep = solver
+        .run_fill(&mut x, |x, g| {
+            calls += 1;
+            g.fill(0.0);
+            let mut f = 0.0;
+            let xs = x.as_slice().unwrap();
+            for i in 0..xs.len() - 1 {
+                let a = 1.0 - xs[i];
+                let b = xs[i + 1] - xs[i] * xs[i];
+                f += a * a + 100.0 * b * b;
+                g[i] += -2.0 * a - 400.0 * xs[i] * b;
+                g[i + 1] += 200.0 * b;
+            }
+            f
+        })
+        .unwrap();
+    assert!(rep.grad_norm < 1e-5, "{}", rep.grad_norm);
+    assert_eq!(calls, 66, "evals {calls}");
+}

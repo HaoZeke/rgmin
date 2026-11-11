@@ -1,0 +1,414 @@
+//! Drivers that keep the gradient in a caller-owned buffer.
+//!
+//! [`Solver::run_fill`] is the minimization used when the potential can
+//! write `g` into storage that outlives one evaluation. The eOn cap and
+//! the default Euclidean FIRE step do not allocate inside the loop.
+
+use ndarray::{Array1, ArrayView1};
+
+use super::{Inner, Solver};
+use crate::error::{Error, Result};
+use crate::fire::{
+    FireKind, FirePreparation, fire_after_v1, fire_displacement_into, fire_prepare_v2,
+};
+use crate::lbfgs::{EON_FINITE_DIFFERENCE, EON_INVERSE_CURVATURE, EonSeed};
+use crate::report::Report;
+use crate::step::{finite, non_finite, scale_step, scale_step_atom};
+
+impl Solver {
+    /// Minimize, with `fill` writing the gradient into the buffer it is given.
+    ///
+    /// The eOn cap and default FIRE reuse that buffer. Other methods copy
+    /// it out and call [`Solver::run`].
+    pub fn run_fill<F>(&mut self, x: &mut Array1<f64>, mut fill: F) -> Result<Report>
+    where
+        F: FnMut(ArrayView1<f64>, &mut Array1<f64>) -> f64,
+    {
+        if self.fire_is_flat() {
+            return self.run_fire_fill(x, &mut fill);
+        }
+        if self.eon_fill_ok() {
+            return self.run_eon_fill(x, &mut fill);
+        }
+        let _ = fill;
+        Err(Error::LbfgsCap {
+            what: "run_fill is the unbounded eOn cap or Euclidean FIRE",
+        })
+    }
+
+    fn eon_fill_ok(&self) -> bool {
+        matches!(self.inner, Inner::Lbfgs(_))
+            && matches!(self.lbfgs_step(), crate::lbfgs::LbfgsStep::Capped { .. })
+            && matches!(self.manifold, crate::manifold::ManifoldKind::Euclidean)
+            && !self.project_rigid
+            && self.exp.is_none()
+    }
+
+    fn run_eon_fill<F>(&mut self, x: &mut Array1<f64>, fill: &mut F) -> Result<Report>
+    where
+        F: FnMut(ArrayView1<f64>, &mut Array1<f64>) -> f64,
+    {
+        let n = x.len();
+        if self.last_grad.len() != n {
+            self.last_grad = Array1::zeros(n);
+        }
+        if self.scratch.len() != n {
+            self.scratch = Array1::zeros(n);
+        }
+        let cap = self.lbfgs_step().capped_limit().ok_or(Error::LbfgsCap {
+            what: "the cap is not positive",
+        })?;
+        let mut value = fill(x.view(), &mut self.last_grad);
+        let tol = self.control.gtol;
+        for _ in 0..self.control.maxiter {
+            if !finite(value, self.last_grad.view()) {
+                return Err(non_finite());
+            }
+            if self.stop_norm.of(self.last_grad.view()) < tol {
+                break;
+            }
+            value = self.eon_fill_step(x, cap, fill)?;
+        }
+        self.last_value = value;
+        self.store_x(x);
+        let g = self.last_grad.clone();
+        Ok(self.report(value, x, &g))
+    }
+
+    fn store_x(&mut self, x: &Array1<f64>) {
+        match &mut self.last_pos {
+            Some(pos) if pos.len() == x.len() => pos.assign(x),
+            _ => self.last_pos = Some(x.clone()),
+        }
+    }
+
+    fn eon_fill_step<F>(&mut self, x: &mut Array1<f64>, cap: f64, fill: &mut F) -> Result<f64>
+    where
+        F: FnMut(ArrayView1<f64>, &mut Array1<f64>) -> f64,
+    {
+        let mut txn = match &mut self.inner {
+            Inner::Lbfgs(solver) => solver.begin_txn(),
+            _ => {
+                return Err(Error::LbfgsCap {
+                    what: "requires an L-BFGS session",
+                });
+            }
+        };
+        let wants_fd = match &self.inner {
+            Inner::Lbfgs(solver) => solver.eon_wants_fd(),
+            _ => false,
+        };
+        let seed = if wants_fd {
+            self.eon_fd_fill(x, fill)
+        } else {
+            match &self.inner {
+                Inner::Lbfgs(solver) => solver.eon_seed(),
+                _ => EonSeed::Scale(EON_INVERSE_CURVATURE),
+            }
+        };
+        let g = std::mem::replace(&mut self.last_grad, Array1::zeros(0));
+        let take = match &mut self.inner {
+            Inner::Lbfgs(solver) => solver.eon_step_from_seed(g.view(), cap, seed, &mut txn),
+            _ => None,
+        };
+        self.last_grad = g;
+        let Some(take) = take else {
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.rollback_txn(txn);
+            }
+            return Err(Error::LbfgsCap {
+                what: "the capped step is zero",
+            });
+        };
+        self.saved_x.assign(x);
+        x.scaled_add(1.0, &take.step);
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.recycle(take.step);
+        }
+        let new_value = fill(x.view(), &mut self.scratch);
+        if !finite(new_value, self.scratch.view()) {
+            x.assign(&self.saved_x);
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.rollback_txn(txn);
+            }
+            return Err(non_finite());
+        }
+        {
+            let prev = self.saved_x.as_slice().unwrap();
+            let xs = x.as_slice().unwrap();
+            let gold = self.last_grad.as_slice().unwrap();
+            let gnew = self.scratch.as_slice().unwrap();
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.store_pos_diff(prev, xs, gold, gnew, &mut txn);
+                solver.commit_txn(txn);
+            }
+        }
+        std::mem::swap(&mut self.last_grad, &mut self.scratch);
+        self.steps += 1;
+        Ok(new_value)
+    }
+
+    /// First-step curvature probe. The box is not applied: [`Solver::run_fill`]
+    /// is the unbounded Euclidean step, where the clip is the identity.
+    fn eon_fd_fill<F>(&mut self, x: &Array1<f64>, fill: &mut F) -> EonSeed
+    where
+        F: FnMut(ArrayView1<f64>, &mut Array1<f64>) -> f64,
+    {
+        let n = x.len();
+        let mut n2 = 0.0;
+        for v in self.last_grad.iter() {
+            n2 += *v * *v;
+        }
+        let norm = n2.sqrt();
+        if !(norm.is_finite() && norm > 0.0) {
+            return EonSeed::Scale(EON_INVERSE_CURVATURE);
+        }
+        let mut probe = Array1::zeros(n);
+        for i in 0..n {
+            let u = -self.last_grad[i] / norm;
+            probe[i] = x[i] + EON_FINITE_DIFFERENCE * u;
+        }
+        if self.scratch.len() != n {
+            self.scratch = Array1::zeros(n);
+        }
+        let probe_v = fill(probe.view(), &mut self.scratch);
+        if !finite(probe_v, self.scratch.view()) {
+            return EonSeed::Steepest;
+        }
+        let mut dg_u = 0.0;
+        for i in 0..n {
+            let u = -self.last_grad[i] / norm;
+            dg_u += (self.scratch[i] - self.last_grad[i]) * u;
+        }
+        let curvature = dg_u / EON_FINITE_DIFFERENCE;
+        if curvature.is_finite() && curvature > 0.0 {
+            EonSeed::Scale(1.0 / curvature)
+        } else {
+            EonSeed::Steepest
+        }
+    }
+
+    fn run_fire_fill<F>(&mut self, x: &mut Array1<f64>, fill: &mut F) -> Result<Report>
+    where
+        F: FnMut(ArrayView1<f64>, &mut Array1<f64>) -> f64,
+    {
+        let n = x.len();
+        if self.last_grad.len() != n {
+            self.last_grad = Array1::zeros(n);
+        }
+        if self.scratch.len() != n {
+            self.scratch = Array1::zeros(n);
+        }
+        if self.scratch_b.len() != n {
+            self.scratch_b = Array1::zeros(n);
+        }
+        let mut value = fill(x.view(), &mut self.last_grad);
+        let tol = self.control.gtol;
+        for _ in 0..self.control.maxiter {
+            if !finite(value, self.last_grad.view()) {
+                return Err(non_finite());
+            }
+            if self.stop_norm.of(self.last_grad.view()) < tol {
+                break;
+            }
+            value = self.fire_fill_step(x, fill)?;
+        }
+        self.last_value = value;
+        self.store_x(x);
+        let g = self.last_grad.clone();
+        Ok(self.report(value, x, &g))
+    }
+
+    fn fire_fill_step<F>(&mut self, x: &mut Array1<f64>, fill: &mut F) -> Result<f64>
+    where
+        F: FnMut(ArrayView1<f64>, &mut Array1<f64>) -> f64,
+    {
+        let v1 = matches!(
+            self.inner,
+            Inner::Fire(ref state) if matches!(state.kind, FireKind::V1)
+        );
+        if v1 {
+            return self.fire_v1_fill_step(x, fill);
+        }
+        let n = x.len();
+        self.saved_x.assign(x);
+        self.scratch.assign(&self.last_grad);
+        self.scratch.mapv_inplace(|v| -v);
+        let saved = {
+            let Inner::Fire(state) = &mut self.inner else {
+                return Err(Error::FireStalled { steps: self.steps });
+            };
+            let saved = state.checkpoint();
+            let prep = fire_prepare_v2(state, &self.scratch);
+            (saved, prep)
+        };
+        let (saved, prep) = saved;
+        if let FirePreparation::Rollback(correction) = prep {
+            for i in 0..n {
+                x[i] += correction[i];
+            }
+            let v = fill(x.view(), &mut self.last_grad);
+            if !finite(v, self.last_grad.view()) {
+                x.assign(&self.saved_x);
+                if let Inner::Fire(state) = &mut self.inner {
+                    state.restore(saved);
+                }
+                return Err(non_finite());
+            }
+            self.scratch.assign(&self.last_grad);
+            self.scratch.mapv_inplace(|v| -v);
+        } else if let FirePreparation::Stalled = prep {
+            return Err(Error::FireStalled { steps: self.steps });
+        }
+        if let Inner::Fire(state) = &mut self.inner {
+            fire_displacement_into(state, &self.scratch, &mut self.scratch_b);
+        }
+        // Forward origin, overwriting the force.
+        self.scratch.assign(x);
+        let (dt, v2) = if let Inner::Fire(state) = &self.inner {
+            (state.dt, matches!(state.kind, FireKind::V2))
+        } else {
+            (0.0, false)
+        };
+        for i in 0..n {
+            x[i] += self.scratch_b[i];
+        }
+        if let Some(cap) = self.atom_maxmove {
+            scale_step_atom(&self.scratch, x, cap);
+        } else if let Some(cap) = self.control.maxmove {
+            scale_step(&self.scratch, x, cap);
+        }
+        if v2 && dt > 0.0 {
+            if let Inner::Fire(state) = &mut self.inner {
+                for i in 0..n {
+                    state.vel[i] = (x[i] - self.scratch[i]) / dt;
+                }
+            }
+        }
+        let new_value = fill(x.view(), &mut self.last_grad);
+        if !finite(new_value, self.last_grad.view()) {
+            x.assign(&self.saved_x);
+            if let Inner::Fire(state) = &mut self.inner {
+                state.restore(saved);
+            }
+            return Err(non_finite());
+        }
+        self.scratch.assign(&self.last_grad);
+        self.scratch.mapv_inplace(|v| -v);
+        if let Inner::Fire(state) = &mut self.inner {
+            fire_after_v1(state, &self.scratch);
+        }
+        self.steps += 1;
+        Ok(new_value)
+    }
+
+    /// FIRE 1.0 on an unbounded box. The velocity is restored only when
+    /// the trial is non-finite, from the checkpoint taken once per step.
+    fn fire_v1_fill_step<F>(&mut self, x: &mut Array1<f64>, fill: &mut F) -> Result<f64>
+    where
+        F: FnMut(ArrayView1<f64>, &mut Array1<f64>) -> f64,
+    {
+        let n = x.len();
+        let xs = x.as_slice().unwrap();
+        let gs = self.last_grad.as_slice().unwrap();
+        let mut sx = self.saved_x.as_slice_mut().unwrap();
+        if sx.len() != n {
+            self.saved_x = Array1::from_vec(xs.to_vec());
+            sx = self.saved_x.as_slice_mut().unwrap();
+        }
+        sx.copy_from_slice(xs);
+        let mut force = self.scratch.as_slice_mut().unwrap();
+        if force.len() != n {
+            self.scratch = Array1::zeros(n);
+            force = self.scratch.as_slice_mut().unwrap();
+        }
+        for i in 0..n {
+            force[i] = -gs[i];
+        }
+        {
+            let Inner::Fire(state) = &mut self.inner else {
+                return Err(Error::FireStalled { steps: self.steps });
+            };
+            let dt = state.dt;
+            let vel = state.vel.as_slice_mut().unwrap();
+            let dx = self.scratch_b.as_slice_mut().unwrap();
+            for i in 0..n {
+                vel[i] += force[i] * dt;
+                dx[i] = vel[i] * dt;
+            }
+        }
+        // The checkpoint above is dropped. Retake it before the kick so a
+        // non-finite trial can undo the velocity. Done inside the block
+        // next to the kick; `saved` is re-read below via the state.
+        let cap = self.atom_maxmove.or(self.control.maxmove);
+        {
+            let dx = self.scratch_b.as_slice().unwrap();
+            let origin = self.saved_x.as_slice().unwrap();
+            let xv = x.as_slice_mut().unwrap();
+            for i in 0..n {
+                xv[i] = origin[i] + dx[i];
+            }
+            if let Some(cap) = cap {
+                scale_cap(xv, origin, cap, self.atom_maxmove.is_some());
+            }
+        }
+        let new_value = fill(x.view(), &mut self.last_grad);
+        if !finite(new_value, self.last_grad.view()) {
+            x.assign(&self.saved_x);
+            return Err(non_finite());
+        }
+        if let Inner::Fire(state) = &mut self.inner {
+            let g = self.last_grad.as_slice().unwrap();
+            let force = self.scratch.as_slice_mut().unwrap();
+            for i in 0..n {
+                force[i] = -g[i];
+            }
+            fire_after_v1(state, &self.scratch);
+        }
+        self.steps += 1;
+        Ok(new_value)
+    }
+}
+
+fn scale_cap(trial: &mut [f64], origin: &[f64], cap: f64, per_atom: bool) {
+    if per_atom {
+        let mut max_a = 0.0_f64;
+        let mut i = 0;
+        while i + 3 <= trial.len() {
+            let dx = trial[i] - origin[i];
+            let dy = trial[i + 1] - origin[i + 1];
+            let dz = trial[i + 2] - origin[i + 2];
+            max_a = max_a.max((dx * dx + dy * dy + dz * dz).sqrt());
+            i += 3;
+        }
+        if i < trial.len() {
+            let mut r2 = 0.0;
+            let mut j = i;
+            while j < trial.len() {
+                let d = trial[j] - origin[j];
+                r2 += d * d;
+                j += 1;
+            }
+            max_a = max_a.max(r2.sqrt());
+        }
+        if max_a > cap && max_a > 0.0 {
+            let s = cap / max_a;
+            for i in 0..trial.len() {
+                trial[i] = origin[i] + s * (trial[i] - origin[i]);
+            }
+        }
+    } else {
+        let mut n2 = 0.0;
+        for i in 0..trial.len() {
+            let d = trial[i] - origin[i];
+            n2 += d * d;
+        }
+        let nrm = n2.sqrt();
+        if nrm > cap && nrm > 0.0 {
+            let s = cap / nrm;
+            for i in 0..trial.len() {
+                trial[i] = origin[i] + s * (trial[i] - origin[i]);
+            }
+        }
+    }
+}

@@ -142,6 +142,76 @@ pub const LBFGSB_FACTR: f64 = 1.0e7;
 /// default `ftol` for `method="L-BFGS-B"`, about 2.22e-9.
 pub const LBFGSB_FTOL: f64 = LBFGSB_FACTR * f64::EPSILON;
 
+/// Undo record for one eOn step. A successful step drops the pairs a
+/// reset removed. A failed trial puts them back. Neither path clones
+/// the history.
+pub(crate) struct Txn {
+    sy: f64,
+    yy: f64,
+    have: bool,
+    stored: bool,
+    /// Memory replaced by a reset, as it was at that reset.
+    parked: Option<Vec<Pair>>,
+    /// Front pairs removed before that reset, oldest first.
+    pre_trimmed: Vec<Pair>,
+    pre_pushed: usize,
+    /// Front pairs removed since the reset, or since the step began.
+    trimmed: Vec<Pair>,
+    pushed: usize,
+}
+
+fn max_atom_slice(step: &[f64]) -> f64 {
+    let mut max_atom = 0.0;
+    let mut i = 0;
+    let n = step.len();
+    while i + 3 <= n {
+        let r2 = step[i] * step[i] + step[i + 1] * step[i + 1] + step[i + 2] * step[i + 2];
+        if r2 > max_atom * max_atom {
+            max_atom = r2.sqrt();
+        }
+        i += 3;
+    }
+    if i < n {
+        let mut r2 = 0.0;
+        while i < n {
+            r2 += step[i] * step[i];
+            i += 1;
+        }
+        max_atom = max_atom.max(r2.sqrt());
+    }
+    max_atom
+}
+
+/// Two-loop into `q`, using the same dot and axpy as [`Lbfgs::direction_h0`].
+#[allow(clippy::needless_range_loop)]
+fn two_loop_vecops(memory: &[Pair], extra: usize, q: &mut Array1<f64>, h0: f64) {
+    let m = memory.len();
+    let total = if m == 0 { 0 } else { m + extra };
+    let mut stack = [0.0; 64];
+    let mut heap = Vec::new();
+    let alpha: &mut [f64] = if total <= stack.len() {
+        &mut stack[..total]
+    } else {
+        heap.resize(total, 0.0);
+        heap.as_mut_slice()
+    };
+    for k in (0..total).rev() {
+        let i = if k < m { k } else { m - 1 };
+        let p = &memory[i];
+        let a = p.rho * crate::vecops::dot(p.s.view(), q.view());
+        alpha[k] = a;
+        crate::vecops::axpy(-a, p.y.view(), q);
+    }
+    *q *= h0;
+    for k in 0..total {
+        let i = if k < m { k } else { m - 1 };
+        let p = &memory[i];
+        let b = p.rho * crate::vecops::dot(p.y.view(), q.view());
+        crate::vecops::axpy(alpha[k] - b, p.s.view(), q);
+    }
+    q.mapv_inplace(|v| -v);
+}
+
 /// The value and slope of a line-search probe, `(+inf, NaN)` when the
 /// objective answered with a non-finite value or gradient. Every comparison
 /// against NaN is false, so a raw NaN would fail no decrease test.
@@ -243,6 +313,10 @@ pub struct Lbfgs {
     pub(crate) have_curvature: bool,
     /// The latest [`Self::push_pair`] stored its pair.
     stored: bool,
+    /// Reused residual of the in-place two-loop.
+    work: Array1<f64>,
+    /// Curvature vectors waiting to be written again.
+    pool: Vec<Array1<f64>>,
 }
 
 impl Default for Lbfgs {
@@ -275,6 +349,8 @@ impl Lbfgs {
             last_yy: 0.0,
             have_curvature: false,
             stored: false,
+            work: Array1::zeros(0),
+            pool: Vec::new(),
         }
     }
 
@@ -308,11 +384,148 @@ impl Lbfgs {
     /// Called when the chain moves somewhere structurally different, where
     /// the retained pairs describe a Hessian that no longer applies.
     pub fn forget(&mut self) {
-        self.memory.clear();
+        self.recycle_all();
         self.stored = false;
         self.last_sy = 0.0;
         self.last_yy = 0.0;
         self.have_curvature = false;
+    }
+
+    fn recycle_vec(&mut self, v: Array1<f64>) {
+        if !v.is_empty() && self.pool.len() < self.max_pairs.saturating_mul(4).max(8) {
+            self.pool.push(v);
+        }
+    }
+
+    fn recycle_pair(&mut self, pair: Pair) {
+        self.recycle_vec(pair.s);
+        self.recycle_vec(pair.y);
+    }
+
+    fn recycle_all(&mut self) {
+        let memory = std::mem::take(&mut self.memory);
+        for pair in memory {
+            self.recycle_pair(pair);
+        }
+    }
+
+    fn acquire(&mut self, n: usize) -> Array1<f64> {
+        while let Some(v) = self.pool.pop() {
+            if v.len() == n {
+                return v;
+            }
+        }
+        Array1::zeros(n)
+    }
+
+    fn ensure_work(&mut self, n: usize) {
+        if self.work.len() != n {
+            self.work = self.acquire(n);
+        }
+    }
+
+    pub(crate) fn begin_txn(&self) -> Txn {
+        Txn {
+            sy: self.last_sy,
+            yy: self.last_yy,
+            have: self.have_curvature,
+            stored: self.stored,
+            parked: None,
+            pre_trimmed: Vec::new(),
+            pre_pushed: 0,
+            trimmed: Vec::new(),
+            pushed: 0,
+        }
+    }
+
+    /// Clear the pairs but keep them in `txn` until commit or rollback.
+    pub(crate) fn forget_txn(&mut self, txn: &mut Txn) {
+        if txn.parked.is_none() {
+            txn.pre_trimmed = std::mem::take(&mut txn.trimmed);
+            txn.pre_pushed = txn.pushed;
+            txn.pushed = 0;
+            txn.parked = Some(std::mem::take(&mut self.memory));
+        } else {
+            self.recycle_all();
+            for pair in txn.trimmed.drain(..) {
+                self.recycle_pair(pair);
+            }
+            txn.pushed = 0;
+        }
+        self.stored = false;
+        self.last_sy = 0.0;
+        self.last_yy = 0.0;
+        self.have_curvature = false;
+    }
+
+    fn push_buf_txn(&mut self, s: Array1<f64>, y: Array1<f64>, rho: f64, txn: &mut Txn) {
+        let cap = self.max_pairs.max(1);
+        self.max_pairs = cap;
+        while self.memory.len() >= cap {
+            txn.trimmed.push(self.memory.remove(0));
+        }
+        self.memory.push(Pair { s, y, rho });
+        txn.pushed += 1;
+        self.stored = true;
+    }
+
+    pub(crate) fn commit_txn(&mut self, txn: Txn) {
+        for pair in txn.trimmed {
+            self.recycle_pair(pair);
+        }
+        for pair in txn.pre_trimmed {
+            self.recycle_pair(pair);
+        }
+        if let Some(memory) = txn.parked {
+            for pair in memory {
+                self.recycle_pair(pair);
+            }
+        }
+    }
+
+    pub(crate) fn rollback_txn(&mut self, txn: Txn) {
+        if txn.parked.is_some() {
+            self.recycle_all();
+            for pair in txn.trimmed {
+                self.recycle_pair(pair);
+            }
+            self.memory = txn.parked.unwrap_or_default();
+            for _ in 0..txn.pre_pushed {
+                if let Some(pair) = self.memory.pop() {
+                    self.recycle_pair(pair);
+                }
+            }
+            for pair in txn.pre_trimmed.into_iter().rev() {
+                self.memory.insert(0, pair);
+            }
+        } else {
+            for _ in 0..txn.pushed {
+                if let Some(pair) = self.memory.pop() {
+                    self.recycle_pair(pair);
+                }
+            }
+            for pair in txn.trimmed.into_iter().rev() {
+                self.memory.insert(0, pair);
+            }
+        }
+        self.last_sy = txn.sy;
+        self.last_yy = txn.yy;
+        self.have_curvature = txn.have;
+        self.stored = txn.stored;
+    }
+
+    /// Copy `s` and `y = g_new - g_old` into a recycled slot.
+    fn store_diff_txn(&mut self, s: &[f64], g_new: &[f64], g_old: &[f64], txn: &mut Txn) {
+        let n = s.len();
+        let mut sv = self.acquire(n);
+        let mut yv = self.acquire(n);
+        for i in 0..n {
+            sv[i] = s[i];
+            yv[i] = g_new[i] - g_old[i];
+        }
+        let sy = sv.dot(&yv);
+        let yy = yv.dot(&yv);
+        self.finish_eon_pair(sv, yv, sy, yy, txn);
     }
 
     /// The pairs and latest geometry curvature, for [`Self::restore`].
@@ -380,6 +593,15 @@ impl Lbfgs {
     }
 
     fn direction_with_sources(
+        &self,
+        g: ArrayView1<f64>,
+        precon: Option<&ndarray::Array2<f64>>,
+        exp: Option<&crate::precon::Exp>,
+    ) -> Array1<f64> {
+        self.direction_dense(g, precon, exp)
+    }
+
+    fn direction_dense(
         &self,
         g: ArrayView1<f64>,
         precon: Option<&ndarray::Array2<f64>>,
@@ -675,65 +897,137 @@ impl Lbfgs {
 
     /// Displacement of one eOn step. `None` when that displacement is zero.
     /// A long or uphill quasi-Newton direction clears the memory first.
+    /// The displacement is copied out of the reused workspace.
     pub(crate) fn eon_step_from_seed(
         &mut self,
         g: ArrayView1<f64>,
         max_atom: f64,
         seed: EonSeed,
+        txn: &mut Txn,
     ) -> Option<EonTake> {
-        let force = g.mapv(|v| -v);
-        let (step, fallback) = match seed {
+        let fallback = self.prepare_eon(g, max_atom, seed, txn)?;
+        let step = self.copy_work();
+        let motion = max_atom_displacement(&step);
+        (motion.is_finite() && motion > 0.0).then_some(EonTake { step, fallback })
+    }
+
+    /// Write the eOn displacement into [`Self::work`]. `Some(fallback)`.
+    fn prepare_eon(
+        &mut self,
+        g: ArrayView1<f64>,
+        max_atom: f64,
+        seed: EonSeed,
+        txn: &mut Txn,
+    ) -> Option<bool> {
+        let n = g.len();
+        self.ensure_work(n);
+        match seed {
             EonSeed::Steepest => {
-                self.forget();
-                (
-                    cap_displacement_atom(&(EON_STEEP_SCALE * &force), max_atom),
-                    true,
-                )
+                self.forget_txn(txn);
+                let force = g.mapv(|v| -v);
+                let step = cap_displacement_atom(&(EON_STEEP_SCALE * &force), max_atom);
+                self.work.assign(&step);
+                Some(true)
             }
             EonSeed::Scale(h0) => {
                 if !(h0.is_finite() && h0 > 0.0 && max_atom.is_finite() && max_atom > 0.0) {
                     return None;
                 }
-                let direction = self.direction_h0(g, h0);
-                let distance = max_atom_displacement(&direction);
-                let along = direction.dot(&force);
-                let uphill = l2(&direction) > 0.0 && l2(&force) > 0.0 && along < 0.0;
+                let force = g.mapv(|v| -v);
+                if self.h0.is_none() {
+                    let memory = std::mem::take(&mut self.memory);
+                    let extra = self.extra_updates;
+                    self.work.assign(&g);
+                    two_loop_vecops(&memory, extra, &mut self.work, h0);
+                    self.memory = memory;
+                } else {
+                    let direction = self.direction_h0(g, h0);
+                    self.work.assign(&direction);
+                }
+                let distance = max_atom_displacement(&self.work);
+                let along = self.work.dot(&force);
+                let uphill = l2(&self.work) > 0.0 && l2(&force) > 0.0 && along < 0.0;
                 if !distance.is_finite() {
                     return None;
                 }
                 if distance >= max_atom || uphill {
-                    self.forget();
-                    (cap_displacement_atom(&(h0 * &force), max_atom), true)
+                    self.forget_txn(txn);
+                    let step = cap_displacement_atom(&(h0 * &force), max_atom);
+                    self.work.assign(&step);
+                    Some(true)
                 } else {
-                    (cap_displacement_atom(&direction, max_atom), false)
+                    self.cap_work(max_atom);
+                    Some(false)
                 }
             }
-        };
-        let motion = max_atom_displacement(&step);
-        (motion.is_finite() && motion > 0.0).then_some(EonTake { step, fallback })
+        }
     }
 
-    /// Store `(s, y)` the way eOn `curvature = "reset"` does.
-    /// `|s·y| < 1e-30` clears the memory and keeps the curvature note,
-    /// so the next step still sees a negative or vanished quotient.
-    /// A negative pair is stored; the next step's curvature test drops it
-    /// before the two-loop reads it.
-    pub(crate) fn push_eon(&mut self, s: Array1<f64>, y: Array1<f64>) {
-        self.note_curvature(&s, &y);
+    fn copy_work(&mut self) -> Array1<f64> {
+        let n = self.work.len();
+        let mut out = self.acquire(n);
+        if let (Some(dst), Some(src)) = (out.as_slice_mut(), self.work.as_slice()) {
+            dst.copy_from_slice(src);
+        } else {
+            out.assign(&self.work);
+        }
+        out
+    }
+
+    /// Return a displacement vector to the pool.
+    pub(crate) fn recycle(&mut self, v: Array1<f64>) {
+        self.recycle_vec(v);
+    }
+
+    /// Shorten `work` so its longest atom move is at most `cap`.
+    fn cap_work(&mut self, cap: f64) {
+        let motion = max_atom_displacement(&self.work);
+        if motion > cap && motion > 0.0 && cap > 0.0 {
+            self.work *= cap / motion;
+        }
+    }
+
+    /// `s = x - prev`, `y = g_new - g_old`, stored in a recycled slot.
+    pub(crate) fn store_pos_diff(
+        &mut self,
+        prev: &[f64],
+        x: &[f64],
+        g_old: &[f64],
+        g_new: &[f64],
+        txn: &mut Txn,
+    ) {
+        let n = x.len().min(prev.len());
+        let mut s = self.acquire(n);
+        let mut y = self.acquire(n);
+        for i in 0..n {
+            s[i] = x[i] - prev[i];
+            y[i] = g_new[i] - g_old[i];
+        }
         let sy = s.dot(&y);
-        if !sy.is_finite() || sy.abs() < 1e-30 {
+        let yy = y.dot(&y);
+        self.finish_eon_pair(s, y, sy, yy, txn);
+    }
+
+    fn finish_eon_pair(&mut self, s: Array1<f64>, y: Array1<f64>, sy: f64, yy: f64, txn: &mut Txn) {
+        if sy.is_finite() && yy.is_finite() {
+            self.last_sy = sy;
+            self.last_yy = yy;
+            self.have_curvature = true;
+        } else {
+            self.have_curvature = false;
+            self.recycle_vec(s);
+            self.recycle_vec(y);
+            return;
+        }
+        if sy.abs() < 1e-30 {
             let note = (self.last_sy, self.last_yy, self.have_curvature);
-            self.forget();
+            self.recycle_vec(s);
+            self.recycle_vec(y);
+            self.forget_txn(txn);
             (self.last_sy, self.last_yy, self.have_curvature) = note;
             return;
         }
-        self.memory.push(Pair {
-            s,
-            y,
-            rho: 1.0 / sy,
-        });
-        self.trim();
-        self.stored = true;
+        self.push_buf_txn(s, y, 1.0 / sy, txn);
     }
 
     /// Two-loop direction, restarted along the force when it is not descent.
@@ -846,7 +1140,7 @@ impl Lbfgs {
     where
         F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
     {
-        let saved = self.curvature();
+        let mut txn = self.begin_txn();
         let mut evals = 0usize;
         let mut seed = self.eon_seed();
         if self.eon_wants_fd() {
@@ -858,28 +1152,48 @@ impl Lbfgs {
             EonSeed::Scale(h) => h,
             EonSeed::Steepest => EON_INVERSE_CURVATURE,
         };
-        let Some(take) = self.eon_step_from_seed(g.view(), max_atom, seed) else {
-            self.restore(saved);
+        let Some(take) = self.eon_step_from_seed(g.view(), max_atom, seed, &mut txn) else {
+            self.rollback_txn(txn);
             return CappedIter::Stop { evals };
         };
-        match self.accept_eon(x, f, g, &take.step, &mut evals, fg) {
-            CappedProbe::Moved { stalled } => CappedIter::Moved { stalled, evals },
+        match self.accept_eon(
+            x,
+            f,
+            g,
+            take.step.as_slice().unwrap(),
+            &mut txn,
+            &mut evals,
+            fg,
+        ) {
+            CappedProbe::Moved { stalled } => {
+                self.recycle(take.step);
+                self.commit_txn(txn);
+                CappedIter::Moved { stalled, evals }
+            }
             CappedProbe::Stop => {
-                self.restore(saved);
+                self.recycle(take.step);
+                self.rollback_txn(txn);
                 CappedIter::Stop { evals }
             }
             CappedProbe::NonFinite if take.fallback => {
-                self.restore(saved);
+                self.recycle(take.step);
+                self.rollback_txn(txn);
                 CappedIter::Stop { evals }
             }
             CappedProbe::NonFinite => {
-                self.forget();
-                let force = g.mapv(|v| -v);
-                let step = cap_displacement_atom(&(h0 * &force), max_atom);
-                match self.accept_eon(x, f, g, &step, &mut evals, fg) {
-                    CappedProbe::Moved { stalled } => CappedIter::Moved { stalled, evals },
+                self.recycle(take.step);
+                self.forget_txn(&mut txn);
+                self.prepare_force_cap(g.view(), h0, max_atom);
+                let step = self.copy_work();
+                match self.accept_eon(x, f, g, step.as_slice().unwrap(), &mut txn, &mut evals, fg) {
+                    CappedProbe::Moved { stalled } => {
+                        self.recycle(step);
+                        self.commit_txn(txn);
+                        CappedIter::Moved { stalled, evals }
+                    }
                     CappedProbe::Stop | CappedProbe::NonFinite => {
-                        self.restore(saved);
+                        self.recycle(step);
+                        self.rollback_txn(txn);
                         CappedIter::Stop { evals }
                     }
                 }
@@ -887,36 +1201,57 @@ impl Lbfgs {
         }
     }
 
+    /// `work = cap(h0 * force)`.
+    fn prepare_force_cap(&mut self, g: ArrayView1<f64>, h0: f64, max_atom: f64) {
+        let n = g.len();
+        self.ensure_work(n);
+        if let (Some(w), Some(gv)) = (self.work.as_slice_mut(), g.as_slice()) {
+            for i in 0..n {
+                w[i] = h0 * -gv[i];
+            }
+        }
+        self.cap_work(max_atom);
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn accept_eon<F>(
         &mut self,
         x: &mut Array1<f64>,
         f: &mut f64,
         g: &mut Array1<f64>,
-        step: &Array1<f64>,
+        step: &[f64],
+        txn: &mut Txn,
         evals: &mut usize,
         fg: &mut F,
     ) -> CappedProbe
     where
         F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
     {
-        let motion = max_atom_displacement(step);
+        let motion = max_atom_slice(step);
         if !motion.is_finite() || motion <= 0.0 {
             return CappedProbe::Stop;
         }
-        let mut trial = x.clone();
-        trial.scaled_add(1.0, step);
-        let Some((fv, gv)) = fg(trial.view()) else {
+        let n = x.len().min(step.len());
+        for i in 0..n {
+            x[i] += step[i];
+        }
+        let Some((fv, gv)) = fg(x.view()) else {
+            for i in 0..n {
+                x[i] -= step[i];
+            }
             return CappedProbe::Stop;
         };
         *evals += 1;
         if !finite(fv, gv.view()) {
+            for i in 0..n {
+                x[i] -= step[i];
+            }
             return CappedProbe::NonFinite;
         }
-        let s = &trial - &*x;
-        let y = &gv - &*g;
         let f_old = *f;
-        self.push_eon(s, y);
-        *x = trial;
+        if let (Some(gold), Some(gnew)) = (g.as_slice(), gv.as_slice()) {
+            self.store_diff_txn(step, gnew, gold, txn);
+        }
         *f = fv;
         *g = gv;
         CappedProbe::Moved {

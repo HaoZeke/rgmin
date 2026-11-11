@@ -95,6 +95,19 @@ pub struct FireState {
     /// FIRE 2.0 only: divide the mixed velocity by
     /// `1 - (1 - alpha)^(n_pos + 1)` (ABC-FIRE).
     pub abc: bool,
+    /// Velocity from the start of the current step, so a refused trial
+    /// restores it without allocating.
+    saved_vel: Array1<f64>,
+}
+
+/// Scalar FIRE state saved with [`FireState::checkpoint`].
+#[derive(Clone, Copy)]
+pub(crate) struct FireCheckpoint {
+    dt: f64,
+    alpha: f64,
+    n_pos: usize,
+    n_neg: usize,
+    steps: usize,
 }
 
 impl FireState {
@@ -123,6 +136,37 @@ impl FireState {
             f_alpha: 0.99,
             preset: FirePreset::Default,
             abc: false,
+            saved_vel: Array1::zeros(dim),
+        }
+    }
+
+    /// Remember the velocity and the scalars a refused trial restores.
+    pub(crate) fn checkpoint(&mut self) -> FireCheckpoint {
+        if self.saved_vel.len() != self.vel.len() {
+            self.saved_vel = self.vel.clone();
+        } else {
+            self.saved_vel.assign(&self.vel);
+        }
+        FireCheckpoint {
+            dt: self.dt,
+            alpha: self.alpha,
+            n_pos: self.n_pos,
+            n_neg: self.n_neg,
+            steps: self.steps,
+        }
+    }
+
+    /// Undo the integrator mutations made since [`Self::checkpoint`].
+    pub(crate) fn restore(&mut self, saved: FireCheckpoint) {
+        self.dt = saved.dt;
+        self.alpha = saved.alpha;
+        self.n_pos = saved.n_pos;
+        self.n_neg = saved.n_neg;
+        self.steps = saved.steps;
+        if self.vel.len() == self.saved_vel.len() {
+            self.vel.assign(&self.saved_vel);
+        } else {
+            self.vel = self.saved_vel.clone();
         }
     }
 
@@ -164,6 +208,7 @@ impl FireState {
     }
 }
 
+#[inline]
 fn mix_velocity(state: &mut FireState, force: &Array1<f64>) {
     let fnorm = l2(force);
     let vnorm = l2(&state.vel);
@@ -305,6 +350,16 @@ pub(crate) fn fire_prepare_v2(state: &mut FireState, force: &Array1<f64>) -> Fir
 /// step first; the caller mixes on the force at the new point via
 /// [`fire_after_v1`].
 pub fn fire_displacement(state: &mut FireState, force: &Array1<f64>) -> Array1<f64> {
+    let mut dx = Array1::zeros(force.len());
+    fire_displacement_into(state, force, &mut dx);
+    dx
+}
+
+/// [`fire_displacement`] writing `dx` into a caller-owned buffer.
+pub fn fire_displacement_into(state: &mut FireState, force: &Array1<f64>, dx: &mut Array1<f64>) {
+    if dx.len() != state.vel.len() {
+        *dx = Array1::zeros(state.vel.len());
+    }
     match state.kind {
         FireKind::V2 => {
             for i in 0..state.vel.len() {
@@ -314,14 +369,16 @@ pub fn fire_displacement(state: &mut FireState, force: &Array1<f64>) -> Array1<f
             mix_velocity(state, force);
             abc_correct(state);
             state.steps += 1;
-            &state.vel * state.dt
         }
         FireKind::V1 => {
             for i in 0..state.vel.len() {
                 state.vel[i] += force[i] * state.dt;
             }
-            &state.vel * state.dt
         }
+    }
+    let dt = state.dt;
+    for i in 0..state.vel.len() {
+        dx[i] = state.vel[i] * dt;
     }
 }
 
@@ -334,6 +391,7 @@ pub(crate) fn fire_clip_components(state: &mut FireState, cap: f64) -> Array1<f6
 }
 
 /// FIRE 1.0 mix and adapt after the MD step, using the new force.
+#[inline]
 pub fn fire_after_v1(state: &mut FireState, force: &Array1<f64>) {
     if !matches!(state.kind, FireKind::V1) {
         return;

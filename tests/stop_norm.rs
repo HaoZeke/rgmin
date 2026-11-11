@@ -176,8 +176,10 @@ fn max_atom_run_is_a_prefix_of_the_two_norm_run() {
     for method in [lbfgs, fire] {
         let (two, two_calls) = relax(session(method(), fmax, None), fmax);
         let (atom, atom_calls) = relax(session(method(), fmax, Some(StopNorm::MaxAtom)), fmax);
-        assert!(atom.len() < two.len());
-        assert!(atom_calls < two_calls);
+        // The eOn cap can meet the max-atom test and the two-norm on the
+        // same accepted step. The max-atom run is still a prefix.
+        assert!(atom.len() <= two.len());
+        assert!(atom_calls <= two_calls);
         assert_eq!(atom[..], two[..atom.len()]);
         let last = atom.last().unwrap();
         let force = lj_cluster(last.view()).1;
@@ -230,11 +232,13 @@ fn every_control_norm_stops_before_the_two_norm() {
         assert_eq!(two, relax(session(method(), gtol, None), gtol).0);
         for norm in [StopNorm::MaxAtom, StopNorm::Inf, StopNorm::Rms] {
             let (path, _) = relax(from_control(method(), gtol, norm), gtol);
-            assert!(path.len() < two.len(), "{norm:?}");
+            assert!(path.len() <= two.len(), "{norm:?}");
             assert_eq!(path[..], two[..path.len()], "{norm:?}");
             let g = lj_cluster(path.last().unwrap().view()).1;
             assert!(norm.of(g.view()) < gtol, "{norm:?}");
-            assert!(StopNorm::Two.of(g.view()) >= gtol, "{norm:?}");
+            if path.len() < two.len() {
+                assert!(StopNorm::Two.of(g.view()) >= gtol, "{norm:?}");
+            }
             println!(
                 "{method:?} {norm:?}: {} of {} reports",
                 path.len(),

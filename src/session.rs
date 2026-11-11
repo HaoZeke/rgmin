@@ -1,6 +1,7 @@
 //! Persistent solver session. One [`Solver::step`] is one outer iteration.
 
 mod constrained;
+mod drive;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -148,6 +149,12 @@ pub struct Solver {
     last_pos: Option<Array1<f64>>,
     last_value: f64,
     last_grad: Array1<f64>,
+    /// When set, [`Self::report`] skips the coordinate and gradient copies.
+    brief: bool,
+    /// Reused buffers for the Euclidean FIRE and L-BFGS steps.
+    scratch: Array1<f64>,
+    scratch_b: Array1<f64>,
+    saved_x: Array1<f64>,
     /// Objective gradients. A finite-difference product is an
     /// [`Self::hvp_calls`] entry, not a gradient.
     gradient_calls: usize,
@@ -288,6 +295,10 @@ impl Solver {
             last_pos: None,
             last_value: 0.0,
             last_grad: Array1::zeros(dim),
+            brief: false,
+            scratch: Array1::zeros(dim),
+            scratch_b: Array1::zeros(dim),
+            saved_x: Array1::zeros(dim),
             gradient_calls: 0,
             hvp_calls: 0,
             exp: None,
@@ -1052,6 +1063,14 @@ impl Solver {
         p.t().dot(hess).dot(&p) + normal.t().dot(&normal)
     }
 
+    /// Euclidean sessions keep the owned gradient. Other kinds project it.
+    fn horizontal_owned(&self, x: &Array1<f64>, grad: Array1<f64>) -> Array1<f64> {
+        if !self.project_rigid && matches!(self.manifold, ManifoldKind::Euclidean) {
+            return grad;
+        }
+        self.horizontal_grad(x, &grad)
+    }
+
     fn horizontal_grad(&self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
         let mut g = match self.manifold {
             ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => self.project_vec(x, grad),
@@ -1105,9 +1124,16 @@ impl Solver {
     }
 
     fn remember(&mut self, x: &Array1<f64>, value: f64, grad: &Array1<f64>) {
-        self.last_pos = Some(x.clone());
+        self.remember_owned(x, value, grad.clone());
+    }
+
+    fn remember_owned(&mut self, x: &Array1<f64>, value: f64, grad: Array1<f64>) {
+        match &mut self.last_pos {
+            Some(pos) if pos.len() == x.len() => pos.assign(x),
+            _ => self.last_pos = Some(x.clone()),
+        }
+        self.last_grad = grad;
         self.last_value = value;
-        self.last_grad = grad.clone();
     }
 
     fn stationarity_norm(&self, x: &Array1<f64>, grad: &Array1<f64>) -> f64 {
@@ -1142,13 +1168,62 @@ impl Solver {
     }
 
     fn report(&self, value: f64, x: &Array1<f64>, grad: &Array1<f64>) -> Report {
+        let grad_norm = self.stationarity_norm(x, grad);
+        if self.brief {
+            return Report {
+                value,
+                coords: Array1::zeros(0),
+                steps: self.steps,
+                grad_norm,
+                stop_norm: self.stop_norm,
+                grad: None,
+            };
+        }
         Report {
             value,
             coords: x.clone(),
             steps: self.steps,
-            grad_norm: self.stationarity_norm(x, grad),
+            grad_norm,
             stop_norm: self.stop_norm,
             grad: Some(grad.clone()),
+        }
+    }
+
+    /// Minimize until the gradient test, the iteration budget, or a stop.
+    ///
+    /// Intermediate reports do not clone the coordinates or the gradient.
+    /// The returned report does.
+    pub fn run<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        self.brief = true;
+        let tol = self.control.gtol;
+        let budget = self.control.maxiter;
+        let mut stop: Result<()> = Ok(());
+        for _ in 0..budget {
+            match self.step(obj, x) {
+                Ok(rep) if rep.grad_norm < tol => {
+                    let value = rep.value;
+                    self.brief = false;
+                    let g = self.last_grad.clone();
+                    return Ok(self.report(value, x, &g));
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    stop = Err(err);
+                    break;
+                }
+            }
+        }
+        self.brief = false;
+        match stop {
+            Err(err) => Err(err),
+            Ok(()) => {
+                let value = self.last_value;
+                let g = self.last_grad.clone();
+                Ok(self.report(value, x, &g))
+            }
         }
     }
 
@@ -1526,6 +1601,9 @@ impl Solver {
     }
 
     fn shape_step(&self, x: &Array1<f64>, mut direction: Array1<f64>) -> Array1<f64> {
+        if !self.project_rigid && matches!(self.manifold, ManifoldKind::Euclidean) {
+            return direction;
+        }
         if self.project_rigid {
             project_out_rot_trans(&mut direction, x.view());
         }
@@ -1684,8 +1762,8 @@ impl Solver {
                 what: "the cap is not positive",
             });
         };
-        let saved = match &self.inner {
-            Inner::Lbfgs(solver) => solver.curvature(),
+        let mut txn = match &mut self.inner {
+            Inner::Lbfgs(solver) => solver.begin_txn(),
             _ => {
                 return Err(Error::LbfgsCap {
                     what: "requires an L-BFGS session",
@@ -1693,12 +1771,14 @@ impl Solver {
             }
         };
         if !self.same_last_x(x)
-            && let Some(previous) = self.last_pos.clone()
+            && let Some(previous) = self.last_pos.as_ref()
         {
-            let s = &*x - &previous;
-            let y = &grad - &self.last_grad;
+            let prev = previous.as_slice().unwrap_or(&[]);
+            let xs = x.as_slice().unwrap_or(&[]);
+            let gold = self.last_grad.as_slice().unwrap_or(&[]);
+            let gnew = grad.as_slice().unwrap_or(&[]);
             if let Inner::Lbfgs(solver) = &mut self.inner {
-                solver.push_eon(s, y);
+                solver.store_pos_diff(prev, xs, gold, gnew, &mut txn);
             }
         }
         let wants_fd = match &self.inner {
@@ -1717,11 +1797,11 @@ impl Solver {
             EonSeed::Scale(h) => h,
             EonSeed::Steepest => EON_INVERSE_CURVATURE,
         };
-        let proposed = match self.eon_propose(obj, x, &grad, cap, seed) {
+        let proposed = match self.eon_propose(obj, x, &grad, cap, seed, &mut txn) {
             Ok(point) => point,
             Err(CappedMiss::Retry) => {
                 if let Inner::Lbfgs(solver) = &mut self.inner {
-                    solver.forget();
+                    solver.forget_txn(&mut txn);
                 }
                 let force = grad.mapv(|v| -v);
                 let step = self.shape_step(x, cap_displacement_atom(&(h0 * &force), cap));
@@ -1729,7 +1809,7 @@ impl Solver {
                     Ok((trial, value, grad, _)) => (trial, value, grad),
                     Err(err) => {
                         if let Inner::Lbfgs(solver) = &mut self.inner {
-                            solver.restore(saved);
+                            solver.rollback_txn(txn);
                         }
                         return Err(err);
                     }
@@ -1737,7 +1817,7 @@ impl Solver {
             }
             Err(CappedMiss::Stop(err)) => {
                 if let Inner::Lbfgs(solver) = &mut self.inner {
-                    solver.restore(saved);
+                    solver.rollback_txn(txn);
                 }
                 return Err(err);
             }
@@ -1746,17 +1826,22 @@ impl Solver {
         let old = x.clone();
         let gold = grad;
         *x = trial;
-        let grad = self.horizontal_grad(x, &tgrad);
-        let s = &*x - &old;
-        let y = &grad - &gold;
+        let grad = self.horizontal_owned(x, tgrad);
+        let y_prev = gold.as_slice().unwrap_or(&[]);
+        let y_new = grad.as_slice().unwrap_or(&[]);
+        let prev = old.as_slice().unwrap_or(&[]);
+        let xs = x.as_slice().unwrap_or(&[]);
         if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.push_eon(s, y);
+            solver.store_pos_diff(prev, xs, y_prev, y_new, &mut txn);
+            solver.commit_txn(txn);
         }
         self.remember(x, tval, &grad);
         self.steps += 1;
         Ok(self.report(tval, x, &grad))
     }
 
+    /// Euclidean eOn step. The displacement is added to `x` in place.
+    #[allow(clippy::too_many_arguments)]
     fn eon_propose<O>(
         &mut self,
         obj: &O,
@@ -1764,12 +1849,13 @@ impl Solver {
         grad: &Array1<f64>,
         cap: f64,
         seed: crate::lbfgs::EonSeed,
+        txn: &mut crate::lbfgs::Txn,
     ) -> std::result::Result<(Array1<f64>, f64, Array1<f64>), CappedMiss>
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
         let take = match &mut self.inner {
-            Inner::Lbfgs(solver) => solver.eon_step_from_seed(grad.view(), cap, seed),
+            Inner::Lbfgs(solver) => solver.eon_step_from_seed(grad.view(), cap, seed, txn),
             _ => None,
         };
         let Some(take) = take else {
@@ -1778,7 +1864,11 @@ impl Solver {
             }));
         };
         let step = self.shape_step(x, take.step);
-        match self.capped_trial(obj, x, &step, take.fallback) {
+        let result = self.capped_trial(obj, x, &step, take.fallback);
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.recycle(step);
+        }
+        match result {
             Ok((trial, value, grad, _)) => Ok((trial, value, grad)),
             Err(Error::Oracle {
                 what: "non-finite quasi-Newton trial",
@@ -2423,6 +2513,19 @@ impl Solver {
         }
     }
 
+    /// Euclidean FIRE with the default preset and no preconditioner.
+    fn fire_is_flat(&self) -> bool {
+        let Inner::Fire(state) = &self.inner else {
+            return false;
+        };
+        matches!(self.manifold, ManifoldKind::Euclidean)
+            && !self.project_rigid
+            && self.exp.is_none()
+            && !state.abc
+            && state.preset() == crate::fire::FirePreset::Default
+    }
+
+    /// In-place Euclidean FIRE step. The integrator matches the general arm.
     fn step_first_order<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,
@@ -2444,16 +2547,29 @@ impl Solver {
         }
 
         let (mut value, mut grad) = if cached {
-            (self.last_value, self.last_grad.clone())
+            if self.brief {
+                (
+                    self.last_value,
+                    std::mem::replace(&mut self.last_grad, Array1::zeros(0)),
+                )
+            } else {
+                (self.last_value, self.last_grad.clone())
+            }
         } else {
             obj.value_and_gradient(x.view())
         };
-        grad = self.horizontal_grad(x, &grad);
+        grad = self.horizontal_owned(x, grad);
         if !finite(value, grad.view()) {
+            if self.brief {
+                self.last_grad = grad;
+            }
             return Err(non_finite());
         }
         let gnorm = self.stationarity_norm(x, &grad);
         if gnorm < self.control.gtol {
+            if self.brief {
+                self.remember(x, value, &grad);
+            }
             return Ok(self.report(value, x, &grad));
         }
         self.refresh_exp(obj, x, &grad)?;
@@ -2868,7 +2984,7 @@ impl Solver {
             Inner::Fire(state) => {
                 // A refused trial returns with the integrator as it was, so a
                 // retry probes the same point instead of one further along.
-                let saved = state.clone();
+                let saved = state.checkpoint();
                 let mut raw = grad.mapv(|g| -g);
                 project_box_tangent(obj.bounds(), x, &mut raw);
                 project_box_tangent(obj.bounds(), x, &mut state.vel);
@@ -2882,7 +2998,7 @@ impl Solver {
                             let Some((point, _)) =
                                 retract_within_cap(obj, x, &back, None, None, manifold)
                             else {
-                                *state = saved;
+                                state.restore(saved);
                                 *x = start;
                                 return Err(Error::OffManifold {
                                     kind: manifold.as_str(),
@@ -2894,7 +3010,7 @@ impl Solver {
                         }
                         let ev = obj.value_and_gradient(x.view());
                         if !finite(ev.0, ev.1.view()) {
-                            *state = saved;
+                            state.restore(saved);
                             *x = start;
                             return Err(non_finite());
                         }
@@ -2935,7 +3051,7 @@ impl Solver {
                     let Some((trial, _)) =
                         retract_within_cap(obj, x, &tangent, atom_cap, cap, manifold)
                     else {
-                        *state = saved;
+                        state.restore(saved);
                         *x = start;
                         return Err(Error::OffManifold {
                             kind: manifold.as_str(),
@@ -2963,7 +3079,7 @@ impl Solver {
                 }
                 let ev = obj.value_and_gradient(trial.view());
                 if !finite(ev.0, ev.1.view()) {
-                    *state = saved;
+                    state.restore(saved);
                     *x = start;
                     return Err(non_finite());
                 }
