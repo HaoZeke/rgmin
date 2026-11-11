@@ -251,6 +251,8 @@ def merge():
         "rgmin-eon is the default step with memory 8. rgmin-eon-m20 uses memory 20, the eOn default.",
         "rgmin-scaled shortens the quasi-Newton step and keeps the pairs.",
         "rgmin-fire uses the eOn FIRE time step of 1. rgmin-fire2 and ASE FIRE2 use 0.1.",
+        "rgmin-cg is the eOn line-search-free conjugate-gradient step.",
+        "rgmin-eon, rgmin-fire and rgmin-cg fill the gradient buffer in place.",
         "The eOn columns are the client algorithms transcribed in bench/eon_ref.cpp",
         "from TheochemUI/eOn commit 579738a9387e8d0ea55496f45dd057812cfab892.",
         "SciPy L-BFGS-B has no per-atom cap. Wall times include the potential.",

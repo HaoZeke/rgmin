@@ -1,7 +1,7 @@
 problem,arm,library,evals,energy,grad,median_ms,converged
-Rosenbrock2,scipy-lbfgsb,scipy,45,1.70549430e-17,3.24596871e-08,0.940942,yes
-Rosenbrock2,scipy-cg,scipy,78,1.88062489e-14,5.49201702e-06,3.247242,yes
-Rosenbrock10,scipy-lbfgsb,scipy,92,5.63275294e-15,1.46903255e-06,2.172219,yes
-Rosenbrock10,scipy-cg,scipy,489,3.48137896e-11,5.57752427e-06,20.252807,yes
-LJ7,scipy-lbfgsb,scipy,39,-1.55932101e+01,6.98507624e-03,2.168913,yes
-LJ13,scipy-lbfgsb,scipy,97,-3.82064940e+01,1.11799129e-02,6.073755,no
+Rosenbrock2,scipy-lbfgsb,scipy,45,1.70549430e-17,3.24596871e-08,0.810310,yes
+Rosenbrock2,scipy-cg,scipy,78,1.88062489e-14,5.49201702e-06,2.850596,yes
+Rosenbrock10,scipy-lbfgsb,scipy,92,5.63275294e-15,1.46903255e-06,2.214557,yes
+Rosenbrock10,scipy-cg,scipy,489,3.48137896e-11,5.57752427e-06,20.535280,yes
+LJ7,scipy-lbfgsb,scipy,39,-1.55932101e+01,6.98507624e-03,2.171305,yes
+LJ13,scipy-lbfgsb,scipy,97,-3.82064940e+01,1.11799129e-02,6.113372,no

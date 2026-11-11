@@ -14,7 +14,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use ndarray::{Array1, ArrayView1};
-use rgmin::{Accept, Control, FireKind, LbfgsStep, Method, Oracle, Solver, StopNorm};
+use rgmin::{
+    Accept, Control, EonCg, FireKind, LbfgsStep, Method, Oracle, Solver, StopNorm, minimize_eon_cg,
+};
 
 const REPEATS: usize = 5;
 const BUDGET: usize = 20_000;
@@ -31,11 +33,13 @@ enum Arm {
     Geometry,
     Fire,
     Fire2,
+    Cg,
 }
 
-fn rosenbrock(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+fn rosenbrock(x: ArrayView1<f64>, g: &mut [f64]) -> f64 {
+    let x = x.as_slice().expect("rosenbrock x");
     let mut f = 0.0;
-    let mut g = Array1::zeros(x.len());
+    g.fill(0.0);
     for i in 0..x.len() - 1 {
         let a = 1.0 - x[i];
         let b = x[i + 1] - x[i] * x[i];
@@ -43,13 +47,13 @@ fn rosenbrock(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
         g[i] += -2.0 * a - 400.0 * x[i] * b;
         g[i + 1] += 200.0 * b;
     }
-    (f, g)
+    f
 }
 
-fn lennard_jones(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+fn lennard_jones(x: ArrayView1<f64>, g: &mut [f64]) -> f64 {
     let n = x.len() / 3;
     let mut e = 0.0;
-    let mut g = Array1::zeros(x.len());
+    g.fill(0.0);
     for i in 0..n {
         for j in (i + 1)..n {
             let d: [f64; 3] = std::array::from_fn(|a| x[3 * i + a] - x[3 * j + a]);
@@ -63,7 +67,7 @@ fn lennard_jones(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
             }
         }
     }
-    (e, g)
+    e
 }
 
 fn morse_pair(r: f64) -> (f64, f64) {
@@ -76,10 +80,10 @@ fn morse_pair(r: f64) -> (f64, f64) {
     )
 }
 
-fn morse(cell: [f64; 3], x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+fn morse(cell: [f64; 3], x: ArrayView1<f64>, g: &mut [f64]) -> f64 {
     let n = x.len() / 3;
     let mut e = 0.0;
-    let mut g = Array1::zeros(x.len());
+    g.fill(0.0);
     for i in 0..n {
         for j in (i + 1)..n {
             let mut d = [0.0; 3];
@@ -99,7 +103,7 @@ fn morse(cell: [f64; 3], x: ArrayView1<f64>) -> (f64, Array1<f64>) {
             }
         }
     }
-    (e, g)
+    e
 }
 
 fn rosenbrock_start(n: usize) -> Array1<f64> {
@@ -151,7 +155,7 @@ fn stop_of(cluster: bool, g: &Array1<f64>) -> f64 {
     }
 }
 
-type Force = Box<dyn Fn(ArrayView1<f64>) -> (f64, Array1<f64>) + Sync>;
+type Force = Box<dyn Fn(ArrayView1<f64>, &mut [f64]) -> f64 + Sync>;
 
 struct Row {
     evals: usize,
@@ -168,7 +172,7 @@ fn median(mut v: Vec<f64>) -> f64 {
 
 fn run_arm<F>(arm: Arm, x0: &Array1<f64>, cluster: bool, fg: &F) -> Row
 where
-    F: Fn(ArrayView1<f64>) -> (f64, Array1<f64>) + Sync,
+    F: Fn(ArrayView1<f64>, &mut [f64]) -> f64 + Sync,
 {
     let tol = if cluster { 0.01 } else { 1e-5 };
     let mut times = Vec::with_capacity(REPEATS);
@@ -181,9 +185,17 @@ where
     };
     for rep in 0..REPEATS {
         let calls = AtomicUsize::new(0);
-        let obj = Oracle::unbounded(x0.len(), |x: ArrayView1<f64>| {
+        let counted = |x: ArrayView1<f64>, g: &mut Array1<f64>| {
             calls.fetch_add(1, Ordering::Relaxed);
-            fg(x)
+            fg(x, g.as_slice_mut().unwrap())
+        };
+        let obj = Oracle::unbounded(x0.len(), |x: ArrayView1<f64>| {
+            let mut g = Array1::zeros(x.len());
+            let f = {
+                calls.fetch_add(1, Ordering::Relaxed);
+                fg(x, g.as_slice_mut().unwrap())
+            };
+            (f, g)
         });
         let (method, istep) = match arm {
             Arm::Eon8 | Arm::Scaled | Arm::Wolfe | Arm::Geometry => {
@@ -192,6 +204,7 @@ where
             Arm::Eon20 => (Method::Lbfgs { memory: 20 }, 1.0),
             Arm::Fire => (Method::Fire { kind: FireKind::V1 }, 1.0),
             Arm::Fire2 => (Method::Fire { kind: FireKind::V2 }, 0.1),
+            Arm::Cg => (Method::Lbfgs { memory: 8 }, 1.0),
         };
         let control = Control {
             maxiter: BUDGET,
@@ -226,24 +239,45 @@ where
             }
             Arm::Fire => solver.set_atom_maxmove(CAP),
             Arm::Fire2 => solver.set_maxmove(CAP),
+            Arm::Cg => {}
         }
         let mut x = x0.clone();
-        let mut converged = false;
         let t0 = Instant::now();
-        for _ in 0..BUDGET {
-            match solver.step(&obj, &mut x) {
-                Ok(rep) if rep.grad_norm < tol => {
-                    converged = true;
-                    break;
-                }
-                Ok(_) => {}
-                Err(_) => break,
+        let converged = if matches!(arm, Arm::Cg) {
+            let mut raw = x.to_vec();
+            let opts = EonCg {
+                max_move: CAP,
+                gtol: tol,
+                max_iter: BUDGET,
+                cluster,
+            };
+            let rep = minimize_eon_cg(
+                &mut raw,
+                |xs, gs| {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    fg(ArrayView1::from(xs), gs)
+                },
+                &opts,
+            );
+            x = Array1::from(raw);
+            rep.converged
+        } else if matches!(arm, Arm::Eon8 | Arm::Eon20 | Arm::Fire | Arm::Fire2) {
+            match solver.run_fill(&mut x, counted) {
+                Ok(rep) => rep.grad_norm < tol,
+                Err(_) => false,
             }
-        }
+        } else {
+            match solver.run(&obj, &mut x) {
+                Ok(rep) => rep.grad_norm < tol,
+                Err(_) => false,
+            }
+        };
         let ms = t0.elapsed().as_secs_f64() * 1e3;
         times.push(ms);
         if rep + 1 == REPEATS {
-            let (f, g) = fg(x.view());
+            let mut g = vec![0.0; x.len()];
+            let f = fg(x.view(), &mut g);
+            let g = Array1::from(g);
             row = Row {
                 evals: calls.load(Ordering::Relaxed),
                 ms: 0.0,
@@ -266,6 +300,7 @@ fn arm_name(arm: Arm) -> &'static str {
         Arm::Geometry => "rgmin-geometry",
         Arm::Fire => "rgmin-fire",
         Arm::Fire2 => "rgmin-fire2",
+        Arm::Cg => "rgmin-cg",
     }
 }
 
@@ -306,7 +341,7 @@ fn main() {
                 "MorsePt256".into(),
                 morse_x,
                 true,
-                Box::new(move |x| morse(cell, x)),
+                Box::new(move |x, g| morse(cell, x, g)),
             ),
         ]
     };
@@ -318,6 +353,7 @@ fn main() {
         Arm::Geometry,
         Arm::Fire,
         Arm::Fire2,
+        Arm::Cg,
     ];
     for (name, x0, cluster, fg) in &problems {
         for arm in arms {

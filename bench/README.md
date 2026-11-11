@@ -1,6 +1,6 @@
 # Benchmarks
 
-Force calls and median wall time for L-BFGS, FIRE and conjugate gradients on the extended Rosenbrock function, Lennard-Jones clusters and the periodic Morse platinum cluster.
+Force calls and median wall time for L-BFGS, FIRE and conjugate gradients on the extended Rosenbrock function, Lennard-Jones clusters and the periodic Morse platinum cluster. `rgmin-cg` is the eOn conjugate-gradient step. The eOn cap, FIRE and that CG fill the gradient buffer in place. What was not adopted is `notes.md`.
 
 Raw rows are `raw/rgmin.csv`, `raw/ase.csv`, `raw/scipy.csv` and `raw/eon.csv`. The table is `results.md`.
 
