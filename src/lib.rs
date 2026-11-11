@@ -31,6 +31,7 @@ mod bb;
 #[cfg(feature = "highs")]
 mod box_objective;
 mod control;
+mod eon_cg;
 mod error;
 /// C ABI, gated behind the `capi` feature.
 #[cfg(feature = "capi")]
@@ -83,6 +84,7 @@ pub mod vecops;
 pub use accept::Accept;
 pub use adam::minimize_adam;
 pub use control::{Control, StopNorm};
+pub use eon_cg::{EonCg, EonCgReport, minimize_eon_cg};
 pub use error::{Error, Result};
 pub use fire::{FireKind, FirePreset};
 pub use highs_kind::{HighsCCallback, HighsCallbackKind, HighsCrossover, HighsSolverKind};
