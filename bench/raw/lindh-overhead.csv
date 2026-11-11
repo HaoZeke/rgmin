@@ -1,0 +1,17 @@
+system,atoms,what,repeat,millis
+gupta-cu-slab,4704,force,0,78.0714
+gupta-cu-slab,4704,force,1,77.5837
+gupta-cu-slab,4704,force,2,77.7204
+gupta-cu-slab,4704,force,3,78.0597
+gupta-cu-slab,4704,force,4,77.6157
+gupta-cu-slab,4704,lindh-apply,0,5.2918
+gupta-cu-slab,4704,lindh-apply,1,4.6547
+gupta-cu-slab,4704,lindh-apply,2,4.7187
+gupta-cu-slab,4704,lindh-apply,3,4.7676
+gupta-cu-slab,4704,lindh-apply,4,5.0732
+lj-cube,103823,force,0,93407.6707
+lj-cube,103823,lindh-apply,0,253.8180
+lj-cube,103823,lindh-apply,1,237.8189
+lj-cube,103823,lindh-apply,2,212.9492
+lj-cube,103823,lindh-apply,3,288.3488
+lj-cube,103823,lindh-apply,4,263.2590
