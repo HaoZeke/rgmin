@@ -158,16 +158,27 @@ for ~develop~.
 | Morse Pt256 | geometry | 11 | 4.945 | 5.47e-3 | -1396.173 |
 | Morse Pt256 | capped session | 11 | 4.965 | 3.94e-3 | -1396.173 |
 
-On the extended Rosenbrock function with ten or more coordinates
-the capped step stops at a stationary point of value about 3.99,
-with the first coordinate near −1. The Wolfe search and the
-geometry step reach the valley floor at value 0. On LJ7 and LJ13,
-at an atomic force of 0.01, the geometry step uses fewer
-evaluations and finishes at the same energy. On LJ38 the capped
-session uses 187 evaluations against 211 and finishes about 4.3
-energy units higher, in another basin. On the periodic Morse
-cluster both session arms take 11 evaluations and the same
+The chained Rosenbrock function
+~sum_i (1 - x_i)^2 + 100 (x_{i+1} - x_i^2)^2~ has a local minimum
+for every ~n >= 4~ in the basin of ~(-1, 1, ..., 1)~.
+SciPy BFGS started at that point converges with a positive definite
+Hessian. For ~n = 4~ the value is 3.701 and the first coordinate
+is −0.776. For ~n = 10~ the value is 3.987 and the first coordinate
+is −0.993, near ~(-1, 1, ..., 1)~ with value about 3.98.
+For ~n = 3~ that start falls through to the valley floor at 0.
+A step that stops at this local minimum has converged.
+From the alternating start ~(-1.2, 1, -1.2, 1, ...)~ the capped
+step enters that minimum for ~n = 10~ and ~n = 100~, while the
+Wolfe search and the geometry step reach value 0.
+On LJ7 and LJ13, at an atomic force of 0.01, the geometry step
+uses fewer evaluations and finishes at the same energy. On LJ38
+the capped session uses 187 evaluations against 211 and finishes
+about 4.3 energy units higher, in another basin. On the periodic
+Morse cluster both session arms take 11 evaluations and the same
 energy. The capped rule therefore stays opt-in.
+
+The same fmax and the same maxstep against ASE 3.29.0 are recorded
+in ~benches/ase_h2h/results.md~.
 
 ** Newton and RFO when the Hessian is cheap
 

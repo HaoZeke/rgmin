@@ -6,6 +6,11 @@
 
 ** Unreleased
 
+~benches/ase_h2h.py~ compares ASE 3.29 LBFGS, FIRE and BFGSLineSearch with rgmin capped L-BFGS, Wolfe L-BFGS, the geometry step and FIRE 2.0.
+The starts are LJ7, LJ13, LJ38 and the periodic Morse cluster of 256 platinum atoms.
+Every arm uses fmax 0.01 and maxstep 0.2.
+The table is ~benches/ase_h2h/results.md~.
+
 ~LbfgsStep::Capped~ is the opt-in atomistic L-BFGS step.
 It drops the line search.
 The two-loop step is shortened so the longest per-atom displacement is at most the caller's cap, and the initial inverse Hessian stays the Nocedal-Wright scale ~(s · y) / (y · y)~.
@@ -17,7 +22,7 @@ The C header declares ~rgmin_solver_set_lbfgs_capped~, the C++ wrapper has ~set_
 ~abi_minor~ 33.
 ~cargo run --release --example lbfgs_capped~ prints the force calls and the median wall time.
 @@rst::doc:`reference/sota`@@ records that run.
-The default stays the Wolfe search: on LJ7 and LJ13 at atomic force 0.01 the geometry step uses fewer evaluations at the same energy, and on the extended Rosenbrock function with ten or more coordinates the capped step stops at a stationary point of value about 3.99.
+The default stays the Wolfe search: on LJ7 and LJ13 at atomic force 0.01 the geometry step uses fewer evaluations at the same energy, and on the extended Rosenbrock function with four or more coordinates the value near 3.98 is a local minimum in the basin of ~(-1, 1, ..., 1)~.
 
 ~Lbfgs::ftol~ is the opt-in relative-decrease stop of L-BFGS-B, and its default of zero turns it off.
 A line-search step from ~f_k~ to ~f_{k+1}~ ends ~minimize~, ~minimize_watched~ and ~minimize_recognized~ when ~f_k - f_{k+1} <= ftol * max(|f_k|, |f_{k+1}|, 1)~.
