@@ -774,6 +774,38 @@ fn finite_vec(x: Vec<f64>) -> Option<Vec<f64>> {
     x.iter().all(|v| v.is_finite()).then_some(x)
 }
 
+/// Spread of two directional curvatures, `max/min`.
+///
+/// A non-positive or non-finite curvature returns infinity so the gate
+/// stays shut. Water's bond Rayleigh quotient sits far above the
+/// intermolecular one; a condensed metal or Lennard-Jones cluster does
+/// not.
+#[must_use]
+pub fn curvature_spread(a: f64, b: f64) -> f64 {
+    if !(a.is_finite() && b.is_finite() && a > 0.0 && b > 0.0) {
+        return f64::INFINITY;
+    }
+    a.max(b) / a.min(b)
+}
+
+/// Starting gate. A spread above this turns the exponential metric off.
+/// Chosen so a stiff bond against a soft mode (ratios of tens) falls
+/// back, and a ratio near one stays on. Not fit to the held-out set.
+pub const EXP_GATE_MAX_SPREAD: f64 = 6.0;
+
+/// `true` when the exponential preconditioner is allowed.
+///
+/// The safe answer is `false`: a failed probe, a non-positive
+/// curvature, or a spread above `max_spread` leaves the scalar
+/// initial Hessian in place.
+#[must_use]
+pub fn exp_gate_open(c_force: f64, c_bond: f64, max_spread: f64) -> bool {
+    if !(max_spread.is_finite() && max_spread > 1.0) {
+        return false;
+    }
+    curvature_spread(c_force, c_bond) <= max_spread
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -948,5 +980,14 @@ mod tests {
         let num = (&g1 - &g0).dot(&v);
         let den = v.dot(&p1.apply(v.view()));
         assert!((mu - num / den).abs() < 1e-12, "formula drift");
+    }
+
+    #[test]
+    fn the_gate_shuts_on_a_stiff_bond_and_on_a_failed_probe() {
+        assert!(!exp_gate_open(2.0, 80.0, EXP_GATE_MAX_SPREAD));
+        assert!(exp_gate_open(4.0, 5.5, EXP_GATE_MAX_SPREAD));
+        assert!(!exp_gate_open(f64::NAN, 1.0, EXP_GATE_MAX_SPREAD));
+        assert!(!exp_gate_open(-1.0, 2.0, EXP_GATE_MAX_SPREAD));
+        assert!((curvature_spread(2.0, 8.0) - 4.0).abs() < 1e-15);
     }
 }

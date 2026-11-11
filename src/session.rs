@@ -29,6 +29,7 @@ use crate::hvp::{
     sym_eig_jacobi,
 };
 use crate::lbfgs::{GradNorm, Lbfgs, LbfgsStep};
+use crate::lindh::LindhSpec;
 use crate::linesearch::LineSearch;
 use crate::lowest_mode::{ApplyHessian, lowest_eigenpair};
 use crate::manifold::{Manifold, ManifoldKind};
@@ -168,6 +169,10 @@ pub struct Solver {
     gradient_calls: usize,
     /// Packwood exponential metric. `None` leaves every method unchanged.
     exp: Option<ExpState>,
+    /// Lindh model Hessian. `None` leaves the scalar initial scale.
+    lindh_spec: Option<LindhSpec>,
+    /// Rayleigh scale of the Lindh matrix, from one force probe.
+    lindh_mu: Option<f64>,
     /// Analytic or finite-difference Hessian-vector products.
     hvp_calls: usize,
     /// Negative-curvature kicks already taken in this solve.
@@ -314,6 +319,8 @@ impl Solver {
             gradient_calls: 0,
             hvp_calls: 0,
             exp: None,
+            lindh_spec: None,
+            lindh_mu: None,
             saddle_kicks: 0,
             stop_norm,
             constraints: None,
@@ -650,6 +657,151 @@ impl Solver {
             solver.keep_long = on;
         }
         Ok(())
+    }
+
+    /// Keep a long downhill quasi-Newton step and scale it per atom.
+    ///
+    /// The eOn cap replaces that step with `H0` times the force and
+    /// clears the pairs. This clears the pairs too, but the step stays
+    /// the model direction, so the Euclidean length may exceed the cap
+    /// while no atom moves further than the cap. That is the L-BFGS
+    /// form of the per-atom-only CG step. Off by default.
+    pub fn set_lbfgs_model_atom(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.model_atom = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Compact Byrd–Nocedal–Schnabel step inside the per-atom cap.
+    ///
+    /// A two-loop step inside the cap is unchanged. A longer step is
+    /// the trust-region solution `(B + λ I) s = −g` with `λ` chosen so
+    /// the longest atom sits on the cap. The pairs are kept. Off by
+    /// default. The radius update in [`Self::set_lbfgs_trust`] is a
+    /// different rule.
+    pub fn set_lbfgs_compact_tr(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.compact_tr = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Skip a curvature pair with `s·y ≤ 0` instead of clearing memory
+    /// on the next step. Nocedal and Wright skip that update. The eOn
+    /// client stores it and resets. Off by default.
+    pub fn set_lbfgs_skip_bad(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.skip_bad = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Lindh model Hessian as the initial inverse. `None` removes it.
+    ///
+    /// The factor is rebuilt from the current geometry. The first call
+    /// spends one gradient to set the scale `μ`. A non-positive ridge,
+    /// a session that is not L-BFGS, or atomic numbers whose length is
+    /// neither 0 nor `N` is an error.
+    pub fn set_lindh(&mut self, spec: Option<LindhSpec>) -> Result<()> {
+        if !matches!(self.inner, Inner::Lbfgs(_)) {
+            return Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            });
+        }
+        if let Some(spec) = &spec {
+            if !(spec.c_stab.is_finite() && spec.c_stab > 0.0) {
+                return Err(Error::Precon {
+                    what: "c_stab is not positive",
+                });
+            }
+            if !spec.z.is_empty() && spec.z.len() * 3 != self.dim {
+                return Err(Error::Precon {
+                    what: "atomic numbers do not match the dimension",
+                });
+            }
+        }
+        self.lindh_spec = spec;
+        self.lindh_mu = None;
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_lindh_factor(None);
+        }
+        Ok(())
+    }
+
+    /// Rebuild the Lindh factor. One gradient probe the first time.
+    fn ensure_lindh<G>(&mut self, x: &[f64], g: &[f64], mut grad_at: G)
+    where
+        G: FnMut(&[f64]) -> Array1<f64>,
+    {
+        if self.lindh_spec.is_none() {
+            return;
+        }
+        if self.lindh_mu.is_none() {
+            self.lindh_mu = Some(self.probe_lindh_mu(x, g, &mut grad_at));
+        }
+        let mu = self.lindh_mu.unwrap_or(1.0);
+        let built = self
+            .lindh_spec
+            .as_ref()
+            .and_then(|spec| crate::lindh::factor(x, &spec.z, spec.c_stab, spec.cell, mu));
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_lindh_factor(built);
+        }
+    }
+
+    fn probe_lindh_mu<G>(&self, x: &[f64], g: &[f64], grad_at: &mut G) -> f64
+    where
+        G: FnMut(&[f64]) -> Array1<f64>,
+    {
+        let mut n2 = 0.0;
+        for v in g {
+            n2 += *v * *v;
+        }
+        let norm = n2.sqrt();
+        if !(norm.is_finite() && norm > 0.0 && g.len() == x.len()) {
+            return 1.0;
+        }
+        let fd = crate::EON_FINITE_DIFFERENCE;
+        let mut probe = x.to_vec();
+        let mut u = vec![0.0; g.len()];
+        for i in 0..g.len() {
+            u[i] = -g[i] / norm;
+            probe[i] = x[i] + fd * u[i];
+        }
+        let gp = grad_at(&probe);
+        if gp.len() != g.len() {
+            return 1.0;
+        }
+        let mut curv = 0.0;
+        for i in 0..g.len() {
+            curv += (gp[i] - g[i]) * u[i];
+        }
+        curv /= fd;
+        let Some(spec) = self.lindh_spec.as_ref() else {
+            return 1.0;
+        };
+        let quad = crate::lindh::shape_quad(x, &spec.z, spec.c_stab, spec.cell, &u);
+        if curv.is_finite() && curv > 0.0 && quad > 1e-18 {
+            curv / quad
+        } else {
+            1.0
+        }
     }
 
     /// eOn `lbfgs_project_rigid`. Isolated clusters only.
@@ -1817,6 +1969,11 @@ impl Solver {
         O: DifferentiableObjective<f64> + ?Sized,
     {
         use crate::lbfgs::{EON_INVERSE_CURVATURE, EonSeed};
+        if self.lindh_spec.is_some() {
+            let xs: Vec<f64> = x.iter().copied().collect();
+            let gs: Vec<f64> = grad.iter().copied().collect();
+            self.ensure_lindh(&xs, &gs, |p| obj.grad(ArrayView1::from(p)));
+        }
         let Some(cap) = self.lbfgs_step().capped_limit() else {
             return Err(Error::LbfgsCap {
                 what: "the cap is not positive",
@@ -3572,5 +3729,43 @@ mod tests {
             }
         }
         assert!(worst <= TANGENT, "|x . v| / |v| reached {worst:.4e}");
+    }
+
+    #[test]
+    fn the_new_lbfgs_arms_refuse_a_fire_session_and_a_bad_ridge() {
+        let mut fire = Solver::new(Method::Fire { kind: FireKind::V1 }, Control::default(), 3);
+        assert!(fire.set_lbfgs_model_atom(true).is_err());
+        assert!(fire.set_lbfgs_compact_tr(true).is_err());
+        assert!(fire.set_lbfgs_skip_bad(true).is_err());
+        assert!(fire.set_lindh(None).is_err());
+        let mut lbfgs = Solver::new(Method::lbfgs(), Control::default(), 6);
+        assert!(
+            lbfgs
+                .set_lindh(Some(LindhSpec {
+                    z: vec![1],
+                    c_stab: 0.1,
+                    cell: [0.0; 3],
+                }))
+                .is_err()
+        );
+        assert!(
+            lbfgs
+                .set_lindh(Some(LindhSpec {
+                    z: vec![1, 1],
+                    c_stab: 0.0,
+                    cell: [0.0; 3],
+                }))
+                .is_err()
+        );
+        lbfgs
+            .set_lindh(Some(LindhSpec {
+                z: vec![1, 8],
+                c_stab: 0.1,
+                cell: [0.0; 3],
+            }))
+            .unwrap();
+        lbfgs.set_lbfgs_model_atom(true).unwrap();
+        lbfgs.set_lbfgs_compact_tr(true).unwrap();
+        lbfgs.set_lbfgs_skip_bad(true).unwrap();
     }
 }

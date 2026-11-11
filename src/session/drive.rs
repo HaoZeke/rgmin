@@ -195,6 +195,15 @@ impl Solver {
     where
         F: FnMut(ArrayView1<f64>, &mut Array1<f64>) -> f64,
     {
+        if self.lindh_spec.is_some() {
+            let xs: Vec<f64> = x.iter().copied().collect();
+            let gs: Vec<f64> = self.last_grad.iter().copied().collect();
+            self.ensure_lindh(&xs, &gs, |p| {
+                let mut buf = Array1::zeros(p.len());
+                let _ = fill(ArrayView1::from(p), &mut buf);
+                buf
+            });
+        }
         let mut txn = match &mut self.inner {
             Inner::Lbfgs(solver) => solver.begin_txn(),
             _ => {

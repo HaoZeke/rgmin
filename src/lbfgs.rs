@@ -184,7 +184,13 @@ fn max_atom_slice(step: &[f64]) -> f64 {
 
 /// Two-loop into `q`, using the same dot and axpy as [`Lbfgs::direction_h0`].
 #[allow(clippy::needless_range_loop)]
-fn two_loop_vecops(memory: &[Pair], extra: usize, q: &mut Array1<f64>, h0: f64) {
+fn two_loop_vecops(
+    memory: &[Pair],
+    extra: usize,
+    q: &mut Array1<f64>,
+    h0: f64,
+    lin: Option<&crate::lindh::LindhFactor>,
+) {
     let m = memory.len();
     let total = if m == 0 { 0 } else { m + extra };
     let mut stack = [0.0; 64];
@@ -202,7 +208,13 @@ fn two_loop_vecops(memory: &[Pair], extra: usize, q: &mut Array1<f64>, h0: f64) 
         alpha[k] = a;
         crate::vecops::axpy(-a, p.y.view(), q);
     }
-    *q *= h0;
+    if let Some(lin) = lin {
+        if !lin.solve_into(q) {
+            *q *= h0;
+        }
+    } else {
+        *q *= h0;
+    }
     for k in 0..total {
         let i = if k < m { k } else { m - 1 };
         let p = &memory[i];
@@ -325,6 +337,18 @@ pub struct Lbfgs {
     /// A long quasi-Newton step is scaled and kept. The default clears
     /// the pairs and steps along the force.
     pub(crate) keep_long: bool,
+    /// A long downhill quasi-Newton step is scaled to the per-atom cap
+    /// and the pairs are cleared. The direction stays the model step.
+    /// The default replaces that step with `H0` times the force.
+    pub(crate) model_atom: bool,
+    /// Replace a long two-loop step with the compact trust-region step.
+    /// Off by default, so the eOn cap is unchanged.
+    pub(crate) compact_tr: bool,
+    /// Drop a pair with `s·y ≤ 0` and keep the older pairs. The default
+    /// stores it and the next step clears the memory.
+    pub(crate) skip_bad: bool,
+    /// Lindh model Hessian. `None` keeps the scalar initial scale.
+    pub(crate) lindh: Option<crate::lindh::LindhFactor>,
 }
 
 impl Default for Lbfgs {
@@ -362,6 +386,10 @@ impl Lbfgs {
             forgot: false,
             euclidean_cap: false,
             keep_long: false,
+            model_atom: false,
+            compact_tr: false,
+            skip_bad: false,
+            lindh: None,
         }
     }
 
@@ -388,6 +416,11 @@ impl Lbfgs {
     /// Install or clear the exponential \(H_0 = P^{-1}\).
     pub(crate) fn set_h0(&mut self, h0: Option<crate::precon::Exp>) {
         self.h0 = h0;
+    }
+
+    /// Install or clear the Lindh factor.
+    pub(crate) fn set_lindh_factor(&mut self, factor: Option<crate::lindh::LindhFactor>) {
+        self.lindh = factor;
     }
 
     /// Discards the stored curvature.
@@ -864,6 +897,7 @@ impl Lbfgs {
     pub(crate) fn eon_wants_fd(&self) -> bool {
         self.fixed_scale().is_none()
             && self.h0.is_none()
+            && self.lindh.is_none()
             && !self.have_curvature
             && self.memory.is_empty()
     }
@@ -946,22 +980,24 @@ impl Lbfgs {
                 if !(h0.is_finite() && h0 > 0.0 && max_atom.is_finite() && max_atom > 0.0) {
                     return None;
                 }
-                let force = g.mapv(|v| -v);
-                if self.h0.is_none() {
-                    let memory = std::mem::take(&mut self.memory);
-                    let extra = self.extra_updates;
-                    self.work.assign(&g);
-                    two_loop_vecops(&memory, extra, &mut self.work, h0);
-                    self.memory = memory;
-                } else {
-                    let direction = self.direction_h0(g, h0);
-                    self.work.assign(&direction);
+                if self.compact_tr && !self.memory.is_empty() && self.install_compact(g, max_atom) {
+                    return Some(false);
                 }
+                let force = g.mapv(|v| -v);
+                self.write_qn(g, h0);
                 let distance = self.motion(&self.work);
                 let along = self.work.dot(&force);
                 let uphill = l2(&self.work) > 0.0 && l2(&force) > 0.0 && along < 0.0;
                 if !distance.is_finite() {
                     return None;
+                }
+                let atom = max_atom_displacement(&self.work);
+                if self.model_atom && !uphill && atom >= max_atom {
+                    self.forget_txn(txn);
+                    if atom > max_atom && atom > 0.0 {
+                        self.work *= max_atom / atom;
+                    }
+                    return Some(false);
                 }
                 if uphill || (distance >= max_atom && !self.keep_long) {
                     self.forget_txn(txn);
@@ -974,6 +1010,43 @@ impl Lbfgs {
                 }
             }
         }
+    }
+
+    fn write_qn(&mut self, g: ArrayView1<f64>, h0: f64) {
+        if self.h0.is_some() && self.lindh.is_none() {
+            let direction = self.direction_h0(g, h0);
+            self.work.assign(&direction);
+            return;
+        }
+        let memory = std::mem::take(&mut self.memory);
+        let lindh = self.lindh.take();
+        let extra = self.extra_updates;
+        self.work.assign(&g);
+        two_loop_vecops(&memory, extra, &mut self.work, h0, lindh.as_ref());
+        self.memory = memory;
+        self.lindh = lindh;
+    }
+
+    /// Compact per-atom step. False when the solve does not apply.
+    fn install_compact(&mut self, g: ArrayView1<f64>, cap: f64) -> bool {
+        let gvec: Vec<f64> = g.iter().copied().collect();
+        let mut cols = Vec::new();
+        for p in &self.memory {
+            if p.s.dot(&p.y) <= 0.0 {
+                continue;
+            }
+            cols.push((p.s.to_vec(), p.y.to_vec()));
+        }
+        let Some(step) = crate::compact_tr::atom_capped_step(&cols, &gvec, cap) else {
+            return false;
+        };
+        if step.len() != self.work.len() {
+            return false;
+        }
+        for (i, v) in step.iter().enumerate() {
+            self.work[i] = *v;
+        }
+        true
     }
 
     fn copy_work(&mut self) -> Array1<f64> {
@@ -1045,6 +1118,11 @@ impl Lbfgs {
     }
 
     fn finish_eon_pair(&mut self, s: Array1<f64>, y: Array1<f64>, sy: f64, yy: f64, txn: &mut Txn) {
+        if self.skip_bad && !(sy.is_finite() && sy > 0.0 && yy.is_finite()) {
+            self.recycle_vec(s);
+            self.recycle_vec(y);
+            return;
+        }
         if sy.is_finite() && yy.is_finite() {
             self.last_sy = sy;
             self.last_yy = yy;
@@ -1890,7 +1968,7 @@ impl Lbfgs {
 mod tests {
     use ndarray::{Array1, ArrayView1, array};
 
-    use super::{LBFGSB_FTOL, Lbfgs, LbfgsStep};
+    use super::{EonSeed, LBFGSB_FTOL, Lbfgs, LbfgsStep};
     use crate::step::{l2, max_atom_displacement};
 
     /// Above `|f| = 1` the threshold scales with `|f|`; below, it is
@@ -2141,5 +2219,91 @@ mod tests {
             held(&lbfgs),
             vec![older, (array![0.0, 1.0], array![0.0, 3.0])]
         );
+    }
+
+    /// The model direction is kept and scaled per atom. The force
+    /// fallback would leave the first coordinate at zero.
+    #[test]
+    fn model_atom_scales_the_quasi_newton_step_and_clears_history() {
+        let mut opt = Lbfgs {
+            model_atom: true,
+            ..Lbfgs::default()
+        };
+        assert!(opt.push(
+            array![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            array![2.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        ));
+        let g = array![0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let mut txn = opt.begin_txn();
+        let take = opt
+            .eon_step_from_seed(g.view(), 0.2, EonSeed::Scale(0.5), &mut txn)
+            .unwrap();
+        assert!(
+            take.step[0].abs() > 1e-8,
+            "force fallback would be zero: {}",
+            take.step
+        );
+        let motion = max_atom_displacement(&take.step);
+        assert!((motion - 0.2).abs() < 1e-8, "max atom {motion}");
+        let euclid = l2(&take.step);
+        assert!(
+            euclid > 0.2,
+            "euclidean {euclid} should exceed the per-atom cap"
+        );
+        assert!(
+            opt.is_empty(),
+            "history should reset after a capped model step"
+        );
+    }
+
+    #[test]
+    fn a_non_positive_pair_is_skipped_when_asked() {
+        let mut kept = Lbfgs::with_capacity(4);
+        kept.skip_bad = true;
+        assert!(kept.push(array![1.0, 0.0], array![2.0, 0.0]));
+        let mut txn = kept.begin_txn();
+        kept.store_pos_diff(
+            &[0.0, 0.0],
+            &[1.0, 0.0],
+            &[0.0, 0.0],
+            &[-1.0, 0.0],
+            &mut txn,
+        );
+        assert_eq!(kept.len(), 1);
+        assert!(matches!(kept.eon_seed(), EonSeed::Scale(_)));
+
+        let mut wiped = Lbfgs::with_capacity(4);
+        assert!(wiped.push(array![1.0, 0.0], array![2.0, 0.0]));
+        let mut txn = wiped.begin_txn();
+        wiped.store_pos_diff(
+            &[0.0, 0.0],
+            &[1.0, 0.0],
+            &[0.0, 0.0],
+            &[-1.0, 0.0],
+            &mut txn,
+        );
+        assert_eq!(wiped.len(), 2);
+        assert!(matches!(wiped.eon_seed(), EonSeed::Steepest));
+    }
+
+    #[test]
+    fn the_compact_step_stays_inside_the_per_atom_cap() {
+        let mut opt = Lbfgs {
+            compact_tr: true,
+            ..Lbfgs::default()
+        };
+        assert!(opt.push(
+            array![1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            array![0.2, 0.0, 0.0, 0.0, 0.0, 0.0]
+        ));
+        let g = array![1.0, 0.4, 0.0, -0.3, 0.2, 0.0];
+        let mut txn = opt.begin_txn();
+        let take = opt
+            .eon_step_from_seed(g.view(), 0.05, EonSeed::Scale(0.5), &mut txn)
+            .unwrap();
+        let motion = max_atom_displacement(&take.step);
+        assert!(motion <= 0.05 + 1e-8, "max atom {motion}");
+        assert!(take.step.dot(&g) < 0.0, "not descent");
+        assert!(!opt.is_empty(), "the compact step keeps the pairs");
     }
 }
