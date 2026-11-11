@@ -12,8 +12,10 @@
 //! The production unconstrained local method is [`Lbfgs`] with
 //! [`LineSearch::Wolfe`]: limited-memory BFGS (Nocedal-Wright 7.4) and
 //! the strong Wolfe conditions (algorithms 3.5 and 3.6). Hopping chains
-//! keep the pair history on that type. [`minimize_lbfgs`] is the
-//! cold-start dispatch used by [`minimize_method`].
+//! keep the pair history on that type. [`LbfgsStep::Capped`] is the
+//! opt-in atomistic step: no line search, a per-atom cap, and the
+//! Nocedal-Wright scale of the initial inverse Hessian.
+//! [`minimize_lbfgs`] is the cold-start dispatch used by [`minimize_method`].
 
 #![warn(missing_docs)]
 
@@ -93,7 +95,7 @@ pub use hvp::{
     minimize_newton_cg, steihaug_cg, steihaug_pcg,
 };
 pub use irc_trust::{IrcTrust, sqrt_masses_3n};
-pub use lbfgs::{GradNorm, LBFGSB_FACTR, LBFGSB_FTOL, Lbfgs};
+pub use lbfgs::{GradNorm, LBFGSB_FACTR, LBFGSB_FTOL, Lbfgs, LbfgsStep};
 #[cfg(feature = "highs")]
 pub use lbfgs_qp::HighsStep;
 pub use linesearch::LineSearch;

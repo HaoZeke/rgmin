@@ -6,6 +6,11 @@
 //! direction is built from the stored pairs, so one bad pair degrades the
 //! whole memory.
 //!
+//! [`LbfgsStep::Capped`] is the opt-in atomistic step. It drops the line
+//! search, shortens the two-loop step to a per-atom cap, and keeps the
+//! Nocedal-Wright scale `H0 = ((s · y) / (y · y)) I` (eq. 7.20). A
+//! default [`Lbfgs`] keeps the Wolfe search.
+//!
 //! Liu and Nocedal, *On the limited memory BFGS method for large scale
 //! optimization*, <https://doi.org/10.1007/BF01589116>.
 //! Nocedal, *Updating quasi-Newton matrices with limited storage*,
@@ -22,8 +27,49 @@ use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
 use crate::qn::solve_dense;
 use crate::report::Report;
-use crate::step::{finite, l2, next_istep, start_answer, take_step};
+use crate::step::{
+    cap_displacement_atom, finite, l2, max_atom_displacement, next_istep,
+    scale_displacement_to_atom_cap, start_answer, take_step,
+};
 use eindir_core::{DifferentiableObjective, Objective};
+
+/// How [`Lbfgs`] chooses the length of a step.
+///
+/// [`LbfgsStep::Wolfe`] is the default. [`LbfgsStep::Capped`] is the
+/// atomistic step: one evaluation, no line search, and the
+/// Nocedal-Wright scale of the initial inverse Hessian.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LbfgsStep {
+    /// Strong Wolfe line search. Nocedal and Wright, algorithms 3.5 and 3.6.
+    Wolfe,
+    /// No line search. Shorten the two-loop step so the longest per-atom
+    /// displacement is at most `max_atom`. The initial inverse Hessian is
+    /// `(s · y) / (y · y)` on the latest stored pair (Nocedal and Wright,
+    /// eq. 7.20). An empty memory follows the force and the step has
+    /// length `max_atom`. A non-positive or non-finite `max_atom` keeps
+    /// the Wolfe search.
+    Capped {
+        /// Longest displacement of one atom, in the coordinate length.
+        max_atom: f64,
+    },
+}
+
+impl Default for LbfgsStep {
+    fn default() -> Self {
+        Self::Wolfe
+    }
+}
+
+impl LbfgsStep {
+    /// Positive finite cap, when this rule is [`Self::Capped`].
+    #[must_use]
+    pub fn capped_limit(self) -> Option<f64> {
+        match self {
+            Self::Capped { max_atom } if max_atom.is_finite() && max_atom > 0.0 => Some(max_atom),
+            _ => None,
+        }
+    }
+}
 
 /// How [`Lbfgs`] compares the gradient to [`Lbfgs::gtol`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +115,17 @@ pub(crate) struct Curvature {
     stored: bool,
 }
 
+enum CappedIter {
+    Moved { stalled: bool, evals: usize },
+    Stop { evals: usize },
+}
+
+enum CappedProbe {
+    Moved { stalled: bool },
+    NonFinite,
+    Stop,
+}
+
 /// L-BFGS whose curvature pairs survive between calls.
 ///
 /// A hopping chain relaxes thousands of times from perturbations of an
@@ -98,6 +155,9 @@ pub struct Lbfgs {
     /// Zero, the default, turns the test off, as does any value that is
     /// not positive. [`LBFGSB_FTOL`] is the SciPy default.
     pub ftol: f64,
+    /// Step-length rule. [`LbfgsStep::Wolfe`] is the default, so a
+    /// default [`Lbfgs`] takes the same steps as before.
+    pub step: LbfgsStep,
     /// Al-Baali extra-updates: replay the newest pair this many extra times.
     pub extra_updates: usize,
     /// Li-Fukushima cautious `ε`. Zero disables the filter.
@@ -140,6 +200,7 @@ impl Lbfgs {
             max_line_evals: 20,
             norm: GradNorm::Infinity,
             ftol: 0.0,
+            step: LbfgsStep::Wolfe,
             extra_updates: 0,
             cautious_eps: 0.0,
             cautious_alpha: 0.01,
@@ -150,6 +211,16 @@ impl Lbfgs {
             last_yy: 0.0,
             have_curvature: false,
             stored: false,
+        }
+    }
+
+    /// [`LbfgsStep::Capped`] with room for eight pairs. A non-positive
+    /// or non-finite `max_atom` keeps the Wolfe search.
+    #[must_use]
+    pub fn capped(max_atom: f64) -> Self {
+        Self {
+            step: LbfgsStep::Capped { max_atom },
+            ..Self::default()
         }
     }
 
@@ -450,6 +521,139 @@ impl Lbfgs {
         true
     }
 
+    /// Positive finite cap of [`LbfgsStep::Capped`], if that rule is selected.
+    pub(crate) fn capped_limit(&self) -> Option<f64> {
+        self.step.capped_limit()
+    }
+
+    /// Two-loop direction, restarted along the force when it is not descent.
+    ///
+    /// The flag is true when the direction is an unscaled force and the
+    /// caller must give it length `max_atom`. It is false when the
+    /// Nocedal-Wright scale, or an installed exponential preconditioner,
+    /// already supplies a length and the caller only shortens the step.
+    pub(crate) fn capped_direction(&mut self, g: ArrayView1<f64>) -> Option<(Array1<f64>, bool)> {
+        if !self.memory.is_empty() {
+            let d = self.direction(g);
+            let slope = crate::vecops::dot(d.view(), g);
+            if slope.is_finite() && slope < 0.0 {
+                return Some((d, false));
+            }
+            self.forget();
+        }
+        if let Some(pre) = self.exp_apply(g) {
+            let mut d = pre;
+            d.mapv_inplace(|v| -v);
+            let slope = crate::vecops::dot(d.view(), g);
+            if slope.is_finite() && slope < 0.0 {
+                return Some((d, false));
+            }
+        }
+        let mut d = g.to_owned();
+        d.mapv_inplace(|v| -v);
+        let slope = crate::vecops::dot(d.view(), g);
+        (slope.is_finite() && slope < 0.0).then_some((d, true))
+    }
+
+    /// `to_cap` scales the displacement to `max_atom`. Otherwise the
+    /// displacement is only shortened to that length.
+    pub(crate) fn apply_atom_cap(
+        direction: &Array1<f64>,
+        max_atom: f64,
+        to_cap: bool,
+    ) -> Array1<f64> {
+        if to_cap {
+            scale_displacement_to_atom_cap(direction, max_atom)
+        } else {
+            cap_displacement_atom(direction, max_atom)
+        }
+    }
+
+    /// One capped iteration. A non-finite trial of a quasi-Newton step is
+    /// retried once along the force. A second non-finite trial, a spent
+    /// budget, or a zero step leaves `x` and the pairs as they were.
+    fn capped_iterate<F>(
+        &mut self,
+        x: &mut Array1<f64>,
+        f: &mut f64,
+        g: &mut Array1<f64>,
+        max_atom: f64,
+        fg: &mut F,
+    ) -> CappedIter
+    where
+        F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
+    {
+        let saved = self.curvature();
+        let Some((dir, full)) = self.capped_direction(g.view()) else {
+            return CappedIter::Stop { evals: 0 };
+        };
+        let mut evals = 0usize;
+        let step = Self::apply_atom_cap(&dir, max_atom, full);
+        match self.accept_capped(x, f, g, &step, &mut evals, fg) {
+            CappedProbe::Moved { stalled } => CappedIter::Moved { stalled, evals },
+            CappedProbe::Stop => {
+                self.restore(saved);
+                CappedIter::Stop { evals }
+            }
+            CappedProbe::NonFinite if full => {
+                self.restore(saved);
+                CappedIter::Stop { evals }
+            }
+            CappedProbe::NonFinite => {
+                self.forget();
+                let Some((dir, full)) = self.capped_direction(g.view()) else {
+                    self.restore(saved);
+                    return CappedIter::Stop { evals };
+                };
+                let step = Self::apply_atom_cap(&dir, max_atom, full);
+                match self.accept_capped(x, f, g, &step, &mut evals, fg) {
+                    CappedProbe::Moved { stalled } => CappedIter::Moved { stalled, evals },
+                    CappedProbe::Stop | CappedProbe::NonFinite => {
+                        self.restore(saved);
+                        CappedIter::Stop { evals }
+                    }
+                }
+            }
+        }
+    }
+
+    fn accept_capped<F>(
+        &mut self,
+        x: &mut Array1<f64>,
+        f: &mut f64,
+        g: &mut Array1<f64>,
+        step: &Array1<f64>,
+        evals: &mut usize,
+        fg: &mut F,
+    ) -> CappedProbe
+    where
+        F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
+    {
+        let motion = max_atom_displacement(step);
+        if !motion.is_finite() || motion <= 0.0 {
+            return CappedProbe::Stop;
+        }
+        let mut trial = x.clone();
+        trial.scaled_add(1.0, step);
+        let Some((fv, gv)) = fg(trial.view()) else {
+            return CappedProbe::Stop;
+        };
+        *evals += 1;
+        if !finite(fv, gv.view()) {
+            return CappedProbe::NonFinite;
+        }
+        let s = &trial - &*x;
+        let y = &gv - &*g;
+        let f_old = *f;
+        self.push(s, y);
+        *x = trial;
+        *f = fv;
+        *g = gv;
+        CappedProbe::Moved {
+            stalled: self.stalled(f_old, fv),
+        }
+    }
+
     fn gnorm(&self, g: &Array1<f64>) -> f64 {
         // A non-finite component means the gradient is broken, not small:
         // f64::max returns its other operand against NaN, so the infinity
@@ -661,6 +865,11 @@ impl Lbfgs {
     /// number of evaluations used. A non-finite value or gradient at a
     /// trial step shortens the step; at `x0` it ends the relaxation there
     /// with value `+inf`, as a spent budget does.
+    ///
+    /// [`LbfgsStep::Capped`] takes one evaluation per accepted step and
+    /// does not search the line. A non-finite quasi-Newton trial is
+    /// retried once along the force. A second non-finite trial ends the
+    /// relaxation at the last finite point.
     pub fn minimize<F>(
         &mut self,
         x0: ArrayView1<f64>,
@@ -707,6 +916,22 @@ impl Lbfgs {
             }
             if stalled || self.gnorm(&g) < self.gtol {
                 break;
+            }
+            if let Some(max_atom) = self.capped_limit() {
+                match self.capped_iterate(&mut x, &mut f, &mut g, max_atom, &mut fg) {
+                    CappedIter::Moved {
+                        stalled: now,
+                        evals: used,
+                    } => {
+                        evals += used;
+                        stalled = now;
+                    }
+                    CappedIter::Stop { evals: used } => {
+                        evals += used;
+                        break;
+                    }
+                }
+                continue;
             }
             let f_old = f;
             let d = self.search_direction(x.view(), g.view());
@@ -779,6 +1004,22 @@ impl Lbfgs {
             }
             if stalled || self.gnorm(&g) < self.gtol {
                 break;
+            }
+            if let Some(max_atom) = self.capped_limit() {
+                match self.capped_iterate(&mut x, &mut f, &mut g, max_atom, &mut fg) {
+                    CappedIter::Moved {
+                        stalled: now,
+                        evals: used,
+                    } => {
+                        evals += used;
+                        stalled = now;
+                    }
+                    CappedIter::Stop { evals: used } => {
+                        evals += used;
+                        break;
+                    }
+                }
+                continue;
             }
             let f_old = f;
             let d = self.search_direction(x.view(), g.view());
@@ -918,9 +1159,10 @@ impl Lbfgs {
 
 #[cfg(test)]
 mod tests {
-    use ndarray::{Array1, array};
+    use ndarray::{Array1, ArrayView1, array};
 
-    use super::{LBFGSB_FTOL, Lbfgs};
+    use super::{LBFGSB_FTOL, Lbfgs, LbfgsStep};
+    use crate::step::max_atom_displacement;
 
     /// Above `|f| = 1` the threshold scales with `|f|`; below, it is
     /// `ftol` itself. A value that is not positive passes no step.
@@ -980,6 +1222,104 @@ mod tests {
         assert_eq!(moved, Err(3));
         assert_eq!(held(&lbfgs), before);
         assert!(lbfgs.stored);
+    }
+
+    /// `f = 1/2 (x^2 + 4 y^2 + 9 z^2)`. One atom. The gradient is `H x`.
+    fn stiff(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+        let g = array![x[0], 4.0 * x[1], 9.0 * x[2]];
+        let f = 0.5 * (x[0] * g[0] + x[1] * g[1] + x[2] * g[2]);
+        (f, g)
+    }
+
+    /// The first capped step has length `max_atom` along the force, and
+    /// the next direction is the two-loop with `H0 = (s·y)/(y·y) I`.
+    /// The pair stays stored when that direction is longer than the cap.
+    #[test]
+    fn the_second_capped_step_uses_the_nocedal_wright_scale_and_keeps_the_pair() {
+        let cap = 0.25;
+        let mut opt = Lbfgs::with_capacity(4);
+        opt.step = LbfgsStep::Capped { max_atom: cap };
+        let x0 = array![1.0, 1.0, 1.0];
+        let (f0, g0) = stiff(x0.view());
+        let (d0, full) = opt.capped_direction(g0.view()).unwrap();
+        assert!(full);
+        let s = Lbfgs::apply_atom_cap(&d0, cap, true);
+        let motion = max_atom_displacement(&s);
+        assert!((motion - cap).abs() <= 1e-12, "motion {motion}");
+        let x1 = &x0 + &s;
+        let (_f1, g1) = stiff(x1.view());
+        let y = &g1 - &g0;
+        let sy = s.dot(&y);
+        let yy = y.dot(&y);
+        assert!(sy > 0.0 && yy > 0.0);
+        opt.push(s.clone(), y.clone());
+        assert_eq!(opt.len(), 1);
+
+        let gamma = sy / yy;
+        let rho = 1.0 / sy;
+        let mut q = g1.clone();
+        let alpha = rho * s.dot(&q);
+        q = &q - alpha * &y;
+        q *= gamma;
+        let beta = rho * y.dot(&q);
+        q = &q + (alpha - beta) * &s;
+        let expect = -q;
+
+        let (d1, full1) = opt.capped_direction(g1.view()).unwrap();
+        assert!(!full1);
+        assert_eq!(opt.len(), 1, "a long quasi-Newton step must keep the pair");
+        for k in 0..3 {
+            assert!(
+                (d1[k] - expect[k]).abs() <= 1e-12,
+                "k={k} got {} want {}",
+                d1[k],
+                expect[k]
+            );
+        }
+        assert!(
+            max_atom_displacement(&d1) > cap,
+            "the fixture step is longer than the cap, got {}",
+            max_atom_displacement(&d1)
+        );
+        let taken = Lbfgs::apply_atom_cap(&d1, cap, false);
+        assert!((max_atom_displacement(&taken) - cap).abs() <= 1e-12);
+        // The value moved, so the iteration is a real step of the driver.
+        let _ = f0;
+    }
+
+    /// On `f = 1/2 ||x||^2` every accepted capped step costs one
+    /// evaluation, the history is kept, and the run reaches the origin.
+    #[test]
+    fn capped_quadratic_spends_one_evaluation_per_accepted_step() {
+        let mut opt = Lbfgs {
+            step: LbfgsStep::Capped { max_atom: 0.2 },
+            gtol: 1e-8,
+            norm: super::GradNorm::Euclidean,
+            ..Lbfgs::default()
+        };
+        let mut calls = 0usize;
+        let (f, x, evals) = opt.minimize(array![1.0, 1.0, 1.0].view(), 100, |v| {
+            calls += 1;
+            Some((0.5 * v.dot(&v), v.to_owned()))
+        });
+        assert_eq!(calls, evals);
+        assert!(evals > 2, "the cap must bind, evals {evals}");
+        assert!(opt.len() > 1, "pairs were dropped, len {}", opt.len());
+        assert!(f < 1e-16, "f {f} x {x}");
+        assert!(x.iter().all(|v| v.abs() < 1e-8));
+    }
+
+    /// A non-positive cap does not select the capped step.
+    #[test]
+    fn a_non_positive_cap_keeps_the_wolfe_search() {
+        for max_atom in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let opt = Lbfgs {
+                step: LbfgsStep::Capped { max_atom },
+                ..Lbfgs::default()
+            };
+            assert!(opt.capped_limit().is_none(), "cap {max_atom}");
+        }
+        assert!(Lbfgs::default().capped_limit().is_none());
     }
     /// A fallible transport that succeeds but drops the newest pair also
     /// leaves the older pair to the next replacement.
