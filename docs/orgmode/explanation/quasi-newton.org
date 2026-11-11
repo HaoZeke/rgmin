@@ -95,6 +95,33 @@ capped seed. The trial is kept when the energy rises by at most
 pass, the memory is cleared and a short steepest step, one tenth of
 the preconditioned force and then the cap, is taken.
 
+* The capped step
+
+~LbfgsStep::Capped~ is the atomistic step, selected on an ~Lbfgs~
+value or by ~Solver::set_lbfgs_step~. The default
+~LbfgsStep::Wolfe~ is unchanged, and ~set_atom_maxmove~ still
+selects the geometry step above.
+
+The direction is the same two-loop. The initial inverse Hessian is
+the Nocedal-Wright scale ~(s · y) / (y · y)~ on the latest stored
+pair (equation 7.20)
+@@rst::cite:`nocedalNumericalOptimization2006`@@.
+An installed exponential preconditioner still replaces that scalar.
+The step is then shortened so the longest per-atom displacement is
+at most the caller's cap. The cap is the only length in the rule.
+An empty memory has no curvature yet, so the step follows the force
+and has that length. A direction that is not a descent direction
+clears the memory and does the same. A pair with ~s · y~ below the
+usual relative-curvature gate is not stored. A pair that passes the
+gate is kept when the step was shortened: the cap changes the
+length, and the stored pairs still describe the curvature.
+
+One evaluation is taken at the trial. A non-finite quasi-Newton
+trial is retried once along the force. A second non-finite trial
+leaves the point and the pairs as they were. ~Lbfgs::ftol~, when
+positive, still ends the relaxation after a step that decreases
+the value by little.
+
 * Stale pairs and the cautious update
 
 A pair with y . s <= 0 would corrupt the inverse model, so the update

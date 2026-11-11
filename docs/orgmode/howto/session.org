@@ -109,7 +109,8 @@ together is not asked twice.
 | ~exp_mu~ | Its energy scale after estimation, or none when it is not installed |
 | ~set_accept~ | ~none~ / ~energy~ / ~nonmonotone~ |
 | ~set_stop_norm~ | Replace ~Control::stop_norm~: ~two~ / ~max_atom~ / ~inf~ / ~rms~ |
-| ~set_atom_maxmove~ | Per-atom cap. Without a distance set, Euclidean L-BFGS takes the geometry step and ignores ~set_accept~, and ~set_exp~ supplies its initial inverse Hessian. With a set, every method scales its trial to the cap and keeps ~set_accept~ |
+| ~set_lbfgs_step~ | ~Wolfe~ (default) or ~Capped { max_atom }~. Capped drops the line search on a Euclidean L-BFGS session, shortens the two-loop step to ~max_atom~, and keeps the Nocedal-Wright scale of ~H0~. It replaces the geometry step and does not read ~set_atom_maxmove~. A non-positive cap restores ~Wolfe~ |
+| ~set_atom_maxmove~ | Per-atom cap. Without a distance set, Euclidean L-BFGS takes the geometry step and ignores ~set_accept~, and ~set_exp~ supplies its initial inverse Hessian. With a set, every method scales its trial to the cap and keeps ~set_accept~. A capped L-BFGS step does not use this cap |
 | ~set_project_rigid~ | Drop rigid modes on isolated clusters |
 | ~set_extra_updates~ | Al-Baali extra L-BFGS pairs |
 | ~set_cautious~ | Li--Fukushima pair filter |

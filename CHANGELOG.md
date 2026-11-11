@@ -83,6 +83,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Opt-in capped L-BFGS for atomistic steps. `Lbfgs::capped` and `LbfgsStep::Capped` drop the line search. Each two-loop step is shortened so the longest per-atom displacement is at most the caller's cap, and the initial inverse Hessian stays the Nocedal-Wright scale `(s·y)/(y·y)`. An empty memory steps along the force at that length. Pairs are kept when the step is shortened. The default `LbfgsStep::Wolfe` is unchanged, and `set_atom_maxmove` still selects the geometry step. On LJ7 and LJ13 at atomic force 0.01 the geometry step uses fewer evaluations and the same energy, and on the extended Rosenbrock function with ten or more coordinates the capped step stops at a stationary point of value about 3.99. `Solver::set_lbfgs_step` installs the rule on a Euclidean L-BFGS session. C: `rgmin_solver_set_lbfgs_capped`, the C++ method `set_lbfgs_capped`, and the xts alias. `abi_minor` 33. `cargo run --release --example lbfgs_capped` prints force calls and median wall time.
 - Opt-in holonomic distance constraints on every `Solver` method except particle swarm, under every `Accept` rule.
   `DistanceConstraints::at` fixes atom pairs at their lengths in a geometry, and `DistanceConstraints::new` takes the lengths as given.
   `with_masses` sets one mass per atom, and masses are one until it is called.

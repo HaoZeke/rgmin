@@ -103,6 +103,72 @@ On LJ38 it saves 99 evaluations and ends 7.7e-6 above the energy of the
 ~ftol = 0~ run.
 A caller that needs the gradient below ~gtol~ keeps ~ftol~ at zero.
 
+** Capped step for atomistic L-BFGS
+
+~LbfgsStep::Capped~ drops the line search. The two-loop direction
+keeps the Nocedal-Wright scale ~H0 = ((s · y) / (y · y)) I~
+(equation 7.20). The step is shortened so the longest per-atom
+displacement is at most the caller's cap, which is the ASE LBFGS
+length control with the line search left off. An empty memory
+steps along the force at that length. Pairs stay in the memory
+when the step is shortened. The geometry step selected by
+~set_atom_maxmove~ still clears that memory when the quasi-Newton
+step is longer than its cap, and it can spend further evaluations
+on backtracking. The capped rule does neither.
+
+The default remains the strong Wolfe search, and
+~set_atom_maxmove~ still selects the geometry step. The cap is
+0.2 in every capped and geometry run, the length ASE publishes
+as ~maxstep~, and it is not refitted per problem.
+~cargo run --release --example lbfgs_capped~ repeats each arm
+seven times, serially, and the wall time below is the median.
+Evaluations do not change across repeats. Wolfe and capped rows
+are ~Lbfgs~ with memory 8 and stop on ~norminf(g) < 1e-6~. Their
+gradient column is that norm. Session rows use memory 20 and stop
+on the largest atomic force, 0.01. Their gradient column is that
+force. Wolfe's evaluation counts are the counts already recorded
+for ~develop~.
+
+| problem | arm | evals | median ms | gradient | value |
+|---------+-----+------:|----------:|---------:|------:|
+| Rosenbrock 2 | Wolfe | 49 | 0.012 | 1.74e-7 | 8.82e-16 |
+| Rosenbrock 2 | capped | 46 | 0.023 | 1.33e-9 | 6.75e-21 |
+| Rosenbrock 2 | geometry | 99 | 0.050 | 1.08e-3 | 2.36e-9 |
+| Rosenbrock 2 | capped session | 45 | 0.071 | 3.24e-3 | 6.80e-9 |
+| Rosenbrock 10 | Wolfe | 92 | 0.037 | 5.55e-7 | 3.01e-16 |
+| Rosenbrock 10 | capped | 83 | 0.056 | 3.16e-7 | 3.986579 |
+| Rosenbrock 10 | geometry | 155 | 0.149 | 8.38e-3 | 4.50e-8 |
+| Rosenbrock 10 | capped session | 68 | 0.140 | 5.98e-3 | 3.986579 |
+| Rosenbrock 100 | Wolfe | 635 | 1.019 | 5.70e-7 | 7.06e-15 |
+| Rosenbrock 100 | capped | 562 | 1.363 | 8.18e-7 | 3.986624 |
+| Rosenbrock 100 | geometry | 863 | 3.139 | 8.49e-3 | 7.03e-7 |
+| Rosenbrock 100 | capped session | 539 | 2.783 | 8.40e-3 | 3.986624 |
+| LJ7 | Wolfe | 58 | 0.028 | 7.75e-7 | -15.59321 |
+| LJ7 | capped | 50 | 0.058 | 7.75e-7 | -15.59321 |
+| LJ7 | geometry | 26 | 0.038 | 9.82e-3 | -15.59320 |
+| LJ7 | capped session | 40 | 0.086 | 7.26e-3 | -15.59321 |
+| LJ13 | Wolfe | 135 | 0.133 | 5.45e-7 | -38.20651 |
+| LJ13 | capped | 149 | 0.230 | 7.89e-7 | -38.20651 |
+| LJ13 | geometry | 96 | 0.270 | 4.82e-3 | -38.20651 |
+| LJ13 | capped session | 106 | 0.330 | 6.31e-3 | -38.20650 |
+| LJ38 | Wolfe | 415 | 1.695 | 8.84e-7 | -168.2171 |
+| LJ38 | capped | 366 | 1.803 | 7.59e-7 | -165.1035 |
+| LJ38 | geometry | 211 | 1.620 | 9.77e-3 | -165.3536 |
+| LJ38 | capped session | 187 | 1.439 | 9.06e-3 | -161.0777 |
+| Morse Pt256 | geometry | 11 | 4.945 | 5.47e-3 | -1396.173 |
+| Morse Pt256 | capped session | 11 | 4.965 | 3.94e-3 | -1396.173 |
+
+On the extended Rosenbrock function with ten or more coordinates
+the capped step stops at a stationary point of value about 3.99,
+with the first coordinate near −1. The Wolfe search and the
+geometry step reach the valley floor at value 0. On LJ7 and LJ13,
+at an atomic force of 0.01, the geometry step uses fewer
+evaluations and finishes at the same energy. On LJ38 the capped
+session uses 187 evaluations against 211 and finishes about 4.3
+energy units higher, in another basin. On the periodic Morse
+cluster both session arms take 11 evaluations and the same
+energy. The capped rule therefore stays opt-in.
+
 ** Newton and RFO when the Hessian is cheap
 
 L-BFGS is the production method when only =f= and =∇f= are available.
