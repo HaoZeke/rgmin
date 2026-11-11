@@ -1,10 +1,17 @@
 //! Two-loop L-BFGS vs HiGHS QP on the same L-BFGS memory.
-//! Repo defaults: memory 8, Wolfe c1=1e-4 c2=0.9, gtol 1e-6, max 200.
+//! Both arms opt into the strong Wolfe search. The crate default is the
+//! line-search-free cap. Memory 8, c1=1e-4, c2=0.9, gtol 1e-6, max 200.
 
 use std::time::Instant;
 
 use ndarray::{Array1, ArrayView1};
-use rgmin::{HighsStep, Lbfgs};
+use rgmin::{HighsStep, Lbfgs, LbfgsStep};
+
+fn searched() -> Lbfgs {
+    let mut opt = Lbfgs::default();
+    opt.step = LbfgsStep::Wolfe;
+    opt
+}
 
 fn rosenbrock(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
     let a = 1.0 - x[0];
@@ -55,21 +62,21 @@ fn run(
 fn main() {
     println!("# unconstrained Rosenbrock 2D, start (-1.2, 1.0)");
     let x0 = Array1::from(vec![-1.2, 1.0]);
-    run("two-loop", Lbfgs::default(), x0.view(), rosenbrock);
-    let mut h = Lbfgs::default();
+    run("two-loop", searched(), x0.view(), rosenbrock);
+    let mut h = searched();
     h.highs = Some(HighsStep::default());
     run("highs-qp", h, x0.view(), rosenbrock);
 
     println!("# unconstrained ill-conditioned quadratic n=8");
     let q0 = Array1::from(vec![1.0; 8]);
-    run("two-loop", Lbfgs::default(), q0.view(), quad);
-    let mut h = Lbfgs::default();
+    run("two-loop", searched(), q0.view(), quad);
+    let mut h = searched();
     h.highs = Some(HighsStep::default());
     run("highs-qp", h, q0.view(), quad);
 
     println!("# boxed quadratic n=8, lo=0 hi=0.5 (true min is 0, outside the box)");
-    run("two-loop (no box)", Lbfgs::default(), q0.view(), quad);
-    let mut h = Lbfgs::default();
+    run("two-loop (no box)", searched(), q0.view(), quad);
+    let mut h = searched();
     h.highs = Some(HighsStep {
         trust: None,
         lo: Some(vec![0.0]),

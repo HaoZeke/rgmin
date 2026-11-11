@@ -11,8 +11,15 @@ and on @@rst::doc:`reference/bibliography <bibliography>`@@ after
 ** Unconstrained local minimization
 
 The production method for a smooth unconstrained problem with an
-analytic or fused gradient is limited-memory BFGS with the strong Wolfe
-conditions.
+analytic or fused gradient is limited-memory BFGS without a line
+search. The eOn client does not line-search its L-BFGS step
+(<https://github.com/TheochemUI/eOn>, ~client/LBFGS.cpp~). The default
+cap is that client's ~max_move~, 0.2. The initial inverse Hessian is
+the Nocedal-Wright scale ~(s · y) / (y · y)~. A direction that is not
+descent clears the memory, which is the client's ~angle_reset~. The
+client's ~distance_reset~ also clears the memory when the proposed
+step is longer than the cap; this crate shortens the step and keeps
+the pairs. ~LbfgsStep::Wolfe~ opts into the strong Wolfe search.
 
 - Nocedal 1980 introduced the limited-memory update
   ([[https://doi.org/10.1090/s0025-5718-1980-0572855-7][10.1090/s0025-5718-1980-0572855-7]]).
@@ -116,10 +123,10 @@ when the step is shortened. The geometry step selected by
 step is longer than its cap, and it can spend further evaluations
 on backtracking. The capped rule does neither.
 
-The default remains the strong Wolfe search, and
-~set_atom_maxmove~ still selects the geometry step. The cap is
-0.2 in every capped and geometry run, the length ASE publishes
-as ~maxstep~, and it is not refitted per problem.
+That cap is the default. ~LbfgsStep::Wolfe~ is the opt-in search,
+and ~set_atom_maxmove~ selects the geometry step only after that
+opt-in. The cap is 0.2, the eOn ~max_move~ and the length ASE
+publishes as ~maxstep~, and it is not refitted per problem.
 ~cargo run --release --example lbfgs_capped~ repeats each arm
 seven times, serially, and the wall time below is the median.
 Evaluations do not change across repeats. Wolfe and capped rows
@@ -175,7 +182,9 @@ uses fewer evaluations and finishes at the same energy. On LJ38
 the capped session uses 187 evaluations against 211 and finishes
 about 4.3 energy units higher, in another basin. On the periodic
 Morse cluster both session arms take 11 evaluations and the same
-energy. The capped rule therefore stays opt-in.
+energy. The cap is the default because the eOn client does not
+line-search this step. The fifty-start comparison is
+~benches/ase_h2h/distribution.md~.
 
 The same fmax and the same maxstep against ASE 3.29.0 are recorded
 in ~benches/ase_h2h/results.md~.
@@ -384,10 +393,12 @@ reject a 3N cluster.
 
 ** Defaults in this crate
 
-- Method: ~Lbfgs~ / ~Method::Lbfgs { memory: 8 }~
-- Line search: ~LineSearch::Wolfe { c1: 1e-4, c2: 0.9, maxiter: 20 }~
-- First trial step: ~1~ when the memory is occupied (the Newton step);
-  ~1 / norm(d)~ when the memory is empty (raw steepest descent)
+- Method: ~Lbfgs~ / ~Method::Lbfgs { memory: 8 }~, line-search-free
+  cap ~EON_MAX_MOVE~ (0.2)
+- Opt-in line search: ~LbfgsStep::Wolfe~, constants ~c1 = 1e-4~,
+  ~c2 = 0.9~, at most 20 trials
+- First trial of that search: ~1~ when the memory is occupied;
+  the initial step length when the memory is empty
 - Relative-decrease stop: off on ~Lbfgs~ (~ftol: 0.0~);
   ~LBFGSB_FTOL~ is the SciPy L-BFGS-B default
 - Gradient stop: ~norminf(g) < 1e-6~ on ~Lbfgs~, ~norm2(g)~ on

@@ -80,6 +80,7 @@ fn steps_until(precon: bool, estimate: bool) -> (usize, Option<f64>) {
         ..Default::default()
     };
     let mut solver = Solver::new(Method::Lbfgs { memory: 5 }, control, x.len());
+    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     if precon {
         if estimate {
             params.mu = None;
@@ -246,6 +247,7 @@ fn geometry_position(precon: bool, cap: f64) -> Array1<f64> {
         ..Default::default()
     };
     let mut solver = Solver::new(Method::Lbfgs { memory: 5 }, control, x.len());
+    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     solver.set_atom_maxmove(cap);
     if precon {
         solver
@@ -292,6 +294,7 @@ fn geometry_lbfgs_caps_along_the_preconditioned_force() {
         ..Default::default()
     };
     let mut solver = Solver::new(Method::Lbfgs { memory: 5 }, control, x.len());
+    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     solver.set_atom_maxmove(cap);
     solver
         .set_exp(geom.view(), &neigh, &params)

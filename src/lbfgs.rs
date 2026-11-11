@@ -1,15 +1,15 @@
 //! Persistent limited-memory BFGS (Nocedal-Wright 7.4, scaling 7.20).
 //!
-//! The production local method is L-BFGS with the strong Wolfe conditions
-//! (Nocedal-Wright algorithms 3.5 and 3.6). Armijo alone accepts a step
-//! that decreases the value without measuring curvature, and every later
-//! direction is built from the stored pairs, so one bad pair degrades the
-//! whole memory.
+//! The default step is the line-search-free cap used by the eOn client
+//! ([`EON_MAX_MOVE`], no line search, Nocedal-Wright `H0`, reset when the
+//! direction is not descent). The strong Wolfe search is
+//! [`LbfgsStep::Wolfe`].
 //!
-//! [`LbfgsStep::Capped`] is the opt-in atomistic step. It drops the line
-//! search, shortens the two-loop step to a per-atom cap, and keeps the
-//! Nocedal-Wright scale `H0 = ((s · y) / (y · y)) I` (eq. 7.20). A
-//! default [`Lbfgs`] keeps the Wolfe search.
+//! eOn client `LBFGS::getStep`, <https://github.com/TheochemUI/eOn>.
+//! The client's `distance_reset` clears the memory when the proposed
+//! step is longer than `max_move`. This crate shortens that step and
+//! keeps the pairs. A direction that is not descent still clears the
+//! memory, which is the client's `angle_reset`.
 //!
 //! Liu and Nocedal, *On the limited memory BFGS method for large scale
 //! optimization*, <https://doi.org/10.1007/BF01589116>.
@@ -33,21 +33,27 @@ use crate::step::{
 };
 use eindir_core::{DifferentiableObjective, Objective};
 
+/// eOn `[Optimizer] max_move`: the longest displacement of one atom in
+/// one step, in the coordinate length. The client default is 0.2.
+///
+/// eOn client, <https://github.com/TheochemUI/eOn>.
+pub const EON_MAX_MOVE: f64 = 0.2;
+
 /// How [`Lbfgs`] chooses the length of a step.
 ///
-/// [`LbfgsStep::Wolfe`] is the default. [`LbfgsStep::Capped`] is the
-/// atomistic step: one evaluation, no line search, and the
-/// Nocedal-Wright scale of the initial inverse Hessian.
+/// [`LbfgsStep::Capped`] is the default: no line search. [`LbfgsStep::Wolfe`]
+/// is the strong Wolfe search.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LbfgsStep {
     /// Strong Wolfe line search. Nocedal and Wright, algorithms 3.5 and 3.6.
+    /// Opt in with this variant. It is not the default.
     Wolfe,
     /// No line search. Shorten the two-loop step so the longest per-atom
     /// displacement is at most `max_atom`. The initial inverse Hessian is
     /// `(s · y) / (y · y)` on the latest stored pair (Nocedal and Wright,
     /// eq. 7.20). An empty memory follows the force and the step has
-    /// length `max_atom`. A non-positive or non-finite `max_atom` keeps
-    /// the Wolfe search.
+    /// length `max_atom`. A direction that is not descent clears the
+    /// memory. Pairs from a shortened step are kept.
     Capped {
         /// Longest displacement of one atom, in the coordinate length.
         max_atom: f64,
@@ -56,7 +62,9 @@ pub enum LbfgsStep {
 
 impl Default for LbfgsStep {
     fn default() -> Self {
-        Self::Wolfe
+        Self::Capped {
+            max_atom: EON_MAX_MOVE,
+        }
     }
 }
 
@@ -155,9 +163,13 @@ pub struct Lbfgs {
     /// Zero, the default, turns the test off, as does any value that is
     /// not positive. [`LBFGSB_FTOL`] is the SciPy default.
     pub ftol: f64,
-    /// Step-length rule. [`LbfgsStep::Wolfe`] is the default, so a
-    /// default [`Lbfgs`] takes the same steps as before.
+    /// Step-length rule. The default is [`LbfgsStep::Capped`] at
+    /// [`EON_MAX_MOVE`]. [`LbfgsStep::Wolfe`] opts into the line search.
     pub step: LbfgsStep,
+    /// Fixed initial inverse-Hessian scale. `None`, the default, uses
+    /// the Nocedal-Wright scale `(s · y) / (y · y)`. `Some(1/70)` is the
+    /// ASE LBFGS scale, which is not updated.
+    pub fixed_h0: Option<f64>,
     /// Al-Baali extra-updates: replay the newest pair this many extra times.
     pub extra_updates: usize,
     /// Li-Fukushima cautious `ε`. Zero disables the filter.
@@ -200,7 +212,8 @@ impl Lbfgs {
             max_line_evals: 20,
             norm: GradNorm::Infinity,
             ftol: 0.0,
-            step: LbfgsStep::Wolfe,
+            step: LbfgsStep::default(),
+            fixed_h0: None,
             extra_updates: 0,
             cautious_eps: 0.0,
             cautious_alpha: 0.01,
@@ -413,7 +426,15 @@ impl Lbfgs {
         self.trim();
     }
 
+    fn fixed_scale(&self) -> Option<f64> {
+        self.fixed_h0.filter(|h| h.is_finite() && *h > 0.0)
+    }
+
     fn scale_gamma(&self, mut q: Array1<f64>) -> Array1<f64> {
+        if let Some(h0) = self.fixed_scale() {
+            q *= h0;
+            return q;
+        }
         if let Some(p) = self.memory.last() {
             let yy = p.y.dot(&p.y);
             if yy > 0.0 {
@@ -526,6 +547,16 @@ impl Lbfgs {
         self.step.capped_limit()
     }
 
+    /// Cap used by [`Self::minimize`]. An installed HiGHS step keeps the
+    /// line search: the QP already enforces its trust region and box.
+    fn line_search_free(&self) -> Option<f64> {
+        #[cfg(feature = "highs")]
+        if self.highs.is_some() {
+            return None;
+        }
+        self.capped_limit()
+    }
+
     /// Two-loop direction, restarted along the force when it is not descent.
     ///
     /// The flag is true when the direction is an unscaled force and the
@@ -544,6 +575,14 @@ impl Lbfgs {
         if let Some(pre) = self.exp_apply(g) {
             let mut d = pre;
             d.mapv_inplace(|v| -v);
+            let slope = crate::vecops::dot(d.view(), g);
+            if slope.is_finite() && slope < 0.0 {
+                return Some((d, false));
+            }
+        }
+        if let Some(h0) = self.fixed_scale() {
+            let mut d = g.to_owned();
+            d *= -h0;
             let slope = crate::vecops::dot(d.view(), g);
             if slope.is_finite() && slope < 0.0 {
                 return Some((d, false));
@@ -917,7 +956,7 @@ impl Lbfgs {
             if stalled || self.gnorm(&g) < self.gtol {
                 break;
             }
-            if let Some(max_atom) = self.capped_limit() {
+            if let Some(max_atom) = self.line_search_free() {
                 match self.capped_iterate(&mut x, &mut f, &mut g, max_atom, &mut fg) {
                     CappedIter::Moved {
                         stalled: now,
@@ -1005,7 +1044,7 @@ impl Lbfgs {
             if stalled || self.gnorm(&g) < self.gtol {
                 break;
             }
-            if let Some(max_atom) = self.capped_limit() {
+            if let Some(max_atom) = self.line_search_free() {
                 match self.capped_iterate(&mut x, &mut f, &mut g, max_atom, &mut fg) {
                     CappedIter::Moved {
                         stalled: now,
@@ -1319,7 +1358,26 @@ mod tests {
             };
             assert!(opt.capped_limit().is_none(), "cap {max_atom}");
         }
-        assert!(Lbfgs::default().capped_limit().is_none());
+        assert_eq!(
+            Lbfgs::default().step,
+            LbfgsStep::Capped {
+                max_atom: super::EON_MAX_MOVE
+            }
+        );
+    }
+
+    /// A fresh solver takes the eOn cap and does not search a line.
+    #[test]
+    fn the_default_step_moves_one_atom_by_the_eon_cap() {
+        let mut opt = Lbfgs::default();
+        let mut calls = 0usize;
+        let (_f, x, evals) = opt.minimize(array![1.0, 0.0, 0.0].view(), 1, |v| {
+            calls += 1;
+            Some((0.5 * v.dot(&v), v.to_owned()))
+        });
+        assert_eq!(calls, evals);
+        assert_eq!(evals, 2);
+        assert!((x[0] - (1.0 - super::EON_MAX_MOVE)).abs() <= 1e-12, "{x}");
     }
     /// A fallible transport that succeeds but drops the newest pair also
     /// leaves the older pair to the next replacement.

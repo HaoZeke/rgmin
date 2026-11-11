@@ -332,7 +332,8 @@ fn fnv1a(hash: u64, word: f64) -> u64 {
 }
 
 /// On the flat Euclidean kind the walk of each method, every point and
-/// value it returns, matches the digest recorded before the change.
+/// value it returns, matches the recorded digest. The L-BFGS digest is
+/// the line-search-free cap.
 #[test]
 fn flat_walks_keep_their_digests() {
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -340,7 +341,7 @@ fn flat_walks_keep_their_digests() {
         (Method::NewtonCg, 0xf760_362d_9a91_9afa_u64),
         (Method::NewtonPcg, 0xce41_c263_ea63_b4a1),
         (Method::Fire { kind: FireKind::V2 }, 0x552b_a4b9_b0eb_63a9),
-        (Method::lbfgs(), 0xff05_53c8_a592_b5db),
+        (Method::lbfgs(), 0x19c1_b6de_8964_45f9),
     ];
     for (method, recorded) in cases {
         let objective = Tilt::new(1.0);

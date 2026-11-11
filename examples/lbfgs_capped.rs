@@ -1,9 +1,10 @@
 // Copyright (c) rgmin developers
 
-//! Force calls and wall time of capped L-BFGS against the develop defaults.
+//! Force calls and wall time of the line-search-free cap against the
+//! opt-in strong Wolfe search.
 //!
-//! Default `Lbfgs` (memory 8, strong Wolfe, `norminf(g) < 1e-6`) against
-//! the same solver with [`LbfgsStep::Capped`] and cap 0.2, on the extended
+//! The Wolfe arm sets [`LbfgsStep::Wolfe`]. The crate default is the cap.
+//! Memory 8, `norminf(g) < 1e-6`, on the extended
 //! Rosenbrock function and on Lennard-Jones clusters from a jittered cubic
 //! grid. A Euclidean session with memory 20 compares the geometry step
 //! (`set_atom_maxmove(0.2)`) with the capped step on the same starts, and
@@ -173,7 +174,9 @@ fn time_minimize(
         let mut opt = if capped {
             Lbfgs::capped(CAP)
         } else {
-            Lbfgs::default()
+            let mut searched = Lbfgs::default();
+            searched.step = LbfgsStep::Wolfe;
+            searched
         };
         let t0 = Instant::now();
         let (f, x, evals) = opt.minimize(x0.view(), BUDGET, |v| Some(fg(v)));
@@ -220,6 +223,7 @@ fn time_session(x0: &Array1<f64>, capped: bool, tol: f64, fg: &Force) -> Row {
                 .set_lbfgs_step(LbfgsStep::Capped { max_atom: CAP })
                 .unwrap();
         } else {
+            solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
             solver.set_atom_maxmove(CAP);
         }
         let mut x = x0.clone();

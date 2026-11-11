@@ -381,16 +381,15 @@ impl Solver {
 
     /// Step-length rule for an L-BFGS session.
     ///
-    /// [`LbfgsStep::Wolfe`] is the default. On a Euclidean session it
-    /// leaves the geometry step, selected by [`Self::set_atom_maxmove`],
-    /// and the strong Wolfe search where they are.
-    /// [`LbfgsStep::Capped`] replaces both for [`Self::step`]: one
-    /// evaluation, no line search, and the Nocedal-Wright scale of `H0`.
-    /// The cap is `max_atom` on that variant. It does not read
-    /// [`Self::set_atom_maxmove`]. A non-positive `max_atom` selects
-    /// [`LbfgsStep::Wolfe`]. A non-finite `max_atom`, a session that is
-    /// not L-BFGS, a non-Euclidean manifold, a distance-constraint set,
-    /// or a HiGHS feasible set is an error.
+    /// [`LbfgsStep::Capped`] at [`crate::EON_MAX_MOVE`] is the default:
+    /// one evaluation, no line search, the Nocedal-Wright scale of `H0`,
+    /// and a memory reset when the direction is not descent.
+    /// [`LbfgsStep::Wolfe`] opts into the strong Wolfe search.
+    /// A non-positive `max_atom` restores [`crate::EON_MAX_MOVE`].
+    /// [`Self::set_atom_maxmove`] replaces the cap while the step is
+    /// capped. A non-finite `max_atom`, a session that is not L-BFGS,
+    /// a non-Euclidean manifold, a distance-constraint set, or a HiGHS
+    /// feasible set is an error when selecting the cap.
     pub fn set_lbfgs_step(&mut self, step: LbfgsStep) -> Result<()> {
         let step = match step {
             LbfgsStep::Capped { max_atom } if !max_atom.is_finite() => {
@@ -398,7 +397,9 @@ impl Solver {
                     what: "max_atom is not finite",
                 });
             }
-            LbfgsStep::Capped { max_atom } if max_atom <= 0.0 => LbfgsStep::Wolfe,
+            LbfgsStep::Capped { max_atom } if max_atom <= 0.0 => LbfgsStep::Capped {
+                max_atom: crate::lbfgs::EON_MAX_MOVE,
+            },
             other => other,
         };
         if !matches!(self.inner, Inner::Lbfgs(_)) {
@@ -537,14 +538,36 @@ impl Solver {
     }
 
     /// eOn `maxAtomMotionAppliedV`. Preferred over the Euclidean cap.
-    /// Without a distance constraint set, Euclidean L-BFGS then takes the
-    /// geometry step and ignores [`Self::set_accept`]; with a set it keeps
-    /// the two-loop step under the acceptance mode, and the cap scales
-    /// each trial before it returns to the set.
+    /// While the L-BFGS step is the default cap, this replaces that cap.
+    /// After [`Self::set_lbfgs_step`]`(Wolfe)`, and without a distance
+    /// constraint set, Euclidean L-BFGS takes the geometry step and
+    /// ignores [`Self::set_accept`]. With a set it keeps the two-loop
+    /// step under the acceptance mode, and the cap scales each trial
+    /// before it returns to the set.
     pub fn set_atom_maxmove(&mut self, maxmove: f64) {
         self.atom_maxmove = if maxmove > 0.0 { Some(maxmove) } else { None };
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            if matches!(solver.step, LbfgsStep::Capped { .. }) {
+                let cap = self.atom_maxmove.unwrap_or(crate::lbfgs::EON_MAX_MOVE);
+                solver.step = LbfgsStep::Capped { max_atom: cap };
+            }
+        }
         #[cfg(feature = "highs")]
         self.apply_highs_opts();
+    }
+
+    /// ASE's fixed inverse-Hessian scale. `None` keeps the Nocedal-Wright
+    /// scale. A non-positive value clears it. Only an L-BFGS session.
+    pub fn set_lbfgs_fixed_h0(&mut self, h0: Option<f64>) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.fixed_h0 = h0.filter(|v| v.is_finite() && *v > 0.0);
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
     }
 
     /// eOn `lbfgs_project_rigid`. Isolated clusters only.
@@ -1249,11 +1272,6 @@ impl Solver {
         O: DifferentiableObjective<f64> + ?Sized,
     {
         if self.constraints.is_some() {
-            if self.lbfgs_step().capped_limit().is_some() {
-                return Err(Error::LbfgsCap {
-                    what: "distance constraints are set",
-                });
-            }
             return self.constrained_step(x, |s, x| s.step_constrained(obj, x));
         }
         if matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. }) {
@@ -1435,9 +1453,27 @@ impl Solver {
         scale * force
     }
 
-    /// Per-atom cap selects the geometry L-BFGS step. Uncapped sessions keep
-    /// the one-oracle two-loop (and Wolfe when acceptance is not [`Accept::None`]).
+    /// Line-search-free cap on unconstrained Euclidean L-BFGS. Curved
+    /// kinds keep their retraction search. A distance-constraint set and
+    /// HiGHS keep their own projections.
+    fn use_capped_lbfgs(&self) -> bool {
+        if self.lbfgs_step().capped_limit().is_none()
+            || !matches!(self.manifold, ManifoldKind::Euclidean)
+            || self.constraints.is_some()
+        {
+            return false;
+        }
+        #[cfg(feature = "highs")]
+        if self.highs {
+            return false;
+        }
+        true
+    }
+
     fn use_geometry_lbfgs(&self) -> bool {
+        if !matches!(self.lbfgs_step(), LbfgsStep::Wolfe) {
+            return false;
+        }
         if self.atom_maxmove.is_none() || !matches!(self.manifold, ManifoldKind::Euclidean) {
             return false;
         }
@@ -2239,18 +2275,7 @@ impl Solver {
         }
         self.refresh_exp(obj, x, &grad)?;
 
-        if self.lbfgs_step().capped_limit().is_some() {
-            if !matches!(self.manifold, ManifoldKind::Euclidean) {
-                return Err(Error::LbfgsCap {
-                    what: "requires Euclidean coordinates",
-                });
-            }
-            #[cfg(feature = "highs")]
-            if self.highs {
-                return Err(Error::LbfgsCap {
-                    what: "HiGHS projection is set",
-                });
-            }
+        if self.use_capped_lbfgs() {
             return self.capped_lbfgs_step(obj, x, value, grad);
         }
 

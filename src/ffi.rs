@@ -74,7 +74,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 33;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 34;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -1870,11 +1870,10 @@ pub unsafe extern "C" fn rgmin_solver_set_fire_abc(solver: *mut rgmin_solver_t, 
     }
 }
 
-/// Capped L-BFGS. `max_atom > 0` drops the line search and shortens each
-/// two-loop step to that per-atom length, with the Nocedal-Wright scale
-/// of `H0`. A non-positive `max_atom` restores the strong Wolfe search.
-/// Returns 0, or 1 on a null session or a session that cannot run the
-/// capped step. ABI minor 33.
+/// Per-atom cap of the default line-search-free L-BFGS step.
+/// `max_atom > 0` sets that cap. A non-positive value restores
+/// [`crate::EON_MAX_MOVE`]. Returns 0, or 1 on a null session or a
+/// session that cannot run the capped step. ABI minor 34.
 ///
 /// # Safety
 /// `solver` is null or a live session from [`rgmin_solver_create`].
@@ -1887,10 +1886,12 @@ pub unsafe extern "C" fn rgmin_solver_set_lbfgs_capped(
         set_last_error("rgmin_solver_set_lbfgs_capped: null solver");
         return 1;
     }
-    let step = if max_atom > 0.0 {
-        crate::LbfgsStep::Capped { max_atom }
-    } else {
-        crate::LbfgsStep::Wolfe
+    let step = crate::LbfgsStep::Capped {
+        max_atom: if max_atom > 0.0 {
+            max_atom
+        } else {
+            crate::EON_MAX_MOVE
+        },
     };
     match unsafe { (*solver).solver.set_lbfgs_step(step) } {
         Ok(()) => 0,
@@ -1901,9 +1902,32 @@ pub unsafe extern "C" fn rgmin_solver_set_lbfgs_capped(
     }
 }
 
-/// Per-atom cap (eOn `maxAtomMotionAppliedV`). On Euclidean L-BFGS
-/// without a distance constraint set this selects the geometry step and
-/// ignores [`rgmin_solver_set_accept`]. With a set, L-BFGS keeps its
+/// Opt into the strong Wolfe line search on an L-BFGS session.
+/// The default session does not search a line. Returns 0, or 1 on a
+/// null session or a session that is not L-BFGS. ABI minor 34.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_lbfgs_wolfe(solver: *mut rgmin_solver_t) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_lbfgs_wolfe: null solver");
+        return 1;
+    }
+    match unsafe { (*solver).solver.set_lbfgs_step(crate::LbfgsStep::Wolfe) } {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            1
+        }
+    }
+}
+
+/// Per-atom cap (eOn `maxAtomMotionAppliedV`). While the L-BFGS step is
+/// the default cap, this replaces that cap. After
+/// [`rgmin_solver_set_lbfgs_wolfe`], and without a distance constraint
+/// set, this selects the geometry step and ignores
+/// [`rgmin_solver_set_accept`]. With a set, L-BFGS keeps its
 /// two-loop step under the acceptance mode and the cap scales each trial
 /// before it returns to the set.
 /// A nominal steepest trial at least 64 times the cap takes one

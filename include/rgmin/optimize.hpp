@@ -354,6 +354,8 @@ public:
     /// Capped L-BFGS. A non-positive cap restores the Wolfe search.
     /// Returns 0, or 1 when the session cannot run the capped step.
     int set_lbfgs_capped(double max_atom) { return rgmin_solver_set_lbfgs_capped(ptr_, max_atom); }
+    /// Strong Wolfe line search. The default session does not search a line.
+    int set_lbfgs_wolfe() { return rgmin_solver_set_lbfgs_wolfe(ptr_); }
     /// Copy the gradient behind the last step report. n is the session dimension.
     rgmin_status_t report_gradient(double* out, std::size_t n) const {
         return rgmin_solver_report_gradient(ptr_, out, n);

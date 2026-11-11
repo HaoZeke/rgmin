@@ -9,12 +9,9 @@
 //! through an `rgmin_solver_t` session (`create` / `step` / `free`)
 //! and the one-shot `rgmin_minimize` wrappers.
 //!
-//! The production unconstrained local method is [`Lbfgs`] with
-//! [`LineSearch::Wolfe`]: limited-memory BFGS (Nocedal-Wright 7.4) and
-//! the strong Wolfe conditions (algorithms 3.5 and 3.6). Hopping chains
-//! keep the pair history on that type. [`LbfgsStep::Capped`] is the
-//! opt-in atomistic step: no line search, a per-atom cap, and the
-//! Nocedal-Wright scale of the initial inverse Hessian.
+//! The production unconstrained local method is [`Lbfgs`] with the
+//! line-search-free cap ([`EON_MAX_MOVE`], Nocedal-Wright 7.4 and the
+//! scale 7.20). The strong Wolfe search is [`LbfgsStep::Wolfe`].
 //! [`minimize_lbfgs`] is the cold-start dispatch used by [`minimize_method`].
 
 #![warn(missing_docs)]
@@ -47,7 +44,7 @@ pub mod holonomic;
 pub mod hvp;
 /// Sella IRCTrustRegion / Gonzalez--Schlegel mass-weighted sphere.
 pub mod irc_trust;
-/// Persistent L-BFGS (Nocedal-Wright 7.4) with strong Wolfe.
+/// Persistent L-BFGS (Nocedal-Wright 7.4). The default step has no line search.
 pub mod lbfgs;
 /// L-BFGS quadratic model solved by HiGHS.
 #[cfg(feature = "highs")]
@@ -95,7 +92,7 @@ pub use hvp::{
     minimize_newton_cg, steihaug_cg, steihaug_pcg,
 };
 pub use irc_trust::{IrcTrust, sqrt_masses_3n};
-pub use lbfgs::{GradNorm, LBFGSB_FACTR, LBFGSB_FTOL, Lbfgs, LbfgsStep};
+pub use lbfgs::{EON_MAX_MOVE, GradNorm, LBFGSB_FACTR, LBFGSB_FTOL, Lbfgs, LbfgsStep};
 #[cfg(feature = "highs")]
 pub use lbfgs_qp::HighsStep;
 pub use linesearch::LineSearch;

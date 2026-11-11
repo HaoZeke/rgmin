@@ -192,9 +192,11 @@ fn relax(sys: &System, name: &str, audit: bool) -> Run {
     let mut solver = Solver::new(method, control, n);
     solver.set_stop_norm(StopNorm::MaxAtom);
     match name {
-        // A per-atom cap selects the capped geometry step and Accept::None
-        // a single clipped trial; neither reads the line search.
+        // Opt into the strong Wolfe search. The crate default has none.
         "lbfgs" => {
+            solver
+                .set_lbfgs_step(rgmin::LbfgsStep::Wolfe)
+                .expect("wolfe");
             solver.set_accept(Accept::Energy);
             solver.set_linesearch(LineSearch::Wolfe {
                 c1: C1,

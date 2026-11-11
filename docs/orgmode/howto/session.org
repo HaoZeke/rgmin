@@ -27,8 +27,10 @@ let report = solver.step(&obj, &mut x).unwrap();
 
 ~step~ is one outer iteration. ~step_hess~ / ~step_hess_fg~ take a
 host Hessian. ~forget~ drops pair history, conjugacy, and moments.
-~set_atom_maxmove~ is the eOn per-atom cap. On a Euclidean L-BFGS
-session it selects the geometry step and ignores ~set_accept~.
+~set_atom_maxmove~ is the eOn per-atom cap. While the L-BFGS step
+is the default cap, it replaces that cap. After ~LbfgsStep::Wolfe~,
+and with no distance constraints, it selects the geometry step and
+ignores ~set_accept~.
 A nominal steepest trial at least 64 times the cap takes one
 finite-difference curvature probe, clipped to the objective bounds.
 Ordinary starts use ~H0 = 0.1 I~ and a five-value nonmonotone window.
@@ -109,7 +111,7 @@ together is not asked twice.
 | ~exp_mu~ | Its energy scale after estimation, or none when it is not installed |
 | ~set_accept~ | ~none~ / ~energy~ / ~nonmonotone~ |
 | ~set_stop_norm~ | Replace ~Control::stop_norm~: ~two~ / ~max_atom~ / ~inf~ / ~rms~ |
-| ~set_lbfgs_step~ | ~Wolfe~ (default) or ~Capped { max_atom }~. Capped drops the line search on a Euclidean L-BFGS session, shortens the two-loop step to ~max_atom~, and keeps the Nocedal-Wright scale of ~H0~. It replaces the geometry step and does not read ~set_atom_maxmove~. A non-positive cap restores ~Wolfe~ |
+| ~set_lbfgs_step~ | ~Capped~ at 0.2 is the default. ~Wolfe~ opts into the strong Wolfe search. A non-positive cap restores 0.2. ~set_atom_maxmove~ replaces the cap while the step is capped |
 | ~set_atom_maxmove~ | Per-atom cap. Without a distance set, Euclidean L-BFGS takes the geometry step and ignores ~set_accept~, and ~set_exp~ supplies its initial inverse Hessian. With a set, every method scales its trial to the cap and keeps ~set_accept~. A capped L-BFGS step does not use this cap |
 | ~set_project_rigid~ | Drop rigid modes on isolated clusters |
 | ~set_extra_updates~ | Al-Baali extra L-BFGS pairs |

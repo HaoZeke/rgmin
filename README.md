@@ -28,11 +28,11 @@ is `rgmin`. Version macros are `RGMIN_H_MAJOR`, `RGMIN_H_MINOR`, and
 CPU f64 is wired now. A non-CPU tensor returns `RGMIN_UNSUPPORTED_DEVICE`
 so a CUDA path does not change the ABI.
 
-The production unconstrained local method is [`Lbfgs`] with strong Wolfe
-(Nocedal-Wright 7.4 and algorithms 3.5 / 3.6).
-`LbfgsStep::Capped` is the opt-in atomistic step: the line search is
-dropped, the two-loop step is shortened to a per-atom cap, and the
-initial inverse Hessian stays the Nocedal-Wright scale `(s·y)/(y·y)`.
+The production unconstrained local method is [`Lbfgs`] without a line
+search. The step is shortened so the longest atom move is at most 0.2,
+the eOn `max_move`. The initial inverse Hessian is the Nocedal-Wright
+scale `(s·y)/(y·y)`. A direction that is not descent clears the memory.
+`LbfgsStep::Wolfe` opts into the strong Wolfe search.
 anneal `WarmLbfgs` holds
 that type so hopping does not ship a second two-loop. Feature `highs` keeps the two-loop direction and projects it with
 HiGHS (`Q = I`) onto a box, trust region, or equalities.

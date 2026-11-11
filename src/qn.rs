@@ -84,7 +84,55 @@ where
     let mut solver = crate::lbfgs::Lbfgs::with_capacity(memory);
     solver.norm = crate::lbfgs::GradNorm::Euclidean;
     solver.gtol = control.gtol;
-    solver.minimize_objective(obj, init, control, linesearch)
+    if let LineSearch::Wolfe { c1, c2, maxiter } = linesearch {
+        solver.armijo = c1;
+        solver.curvature = c2;
+        solver.max_line_evals = maxiter.max(1);
+        solver.step = crate::lbfgs::LbfgsStep::Wolfe;
+        return solver.minimize_objective(obj, init, control, linesearch);
+    }
+    let init = init.into();
+    if init.len() != Objective::dim(obj) {
+        return Err(Error::Dim {
+            got: init.len(),
+            dim: Objective::dim(obj),
+        });
+    }
+    let init = obj.bounds().clip(init.view());
+    let mut steps = 0usize;
+    let mut last_g = Array1::zeros(init.len());
+    let (value, coords, _) = solver.minimize_watched(
+        init.view(),
+        control.maxiter,
+        |x| {
+            let (f, g) = obj.value_and_gradient(x);
+            last_g.clone_from(&g);
+            Some((f, g))
+        },
+        |it, _| {
+            steps = it;
+            true
+        },
+    );
+    if !value.is_finite() {
+        return Err(Error::Oracle {
+            what: "non-finite value or gradient",
+        });
+    }
+    let gnorm = l2(&last_g);
+    let steps = if gnorm < control.gtol {
+        steps
+    } else {
+        control.maxiter
+    };
+    Ok(Report {
+        value,
+        coords,
+        steps,
+        grad_norm: gnorm,
+        stop_norm: StopNorm::Two,
+        grad: None,
+    })
 }
 
 /// Inverse SR1 (Nocedal-Wright 6.24 / 6.25).

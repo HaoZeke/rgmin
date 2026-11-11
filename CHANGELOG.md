@@ -81,6 +81,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   With overflow trapped, the host stopped with the floating-point exception signal (SIGFPE); with the trap masked, the solver skipped the rotation.
   Every result that was finite before is unchanged.
 
+### Changed
+
+- L-BFGS no longer line-searches by default. The default step is the eOn cap: the longest atom moves at most `EON_MAX_MOVE` (0.2), the initial inverse Hessian is the Nocedal-Wright scale `(s·y)/(y·y)`, pairs are kept when the step is shortened, and a direction that is not descent clears the memory. `LbfgsStep::Wolfe` and `rgmin_solver_set_lbfgs_wolfe` opt into the strong Wolfe search. `rgmin_solver_set_lbfgs_capped` with a non-positive cap restores 0.2 rather than the line search. `abi_minor` 34.
+
 ### Added
 
 - `benches/ase_h2h.py` compares ASE 3.29 LBFGS, FIRE and BFGSLineSearch with rgmin capped L-BFGS, Wolfe L-BFGS, the geometry step and FIRE 2.0 on the same LJ7, LJ13, LJ38 and Morse Pt256 starts. Every arm uses fmax 0.01 and maxstep 0.2. The table is `benches/ase_h2h/results.md`.

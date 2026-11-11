@@ -26,6 +26,7 @@ fn session(capped: bool) -> Solver {
             .set_lbfgs_step(LbfgsStep::Capped { max_atom: 0.2 })
             .unwrap();
     } else {
+        solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
         solver.set_atom_maxmove(0.2);
     }
     solver
@@ -92,10 +93,25 @@ fn the_capped_step_is_refused_off_an_lbfgs_session() {
 }
 
 #[test]
-fn a_non_positive_cap_restores_the_wolfe_rule() {
+fn a_non_positive_cap_restores_the_eon_default() {
     let mut solver = session(true);
     solver
         .set_lbfgs_step(LbfgsStep::Capped { max_atom: 0.0 })
         .unwrap();
-    assert_eq!(solver.lbfgs_step(), LbfgsStep::Wolfe);
+    assert_eq!(solver.lbfgs_step(), LbfgsStep::default());
+}
+
+/// A session that never selects a step rule uses the eOn cap.
+#[test]
+fn the_default_session_moves_one_atom_by_the_eon_cap() {
+    let control = Control {
+        gtol: 1e-12,
+        ..Control::default()
+    };
+    let mut solver = Solver::new(Method::Lbfgs { memory: 8 }, control, 3);
+    assert_eq!(solver.lbfgs_step(), LbfgsStep::default());
+    let obj = Oracle::unbounded(3, quadratic);
+    let mut x = array![1.0, 0.0, 0.0];
+    solver.step(&obj, &mut x).unwrap();
+    assert!((x[0] - (1.0 - rgmin::EON_MAX_MOVE)).abs() <= 1e-12, "{x}");
 }

@@ -181,11 +181,17 @@ where
     };
     let mut solver = Solver::new(method, control, x0.len());
     match arm {
-        Arm::Wolfe => solver.set_accept(Accept::Energy),
+        Arm::Wolfe => {
+            solver.set_lbfgs_step(LbfgsStep::Wolfe).expect("wolfe");
+            solver.set_accept(Accept::Energy);
+        }
         Arm::Capped => solver
             .set_lbfgs_step(LbfgsStep::Capped { max_atom: MAXSTEP })
             .expect("capped step"),
-        Arm::Geometry => solver.set_atom_maxmove(MAXSTEP),
+        Arm::Geometry => {
+            solver.set_lbfgs_step(LbfgsStep::Wolfe).expect("wolfe");
+            solver.set_atom_maxmove(MAXSTEP);
+        }
         Arm::Fire2 => solver.set_maxmove(MAXSTEP),
     }
     let mut x = x0.clone();

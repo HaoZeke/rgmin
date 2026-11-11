@@ -31,7 +31,7 @@ python3 docs/figures/architecture/draw_hourglass.py
 
 ** Objects
 
-- =Lbfgs= :: Persistent pair history, two-loop recursion, strong Wolfe.
+- =Lbfgs= :: Persistent pair history, two-loop recursion, eOn cap by default. ~LbfgsStep::Wolfe~ opts into the line search.
   Hopping chains hold this type (anneal ~WarmLbfgs~ is a handle).
 - =Solver= :: Method-agnostic session. One =step= is one outer
   iteration. The C type =rgmin_solver_t= is a pointer to this.
@@ -43,7 +43,7 @@ python3 docs/figures/architecture/draw_hourglass.py
 - =rgmin_solver_create= / =rgmin_solver_step= / =rgmin_solver_free= ::
   The session half of the waist.
   Callbacks are arguments of each step, not stored on the handle.
-  =include/rgmin.h= sets =abi_major= 1, =abi_minor= 33 and =layout_revision= 4.
+  =include/rgmin.h= sets =abi_major= 1, =abi_minor= 34 and =layout_revision= 4.
   =rgmin_abi_compatible= checks the major version and the layout revision only.
 - =DistanceConstraints= :: Holonomic atom-pair distances for a session.
   SHAKE, LINCS and SETTLE return each trial to the set.

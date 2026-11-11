@@ -41,5 +41,5 @@ each accepted iterate so a screening predictor can stop the relaxation.
 ** Why this crate, not a copy
 
 A second two-loop in anneal drifted from the Nocedal-Wright 7.20 scale
-once already. The production method, the line search, and the pair
-history belong in one place.
+once already. The production method and the pair history belong in
+one place.

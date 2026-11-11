@@ -1,6 +1,6 @@
 //! `Lbfgs` with and without the relative-decrease stop `ftol`.
 //!
-//! Default `Lbfgs` (memory 8, strong Wolfe, `norminf(g) < 1e-6`) on the
+//! `Lbfgs` opted into the strong Wolfe search (memory 8, `norminf(g) < 1e-6`) on the
 //! extended Rosenbrock function from `(-1.2, 1, -1.2, 1, ...)` and on
 //! Lennard-Jones clusters from a jittered cubic grid, once with
 //! `ftol = 0` and once with `ftol = LBFGSB_FTOL`. Each row gives the
@@ -71,6 +71,7 @@ fn grid_start(atoms: usize) -> Array1<f64> {
 fn run(label: &str, x0: &Array1<f64>, fg: fn(ArrayView1<f64>) -> (f64, Array1<f64>)) {
     for ftol in [0.0, LBFGSB_FTOL] {
         let mut opt = Lbfgs::default();
+        opt.step = rgmin::LbfgsStep::Wolfe;
         opt.ftol = ftol;
         let (f, x, evals) = opt.minimize(x0.view(), BUDGET, |v| Some(fg(v)));
         let gmax = fg(x.view()).1.iter().fold(0.0_f64, |m, v| m.max(v.abs()));

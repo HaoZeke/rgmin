@@ -1,7 +1,13 @@
 //! The opt-in relative-decrease stop of `Lbfgs` (`ftol`, L-BFGS-B `factr`).
 
 use ndarray::{Array1, ArrayView1, array};
-use rgmin::{LBFGSB_FACTR, LBFGSB_FTOL, Lbfgs};
+use rgmin::{LBFGSB_FACTR, LBFGSB_FTOL, Lbfgs, LbfgsStep};
+
+fn wolfe() -> Lbfgs {
+    let mut opt = Lbfgs::default();
+    opt.step = LbfgsStep::Wolfe;
+    opt
+}
 
 /// SciPy 1.18.1 `scipy/optimize/_lbfgsb_py.py`, the `ftol` default of
 /// `_minimize_lbfgsb`, written there as `2.2204460492503131e-09`.
@@ -63,7 +69,7 @@ fn the_test_is_off_by_default() {
 /// step passes the relative-decrease test, and the hook sees that iterate.
 #[test]
 fn the_first_small_decrease_ends_the_relaxation() {
-    let mut opt = Lbfgs::default();
+    let mut opt = wolfe();
     opt.gtol = 0.0;
     opt.ftol = LBFGSB_FTOL;
     let (seen, (f, _, evals)) = watched(&mut opt);
@@ -83,7 +89,7 @@ fn the_first_small_decrease_ends_the_relaxation() {
         );
     }
 
-    let mut plain = Lbfgs::default();
+    let mut plain = wolfe();
     plain.gtol = 0.0;
     let (_, (f_plain, _, evals_plain)) = watched(&mut plain);
     eprintln!("gtol 0 run: {evals_plain} evaluations, f = {f_plain:e}");
@@ -93,11 +99,11 @@ fn the_first_small_decrease_ends_the_relaxation() {
 
 #[test]
 fn the_recognising_driver_stops_at_the_same_point() {
-    let mut opt = Lbfgs::default();
+    let mut opt = wolfe();
     opt.gtol = 0.0;
     opt.ftol = LBFGSB_FTOL;
     let (f, x, evals) = opt.minimize(start().view(), MAX_ITER, rosen);
-    let mut other = Lbfgs::default();
+    let mut other = wolfe();
     other.gtol = 0.0;
     other.ftol = LBFGSB_FTOL;
     let (f_r, x_r, evals_r, stand_in) =
@@ -109,9 +115,9 @@ fn the_recognising_driver_stops_at_the_same_point() {
 /// Under the default gradient stop the test can only end a run earlier.
 #[test]
 fn with_the_gradient_test_it_never_costs_evaluations() {
-    let mut plain = Lbfgs::default();
+    let mut plain = wolfe();
     let (_, _, evals_plain) = plain.minimize(start().view(), MAX_ITER, rosen);
-    let mut opt = Lbfgs::default();
+    let mut opt = wolfe();
     opt.ftol = LBFGSB_FTOL;
     let (_, _, evals) = opt.minimize(start().view(), MAX_ITER, rosen);
     eprintln!("gtol 1e-6: {evals_plain} evaluations alone, {evals} with ftol");

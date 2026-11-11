@@ -89,11 +89,11 @@ where
 }
 
 /// From inside the answered box every path must stay inside it, probe no
-/// runaway or NaN coordinate, and report a finite value. FIRE and
-/// `Accept::None` take one step with no line search to shorten it, so they
-/// may refuse with [`Error::Oracle`] instead. A session under the energy
-/// test may report [`Error::AcceptStalled`] once it refuses the steepest
-/// restart too.
+/// runaway or NaN coordinate, and report a finite value. FIRE,
+/// `Accept::None`, and the default L-BFGS session take one step with no
+/// line search to shorten it, so they may refuse with [`Error::Oracle`].
+/// A session that still line-searches under the energy test may report
+/// [`Error::AcceptStalled`] once it refuses the steepest restart too.
 fn refused_outside(value: f64, grad: Option<f64>) {
     let x0 = array![0.0, 0.0];
     let inside = |x: &Array1<f64>| x.iter().all(|v| v.abs() <= 2.0);
@@ -116,7 +116,11 @@ fn refused_outside(value: f64, grad: Option<f64>) {
                 Ok(r) => assert!(r.value.is_finite() && inside(&r.coords), "{what}: {r:?}"),
                 Err(e) => assert!(
                     match e {
-                        Error::Oracle { .. } => what.contains("fire") || what.ends_with("None"),
+                        Error::Oracle { .. } => {
+                            what.contains("fire")
+                                || what.ends_with("None")
+                                || what.contains("lbfgs session")
+                        }
                         Error::AcceptStalled { .. } => {
                             what.ends_with("Energy") || what.ends_with("Nonmonotone")
                         }

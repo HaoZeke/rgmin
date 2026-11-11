@@ -21,10 +21,10 @@ subject to the secant condition and symmetry, which lands on
 
 The update preserves positive definiteness exactly when the curvature
 pair condition y . s > 0 holds, which the strong Wolfe curvature
-condition guarantees at an accepted line-search point. That is the
-architectural reason the crate pairs ~Lbfgs~ with ~LineSearch::Wolfe~
-by default: the line search is not a convenience, it is the
-hypothesis of the update's soundness.
+condition guarantees at an accepted line-search point. The default
+step does not search the line. It stores a pair only when that dot
+is positive, and ~LbfgsStep::Wolfe~ is the opt-in search that
+enforces the condition before the step is accepted.
 
 * The two-loop recursion
 
@@ -59,11 +59,11 @@ detail behind four functions.
 
 * The geometry step
 
-A per-atom cap (~set_atom_maxmove~) on a Euclidean L-BFGS session
-selects this step and ignores ~set_accept~. A HiGHS feasible set
-and a non-Euclidean manifold stay on the two-loop path above.
-Uncapped L-BFGS is unchanged: the scalar seed, and the strong Wolfe
-search unless acceptance is ~none~.
+This step runs when the caller has opted into ~LbfgsStep::Wolfe~ and
+also set a per-atom cap (~set_atom_maxmove~). It ignores ~set_accept~.
+The default session step is the line-search-free cap, not this
+geometry step. A HiGHS feasible set and a non-Euclidean manifold
+stay on their own paths.
 
 The initial scale is selected from the size of the nominal steepest
 trial. A trial that exceeds the per-atom cap by at least 64 times
@@ -97,10 +97,10 @@ the preconditioned force and then the cap, is taken.
 
 * The capped step
 
-~LbfgsStep::Capped~ is the atomistic step, selected on an ~Lbfgs~
-value or by ~Solver::set_lbfgs_step~. The default
-~LbfgsStep::Wolfe~ is unchanged, and ~set_atom_maxmove~ still
-selects the geometry step above.
+~LbfgsStep::Capped~ is the default. ~LbfgsStep::Wolfe~ opts into
+the line search. ~set_atom_maxmove~ replaces the cap while the
+step is capped. The geometry step above runs when the caller has
+opted into ~Wolfe~ and also set a per-atom cap.
 
 The direction is the same two-loop. The initial inverse Hessian is
 the Nocedal-Wright scale ~(s · y) / (y · y)~ on the latest stored

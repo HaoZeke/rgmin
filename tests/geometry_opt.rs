@@ -39,6 +39,7 @@ fn control(gtol: f64) -> Control {
 fn geometry_lbfgs_reaches_the_bowl_with_a_per_atom_cap() {
     let obj = rgmin::Oracle::unbounded(3, bowl);
     let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 3);
+    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     solver.set_atom_maxmove(0.2);
     let mut x = array![1.2, -0.4, 0.7];
     let mut last = f64::MAX;
@@ -63,6 +64,7 @@ fn geometry_lbfgs_probes_only_severely_clipped_starts() {
             bowl(x)
         });
         let mut solver = Solver::new(Method::lbfgs(), control(1e-12), 3);
+        solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
         solver.set_atom_maxmove(0.2);
         let mut x = array![start, 0.0, 0.0];
         solver.step(&obj, &mut x).expect("step");
@@ -155,6 +157,7 @@ fn geometry_lbfgs_clips_the_finite_difference_probe() {
         seen: Mutex::new(Vec::new()),
     };
     let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 1);
+    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     solver.set_atom_maxmove(0.2);
     let mut x = array![0.0];
     solver.step(&obj, &mut x).expect("step");
@@ -176,6 +179,7 @@ fn geometry_lbfgs_resets_on_negative_curvature() {
         (-0.5 * y * y, array![-y])
     });
     let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 1);
+    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     assert!(solver.push_pair(array![0.1].view(), array![0.1].view()));
     assert_eq!(solver.pair_count(), 1);
     solver.set_atom_maxmove(0.2);
@@ -204,6 +208,7 @@ fn geometry_lbfgs_falls_back_after_ten_halvings() {
         (value, array![y])
     });
     let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 1);
+    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     solver.set_atom_maxmove(0.5);
     let mut x = array![1.0];
     solver.step(&obj, &mut x).expect("step");
@@ -222,6 +227,7 @@ fn geometry_lbfgs_falls_back_after_ten_halvings() {
 fn uncapped_lbfgs_still_takes_the_unit_newton_step() {
     let obj = rgmin::Oracle::unbounded(2, bowl);
     let mut solver = Solver::new(Method::lbfgs(), control(1e-12), 2);
+    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     let mut x = array![0.4, -0.2];
     let rep = solver.step(&obj, &mut x).expect("step");
     assert!(
