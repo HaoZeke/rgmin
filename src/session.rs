@@ -45,7 +45,7 @@ use crate::qn_step::QnStep;
 use crate::report::Report;
 use crate::rigid::{project_horizontal, project_out_rot_trans};
 use crate::step::{
-    cap_displacement_atom, finite, l2, max_atom_displacement, non_finite,
+    cap_displacement_atom, clip_mut, clip_owned, finite, l2, max_atom_displacement, non_finite,
     scale_displacement_to_atom_cap, scale_step, scale_step_atom,
 };
 use crate::trust::{
@@ -1320,6 +1320,12 @@ impl Solver {
         gold: &Array1<f64>,
         grad: &Array1<f64>,
     ) -> (Array1<f64>, Array1<f64>) {
+        // Euclidean transport is a copy, and with rigid motion left in
+        // nothing is removed afterwards. `s = x - old` and `y = g - g_old`
+        // are those copies.
+        if !self.project_rigid && self.manifold == ManifoldKind::Euclidean {
+            return (x - old, grad - gold);
+        }
         let s = self.transport_vec(old, x, &(x - old));
         let y = grad - &self.transport_vec(old, x, gold);
         (s, y)
@@ -1655,7 +1661,7 @@ impl Solver {
         self.check_manifold(x.len())?;
         let cached = self.same_last_x(x);
         if !cached {
-            *x = obj.bounds().clip(x.view());
+            clip_mut(obj.bounds(), x);
         }
         let (value, raw_grad) = if cached {
             (self.last_value, self.last_grad.clone())
@@ -1860,7 +1866,7 @@ impl Solver {
                 what: "the capped step is zero",
             });
         }
-        let trial = obj.bounds().clip((x + step).view());
+        let trial = clip_owned(obj.bounds(), x + step);
         let taken = max_atom_displacement(&(&trial - x));
         if !taken.is_finite() || taken <= 0.0 {
             return Err(Error::OffManifold {
@@ -1938,7 +1944,7 @@ impl Solver {
         }
         let u = &force / norm;
         let raw = x + &(EON_FINITE_DIFFERENCE * &u);
-        let probe = obj.bounds().clip(raw.view());
+        let probe = clip_owned(obj.bounds(), raw);
         let along = (&probe - x).dot(&u);
         if !(along.is_finite() && along > 0.0) {
             return EonSeed::Scale(EON_INVERSE_CURVATURE);
@@ -2163,7 +2169,7 @@ impl Solver {
         let old = x.clone();
         let gold = grad;
         *x = trial;
-        let grad = self.horizontal_grad(x, &tgrad);
+        let grad = self.horizontal_owned(x, tgrad);
         let s = &*x - &old;
         let y = &grad - &gold;
         if let Inner::Lbfgs(solver) = &mut self.inner {
@@ -2240,7 +2246,7 @@ impl Solver {
                 // 0.01 is the eOn probe length. Clip before the evaluation:
                 // the raw point can lie outside the objective box.
                 let raw = &*x + &(0.01 * &unit);
-                let probe = obj.bounds().clip(raw.view());
+                let probe = clip_owned(obj.bounds(), raw);
                 let along = (&probe - &*x).dot(&unit);
                 let curvature = if along > 0.0 && along.is_finite() {
                     let (_efd, gfd) = obj.value_and_gradient(probe.view());
@@ -2307,7 +2313,7 @@ impl Solver {
         let mut tval = value;
         let mut tgrad = grad.clone();
         for _ in 0..10 {
-            trial = obj.bounds().clip((&*x + alpha * &direction).view());
+            trial = clip_owned(obj.bounds(), &*x + alpha * &direction);
             let ev = obj.value_and_gradient(trial.view());
             tval = ev.0;
             tgrad = ev.1;
@@ -2322,7 +2328,7 @@ impl Solver {
                 solver.forget();
             }
             let sd = cap_displacement_atom(&self.geometry_scaled_force(&force, 0.1), cap);
-            trial = obj.bounds().clip((&*x + &sd).view());
+            trial = clip_owned(obj.bounds(), &*x + &sd);
             let ev = obj.value_and_gradient(trial.view());
             tval = ev.0;
             tgrad = ev.1;
@@ -2343,7 +2349,7 @@ impl Solver {
         let old = x.clone();
         let gold = grad.clone();
         *x = trial;
-        grad = self.horizontal_grad(x, &tgrad);
+        grad = self.horizontal_owned(x, tgrad);
         let s = &*x - &old;
         let y = &grad - &gold;
         if let Inner::Lbfgs(solver) = &mut self.inner {
@@ -2437,14 +2443,14 @@ impl Solver {
                 .atom_maxmove
                 .unwrap_or_else(|| self.control.istep.max(RADIUS_START));
             let step = scale_displacement_to_atom_cap(&mode, cap);
-            let trial = obj.bounds().clip((&*x + &step).view());
+            let trial = clip_owned(obj.bounds(), &*x + &step);
             let (v, g) = obj.value_and_gradient(trial.view());
             if !v.is_finite() || g.iter().any(|c| !c.is_finite()) {
                 return;
             }
             *x = trial;
             *value = v;
-            *grad = self.horizontal_grad(x, &g);
+            *grad = self.horizontal_owned(x, g);
             self.saddle_kicks = self.saddle_kicks.saturating_add(1);
             if let Inner::Dogleg { radius } = &mut self.inner {
                 *radius = self.control.istep.max(RADIUS_START);
@@ -2496,14 +2502,14 @@ impl Solver {
         };
         let cached = self.same_last_x(x);
         if !cached {
-            *x = obj.bounds().clip(x.view());
+            clip_mut(obj.bounds(), x);
         }
         let (mut value, mut grad) = if cached {
             (self.last_value, self.last_grad.clone())
         } else {
             obj.value_and_gradient(x.view())
         };
-        grad = self.horizontal_grad(x, &grad);
+        grad = self.horizontal_owned(x, grad);
         let gnorm = self.stationarity_norm(x, &grad);
         if gnorm < self.control.gtol {
             return self.report_or_escape(obj, x, value, grad);
@@ -2566,7 +2572,7 @@ impl Solver {
                 value = nval;
                 grad = ngrad;
             }
-            grad = self.horizontal_grad(x, &grad);
+            grad = self.horizontal_owned(x, grad);
             self.remember(x, value, &grad);
             let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
                 let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
@@ -2615,7 +2621,7 @@ impl Solver {
             value = nval;
             grad = ngrad;
         }
-        grad = self.horizontal_grad(x, &grad);
+        grad = self.horizontal_owned(x, grad);
         self.remember(x, value, &grad);
         let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
             let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
@@ -2699,7 +2705,7 @@ impl Solver {
             } else if let Some(cap) = self.control.maxmove {
                 scale_step(x, &mut trial, cap);
             }
-            trial = obj.bounds().clip(trial.view());
+            trial = clip_owned(obj.bounds(), trial);
             let p = &trial - &*x;
             (trial, p)
         };
@@ -2756,7 +2762,7 @@ impl Solver {
         self.check_manifold(x.len())?;
         let cached = self.same_last_x(x);
         if !cached {
-            *x = obj.bounds().clip(x.view());
+            clip_mut(obj.bounds(), x);
         }
 
         if let Inner::Pso { .. } = &self.inner {
@@ -2863,7 +2869,13 @@ impl Solver {
         }
 
         let start = x.clone();
-        let gold = grad.clone();
+        // The origin gradient is the secant of an L-BFGS step. Other
+        // Euclidean steps do not read it.
+        let gold = if matches!(self.inner, Inner::Lbfgs(_)) {
+            Some(grad.clone())
+        } else {
+            None
+        };
         let mut refused = false;
         match &mut self.inner {
             Inner::Lbfgs(solver) => {
@@ -3223,7 +3235,7 @@ impl Solver {
                             };
                             *x = point;
                         } else {
-                            *x = obj.bounds().clip((&*x + &correction).view());
+                            *x = clip_owned(obj.bounds(), &*x + &correction);
                         }
                         let ev = obj.value_and_gradient(x.view());
                         if !finite(ev.0, ev.1.view()) {
@@ -3282,7 +3294,7 @@ impl Solver {
                     } else if let Some(cap) = cap {
                         scale_step(x, &mut trial, cap);
                     }
-                    obj.bounds().clip(trial.view())
+                    clip_owned(obj.bounds(), trial)
                 };
                 let moved = free.is_none_or(|free| trial != free);
                 if matches!(state.kind, FireKind::V2) && state.dt > 0.0 && moved {
@@ -3303,16 +3315,20 @@ impl Solver {
                 *x = trial;
                 value = ev.0;
                 grad = ev.1;
-                let mut raw_new = grad.mapv(|g| -g);
-                project_box_tangent(obj.bounds(), x, &mut raw_new);
                 project_box_tangent(obj.bounds(), x, &mut state.vel);
-                if self.exp.is_some() {
-                    let mut steep_new = metric_vector(&self.exp, &raw_new);
-                    project_box_tangent(obj.bounds(), x, &mut steep_new);
-                    let mix_new = fire_mix(&self.exp, &state.vel, &raw_new, &steep_new);
-                    fire_after_v1_metric(state, &raw_new, &steep_new, mix_new);
-                } else {
-                    fire_after_v1(state, &raw_new);
+                // FIRE 2.0 mixes before the step. The post-step force is
+                // read only by FIRE 1.0.
+                if matches!(state.kind, FireKind::V1) {
+                    let mut raw_new = grad.mapv(|g| -g);
+                    project_box_tangent(obj.bounds(), x, &mut raw_new);
+                    if self.exp.is_some() {
+                        let mut steep_new = metric_vector(&self.exp, &raw_new);
+                        project_box_tangent(obj.bounds(), x, &mut steep_new);
+                        let mix_new = fire_mix(&self.exp, &state.vel, &raw_new, &steep_new);
+                        fire_after_v1_metric(state, &raw_new, &steep_new, mix_new);
+                    } else {
+                        fire_after_v1(state, &raw_new);
+                    }
                 }
             }
             Inner::Bb { prev_s, prev_y } => {
@@ -3375,12 +3391,13 @@ impl Solver {
                 grad = ev.1;
             }
         }
-        grad = self.horizontal_grad(x, &grad);
+        grad = self.horizontal_owned(x, grad);
 
         let pair = if matches!(self.inner, Inner::Lbfgs(_))
             && x.iter().zip(start.iter()).any(|(a, b)| a != b)
         {
-            let (s, y) = self.lbfgs_sy(&start, x, &gold, &grad);
+            let gold = gold.as_ref().expect("L-BFGS keeps the gradient");
+            let (s, y) = self.lbfgs_sy(&start, x, gold, &grad);
             Some((s, y, l2(&grad)))
         } else {
             None

@@ -7,7 +7,7 @@ use crate::control::{Control, StopNorm};
 use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
 use crate::report::Report;
-use crate::step::{l2, next_istep, start_answer, take_step};
+use crate::step::{clip_owned, l2, next_istep, start_answer, take_step};
 
 const CURVATURE: f64 = 1e-12;
 const SR1_SKIP: f64 = 1e-8;
@@ -98,7 +98,7 @@ where
             dim: Objective::dim(obj),
         });
     }
-    let init = obj.bounds().clip(init.view());
+    let init = clip_owned(obj.bounds(), init);
     let mut steps = 0usize;
     let mut last_g = Array1::zeros(init.len());
     let (value, coords, _) = solver.minimize_watched(
@@ -281,7 +281,7 @@ where
             dim: Objective::dim(obj),
         });
     }
-    Ok(obj.bounds().clip(pos.view()))
+    Ok(clip_owned(obj.bounds(), pos))
 }
 
 fn done(value: f64, coords: Array1<f64>, steps: usize, grad_norm: f64) -> Report {

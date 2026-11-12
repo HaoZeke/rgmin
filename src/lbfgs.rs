@@ -241,6 +241,10 @@ struct Pair {
     s: Array1<f64>,
     y: Array1<f64>,
     rho: f64,
+    /// `s · y` at the moment the pair was stored.
+    sy: f64,
+    /// `y · y` at the moment the pair was stored.
+    yy: f64,
 }
 
 /// Curvature saved by [`Lbfgs::curvature`].
@@ -504,13 +508,19 @@ impl Lbfgs {
         self.have_curvature = false;
     }
 
-    fn push_buf_txn(&mut self, s: Array1<f64>, y: Array1<f64>, rho: f64, txn: &mut Txn) {
+    fn push_buf_txn(&mut self, s: Array1<f64>, y: Array1<f64>, sy: f64, yy: f64, txn: &mut Txn) {
         let cap = self.max_pairs.max(1);
         self.max_pairs = cap;
         while self.memory.len() >= cap {
             txn.trimmed.push(self.memory.remove(0));
         }
-        self.memory.push(Pair { s, y, rho });
+        self.memory.push(Pair {
+            s,
+            y,
+            rho: 1.0 / sy,
+            sy,
+            yy,
+        });
         txn.pushed += 1;
         self.stored = true;
     }
@@ -747,10 +757,13 @@ impl Lbfgs {
         if !sy.is_finite() || sy.abs() < 1e-30 || sy <= 0.0 {
             return;
         }
+        let yy = y.dot(&y);
         self.memory.push(Pair {
             s,
             y,
             rho: 1.0 / sy,
+            sy,
+            yy,
         });
         self.trim();
     }
@@ -764,11 +777,10 @@ impl Lbfgs {
             q *= h0;
             return q;
         }
-        if let Some(p) = self.memory.last() {
-            let yy = p.y.dot(&p.y);
-            if yy > 0.0 {
-                q *= p.s.dot(&p.y) / yy;
-            }
+        if let Some(p) = self.memory.last()
+            && p.yy > 0.0
+        {
+            q *= p.sy / p.yy;
         }
         q
     }
@@ -861,10 +873,13 @@ impl Lbfgs {
             self.stored = false;
             return false;
         }
+        let yy = y.dot(&y);
         self.memory.push(Pair {
             s,
             y,
             rho: 1.0 / sy,
+            sy,
+            yy,
         });
         self.trim();
         self.stored = true;
@@ -928,9 +943,8 @@ impl Lbfgs {
             return EonSeed::Scale(fixed);
         }
         if let Some(pair) = self.memory.last() {
-            let yy = pair.y.dot(&pair.y);
-            let h0 = if yy > 0.0 {
-                pair.s.dot(&pair.y) / yy
+            let h0 = if pair.yy > 0.0 {
+                pair.sy / pair.yy
             } else {
                 -1.0
             };
@@ -1141,7 +1155,7 @@ impl Lbfgs {
             (self.last_sy, self.last_yy, self.have_curvature) = note;
             return;
         }
-        self.push_buf_txn(s, y, 1.0 / sy, txn);
+        self.push_buf_txn(s, y, sy, yy, txn);
     }
 
     /// Two-loop direction, restarted along the force when it is not descent.
@@ -1872,7 +1886,7 @@ impl Lbfgs {
                 dim: Objective::dim(obj),
             });
         }
-        pos = obj.bounds().clip(pos.view());
+        pos = crate::step::clip_owned(obj.bounds(), pos);
         let (mut value, mut grad) = start_answer(obj, &pos)?;
         let mut istep = control.istep;
 

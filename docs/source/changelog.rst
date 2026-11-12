@@ -7,6 +7,13 @@ Unreleased
 
 ~~~~~~~~~~
 
+An interior point skips the bounds clip, and a Euclidean session keeps the gradient it already owns.
+Polak-Ribiere forms ``g · (g - g_old)`` in the dot product.
+A backtracking line search keeps its lowest trial without copying that vector.
+FIRE 2.0 does not build the post-step force, which only FIRE 1.0 mixes.
+L-BFGS reuses the curvature dots stored with each pair.
+The Morse-chain iterates are unchanged.
+
 ``Lbfgs::ftol`` is the opt-in relative-decrease stop of L-BFGS-B, and its default of zero turns it off.
 A line-search step from ``f_k`` to ``f_{k+1}`` ends ``minimize``, ``minimize_watched`` and ``minimize_recognized`` when ``f_k - f_{k+1} <= ftol * max(|f_k|, |f_{k+1}|, 1)``.
 ``LBFGSB_FTOL`` is the SciPy default, and :doc:`reference/sota` measures what it saves.

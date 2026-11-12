@@ -9,7 +9,7 @@ use ndarray::Array1;
 use crate::control::Control;
 use crate::manifold::{Manifold, ManifoldKind};
 use crate::step::{
-    cap_displacement_atom, finite, l2, max_atom_motion, scale_step, scale_step_atom,
+    cap_displacement_atom, clip_owned, finite, l2, max_atom_motion, scale_step, scale_step_atom,
 };
 
 pub(crate) const ENERGY_RISE: f64 = 1.0e-8;
@@ -52,7 +52,7 @@ where
 {
     let motion = |trial: &Array1<f64>| match atom_maxmove {
         Some(_) => max_atom_motion(pos, trial),
-        None => l2(&(trial - pos)),
+        None => crate::vecops::nrm2_diff(trial.view(), pos.view()),
     };
     let mut step = match (atom_maxmove, maxmove) {
         (Some(cap), _) => cap_displacement_atom(step, cap),
@@ -123,7 +123,7 @@ where
     } else if let Some(cap) = control.maxmove {
         scale_step(pos, &mut trial, cap);
     }
-    Some(obj.bounds().clip(trial.view()))
+    Some(clip_owned(obj.bounds(), trial))
 }
 
 pub(crate) fn push_energy(hist: &mut VecDeque<f64>, energy: f64) {

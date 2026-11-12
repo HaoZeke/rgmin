@@ -848,7 +848,7 @@ impl Solver {
         let caps = self.caps();
         let reach = match (caps.atom, caps.euclid) {
             (Some(cap), _) => Some((cap, max_atom_motion(x, &trial))),
-            (None, Some(cap)) => Some((cap, l2(&(&trial - x)))),
+            (None, Some(cap)) => Some((cap, crate::vecops::nrm2_diff(trial.view(), x.view()))),
             (None, None) => None,
         };
         if let Some((cap, length)) = reach.filter(|&(cap, length)| length > cap) {
