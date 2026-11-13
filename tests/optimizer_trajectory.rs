@@ -23,7 +23,9 @@ fn morse_chain(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
             r2 += diff[a] * diff[a];
         }
         let r = r2.sqrt();
-        if !(r > 0.0) {
+        // `!(r > 0.0)` is true for a NaN length as well as a non-positive
+        // one. A plain `r <= 0.0` would let a NaN through.
+        if !r.is_finite() || r <= 0.0 {
             continue;
         }
         let ex = (-ALPHA * (r - R0)).exp();
