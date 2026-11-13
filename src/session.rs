@@ -1761,17 +1761,12 @@ impl Solver {
     /// kinds keep their retraction search. A distance-constraint set and
     /// HiGHS keep their own projections.
     fn use_capped_lbfgs(&self) -> bool {
-        if self.lbfgs_step().capped_limit().is_none()
-            || !matches!(self.manifold, ManifoldKind::Euclidean)
-            || self.constraints.is_some()
-        {
-            return false;
-        }
+        let capped = self.lbfgs_step().capped_limit().is_some()
+            && matches!(self.manifold, ManifoldKind::Euclidean)
+            && self.constraints.is_none();
         #[cfg(feature = "highs")]
-        if self.highs {
-            return false;
-        }
-        true
+        let capped = capped && !self.highs;
+        capped
     }
 
     fn use_geometry_lbfgs(&self) -> bool {
