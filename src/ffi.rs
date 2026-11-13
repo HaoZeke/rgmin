@@ -23,8 +23,9 @@ use crate::precon::{ExpParams, ExpState, Neighbours};
 use crate::{
     Accept, ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind,
     Error, HessianObjective, HessianOracle, HessianVector, HvpOracle, LineSearch, ManifoldKind,
-    Method, NewtonKind, Oracle, QnStep, Restart, ScgParams, Solver, StopNorm, lowest_mode,
-    minimize_method, minimize_method_hess, minimize_method_hvp, minimize_scg, minimize_scg_exact,
+    Method, NewtonKind, Oracle, QnStep, Restart, ScgParams, SearchStep, Solver, StopNorm,
+    SuppliedSearch, lowest_mode, minimize_method, minimize_method_hess, minimize_method_hvp,
+    minimize_scg, minimize_scg_exact,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
@@ -74,7 +75,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 36;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 37;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -3312,6 +3313,135 @@ pub unsafe extern "C" fn rgmin_solver_report_gradient(
     unsafe { slice::from_raw_parts_mut(out, n) }
         .copy_from_slice(grad.as_slice().expect("contiguous"));
     rgmin_status_t::RGMIN_SUCCESS
+}
+
+/// Caller-driven line search. It does not call an objective.
+pub struct rgmin_linesearch {
+    search: SuppliedSearch,
+    n: usize,
+}
+
+fn linesearch_kind(
+    kind: i32,
+    c1: f64,
+    c2: f64,
+    beta: f64,
+    maxiter: usize,
+    tol: f64,
+) -> Option<LineSearch> {
+    match kind {
+        0 => Some(LineSearch::Brent { maxiter, tol }),
+        1 => Some(LineSearch::Backtracking {
+            c: c1,
+            beta,
+            maxiter,
+        }),
+        2 => Some(LineSearch::Goldstein {
+            c: c1,
+            beta,
+            maxiter,
+        }),
+        3 => Some(LineSearch::Wolfe { c1, c2, maxiter }),
+        _ => None,
+    }
+}
+
+/// Start a line search. The first [`rgmin_linesearch`] call supplies `f` and `g` at `x`.
+///
+/// # Safety
+/// `x` and `dir` point at `n` doubles. The returned pointer is freed with
+/// [`rgmin_linesearch_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_linesearch_create(
+    kind: i32,
+    x: *const f64,
+    dir: *const f64,
+    n: usize,
+    istep: f64,
+    c1: f64,
+    c2: f64,
+    beta: f64,
+    maxiter: usize,
+    tol: f64,
+) -> *mut rgmin_linesearch {
+    if x.is_null() || dir.is_null() || n == 0 {
+        set_last_error("rgmin_linesearch_create: null pointer or n = 0");
+        return std::ptr::null_mut();
+    }
+    let Some(rule) = linesearch_kind(kind, c1, c2, beta, maxiter, tol) else {
+        set_last_error("rgmin_linesearch_create: unknown kind");
+        return std::ptr::null_mut();
+    };
+    let x = unsafe { slice::from_raw_parts(x, n) };
+    let dir = unsafe { slice::from_raw_parts(dir, n) };
+    let search = SuppliedSearch::new(rule, ArrayView1::from(x), ArrayView1::from(dir), istep);
+    Box::into_raw(Box::new(rgmin_linesearch { search, n }))
+}
+
+/// Advance with the caller's energy and gradient. Never calls an objective.
+///
+/// # Safety
+/// `search` comes from [`rgmin_linesearch_create`]. `g` and `x_out` have the
+/// search length. `alpha`, `value`, and `need_eval` are writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_linesearch(
+    search: *mut rgmin_linesearch,
+    f: f64,
+    g: *const f64,
+    x_out: *mut f64,
+    alpha: *mut f64,
+    value: *mut f64,
+    need_eval: *mut i32,
+) -> i32 {
+    if search.is_null()
+        || g.is_null()
+        || x_out.is_null()
+        || alpha.is_null()
+        || value.is_null()
+        || need_eval.is_null()
+    {
+        set_last_error("rgmin_linesearch: null argument");
+        return 1;
+    }
+    let n = unsafe { (*search).n };
+    let grad = unsafe { slice::from_raw_parts(g, n) };
+    let step = unsafe { (*search).search.offer(f, ArrayView1::from(grad)) };
+    let out = unsafe { slice::from_raw_parts_mut(x_out, n) };
+    match step {
+        SearchStep::Evaluate { alpha: a, x } => {
+            out.copy_from_slice(x.as_slice().expect("contiguous"));
+            unsafe {
+                *alpha = a;
+                *value = 0.0;
+                *need_eval = 1;
+            }
+        }
+        SearchStep::Accepted {
+            x,
+            value: v,
+            alpha: a,
+        } => {
+            out.copy_from_slice(x.as_slice().expect("contiguous"));
+            unsafe {
+                *alpha = a;
+                *value = v;
+                *need_eval = 0;
+            }
+        }
+    }
+    0
+}
+
+/// Release a search from [`rgmin_linesearch_create`].
+///
+/// # Safety
+/// `search` is null or a pointer from [`rgmin_linesearch_create`] that has
+/// not been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_linesearch_free(search: *mut rgmin_linesearch) {
+    if !search.is_null() {
+        drop(unsafe { Box::from_raw(search) });
+    }
 }
 
 /// Two-loop `d = -H g`. No evaluation and no push.

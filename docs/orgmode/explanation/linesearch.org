@@ -92,3 +92,15 @@ also fails reports the position unmoved, and the caller's stall
 machinery owns what happens next. The test
 ~accept_energy_uphill_does_not_take_ten_steepest_retries~ pins the
 oracle count of that path.
+
+* A search the caller evaluates
+
+~SuppliedSearch~ takes the energy and gradient the caller already
+holds. ~offer~ either names the next trial or returns the accepted
+step. It does not call an objective, so a host that counts its own
+evaluations (the C entry ~rgmin_linesearch~, the Python class
+~rgmin.LineSearch~) does not gain a second call inside
+~rgmin_solver_step~. The trials are the ones ~LineSearch::search~
+makes on the same answers. ~examples/tutorial_linesearch.rs~ is that
+comparison, and ~tests/supplied_linesearch.rs~ checks Wolfe,
+backtracking, Goldstein and Brent one trial at a time.

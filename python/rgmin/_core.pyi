@@ -25,4 +25,20 @@ class Session:
         callback: Callable[[list[float]], tuple[float, list[float]]],
     ) -> tuple[list[float], float, float]: ...
 
+class LineSearch:
+    def __init__(
+        self,
+        kind: str,
+        x: list[float],
+        direction: list[float],
+        *,
+        istep: float = 1.0,
+        c1: float = 1e-4,
+        c2: float = 0.9,
+        beta: float = 0.5,
+        maxiter: int = 40,
+        tol: float = 1e-10,
+    ) -> None: ...
+    def offer(self, f: float, gradient: list[float]) -> tuple[list[float], float, float, bool]: ...
+
 version: str

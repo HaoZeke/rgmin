@@ -110,7 +110,7 @@ pub use lbfgs::{
 #[cfg(feature = "highs")]
 pub use lbfgs_qp::HighsStep;
 pub use lindh::{LindhSpec, apply_inverse};
-pub use linesearch::LineSearch;
+pub use linesearch::{LineSearch, SearchStep, SuppliedSearch};
 pub use lowest_mode::{
     ApplyHessian, DENSE_EIGEN_CUTOFF, EigenParams, EigensolverKind, LowestMode, lowest_eigenpair,
     lowest_mode,

@@ -4,8 +4,10 @@ use ndarray::{Array1, ArrayView1};
 
 /// Accept conditions (Armijo, Wolfe, Goldstein).
 pub mod conditions;
+mod supplied;
 mod zoom;
 
+pub use supplied::{SearchStep, SuppliedSearch};
 pub use zoom::zoom;
 
 /// How to pick α such that `x + α d` decreases `f`.

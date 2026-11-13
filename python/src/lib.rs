@@ -12,7 +12,8 @@ use ndarray::{Array1, ArrayView1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rgmin::{
-    Accept, Control, FireConfig, FireKind, LbfgsStep, LineSearch, Method, Oracle, Solver, StopNorm,
+    Accept, Control, FireConfig, FireKind, LbfgsStep, LineSearch, Method, Oracle, SearchStep,
+    Solver, StopNorm, SuppliedSearch,
 };
 
 #[pyclass]
@@ -170,6 +171,72 @@ impl Session {
     }
 }
 
+/// A line search that takes the caller's energy and gradient.
+///
+/// The first `offer` is the energy and gradient at `x`. Each later
+/// `offer` is the energy and gradient at the trial the previous call
+/// returned. The search does not call an objective.
+#[pyclass(name = "LineSearch")]
+struct LineSearchPy {
+    search: SuppliedSearch,
+}
+
+#[pymethods]
+impl LineSearchPy {
+    /// `kind` is `brent`, `backtracking`, `goldstein`, or `wolfe`.
+    #[new]
+    #[pyo3(signature = (kind, x, direction, *, istep=1.0, c1=1e-4, c2=0.9, beta=0.5, maxiter=40, tol=1e-10))]
+    fn new(
+        kind: &str,
+        x: Vec<f64>,
+        direction: Vec<f64>,
+        istep: f64,
+        c1: f64,
+        c2: f64,
+        beta: f64,
+        maxiter: usize,
+        tol: f64,
+    ) -> PyResult<Self> {
+        if x.len() != direction.len() || x.is_empty() {
+            return Err(PyValueError::new_err(
+                "x and direction must have the same positive length",
+            ));
+        }
+        let rule = match kind {
+            "brent" => LineSearch::Brent { maxiter, tol },
+            "backtracking" => LineSearch::Backtracking {
+                c: c1,
+                beta,
+                maxiter,
+            },
+            "goldstein" => LineSearch::Goldstein {
+                c: c1,
+                beta,
+                maxiter,
+            },
+            "wolfe" => LineSearch::Wolfe { c1, c2, maxiter },
+            _ => return Err(PyValueError::new_err(format!("unknown line search {kind}"))),
+        };
+        Ok(Self {
+            search: SuppliedSearch::new(
+                rule,
+                ArrayView1::from(x.as_slice()),
+                ArrayView1::from(direction.as_slice()),
+                istep,
+            ),
+        })
+    }
+
+    /// Return `(x, alpha, value, done)`. `done` is false when `x` is the next trial.
+    fn offer(&mut self, f: f64, gradient: Vec<f64>) -> PyResult<(Vec<f64>, f64, f64, bool)> {
+        let step = self.search.offer(f, ArrayView1::from(gradient.as_slice()));
+        Ok(match step {
+            SearchStep::Evaluate { alpha, x } => (x.to_vec(), alpha, 0.0, false),
+            SearchStep::Accepted { x, value, alpha } => (x.to_vec(), alpha, value, true),
+        })
+    }
+}
+
 fn call_objective(callback: &PyObject, x: ArrayView1<f64>) -> PyResult<(f64, Array1<f64>)> {
     Python::with_gil(|py| {
         let coords: Vec<f64> = x.iter().copied().collect();
@@ -189,6 +256,7 @@ fn call_objective(callback: &PyObject, x: ArrayView1<f64>) -> PyResult<(f64, Arr
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Session>()?;
+    m.add_class::<LineSearchPy>()?;
     m.add("version", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from typing import Any
 
+from rgmin._core import LineSearch as LineSearch
 from rgmin._core import Session as Session
 
 __version__: str

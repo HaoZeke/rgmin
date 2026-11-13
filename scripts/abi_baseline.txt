@@ -9,6 +9,8 @@ rgmin_constraints_set_settle
 rgmin_constraints_set_solver
 rgmin_constraints_set_tolerance
 rgmin_last_constraint_error
+rgmin_linesearch
+rgmin_linesearch_free
 rgmin_lowest_eigenpair
 rgmin_method_from_name
 rgmin_minimize

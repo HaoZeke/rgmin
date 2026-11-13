@@ -61,7 +61,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 36
+#define RGMIN_ABI_VERSION_MINOR 37
 #define RGMIN_ABI_LAYOUT_REVISION 4
 
 /** Solver selector. \c RGMIN_LBFGS is the production unconstrained method. */
@@ -617,6 +617,46 @@ size_t rgmin_solver_pair_count(const rgmin_solver_t *solver);
  *  first step. ABI minor 29. */
 rgmin_status_t rgmin_solver_report_gradient(const rgmin_solver_t *solver,
                                             double *out, size_t n);
+/** Line-search rule for \ref rgmin_linesearch. Integers are stable. */
+typedef enum rgmin_linesearch_kind_t {
+    /** Brent on a golden-section bracket. */
+    RGMIN_LINESEARCH_BRENT = 0,
+    /** Armijo backtracking. */
+    RGMIN_LINESEARCH_BACKTRACKING = 1,
+    /** Goldstein two-sided condition. */
+    RGMIN_LINESEARCH_GOLDSTEIN = 2,
+    /** Strong Wolfe with zoom. */
+    RGMIN_LINESEARCH_WOLFE = 3
+} rgmin_linesearch_kind_t;
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(rgmin_linesearch_kind_t) == sizeof(int32_t),
+               "rgmin_linesearch_kind_t is i32-wide; do not build this header with -fshort-enums");
+#endif
+
+/** Opaque caller-driven line search. The search does not call an objective. */
+typedef struct rgmin_linesearch rgmin_linesearch_t;
+
+/** Start a line search from `x` along `dir`.
+ *  The first \ref rgmin_linesearch call supplies the energy and gradient
+ *  at `x`. Later calls supply them at the trial the previous call wrote.
+ *  Null on a null pointer, a zero length, or an unknown kind. */
+rgmin_linesearch_t *rgmin_linesearch_create(rgmin_linesearch_kind_t kind,
+                                            const double *x, const double *dir,
+                                            size_t n, double istep, double c1,
+                                            double c2, double beta, size_t maxiter,
+                                            double tol);
+/** Advance the search with the caller's energy and gradient.
+ *  Returns 0 and sets `*need_eval` to 1 when `x_out` is the next trial,
+ *  or to 0 when `x_out` is the accepted point (`*value` and `*alpha` are
+ *  then the accepted energy and absolute step). Returns 1 on a null
+ *  argument or a gradient whose length is not the search dimension.
+ *  The search never calls an objective. */
+int32_t rgmin_linesearch(rgmin_linesearch_t *search, double f, const double *g,
+                         double *x_out, double *alpha, double *value,
+                         int32_t *need_eval);
+/** Release a search from \ref rgmin_linesearch_create. Null is a no-op. */
+void rgmin_linesearch_free(rgmin_linesearch_t *search);
+
 /** Two-loop `d = -H g` with no evaluation and no push. Empty memory
  *  is steepest descent (`-g`). Writes \a n entries to \a dir. */
 rgmin_status_t rgmin_solver_search_direction(rgmin_solver_t *solver,
