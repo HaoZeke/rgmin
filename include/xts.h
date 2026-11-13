@@ -169,6 +169,14 @@ typedef rgmin_constraints_t xts_constraints_t;
 #define xts_solver_step_fg rgmin_solver_step_fg
 #define xts_solver_step_hess_fg rgmin_solver_step_hess_fg
 #define xts_lowest_eigenpair rgmin_lowest_eigenpair
+typedef rgmin_lbfgs_pairs_t xts_lbfgs_pairs_t;
+typedef rgmin_h0_fn xts_h0_fn;
+#define xts_lbfgs_pairs_create rgmin_lbfgs_pairs_create
+#define xts_lbfgs_pairs_push rgmin_lbfgs_pairs_push
+#define xts_lbfgs_pairs_count rgmin_lbfgs_pairs_count
+#define xts_lbfgs_pairs_clear rgmin_lbfgs_pairs_clear
+#define xts_lbfgs_pairs_free rgmin_lbfgs_pairs_free
+#define xts_lbfgs_direction rgmin_lbfgs_direction
 #define xts_last_constraint_error rgmin_last_constraint_error
 #define xts_constraints_create rgmin_constraints_create
 #define xts_constraints_create_at rgmin_constraints_create_at

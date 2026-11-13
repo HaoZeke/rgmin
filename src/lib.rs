@@ -15,6 +15,8 @@
 //! [`LbfgsStep::Scaled`] keeps a shortened pair. [`LbfgsStep::Wolfe`]
 //! is the strong Wolfe search.
 //! [`minimize_lbfgs`] is the cold-start dispatch used by [`minimize_method`].
+//! [`lbfgs_direction`] applies a caller-supplied initial inverse Hessian
+//! and does not evaluate an objective.
 
 #![warn(missing_docs)]
 
@@ -105,7 +107,7 @@ pub use hvp::{
 pub use irc_trust::{IrcTrust, sqrt_masses_3n};
 pub use lbfgs::{
     EON_FINITE_DIFFERENCE, EON_INVERSE_CURVATURE, EON_MAX_MOVE, GradNorm, LBFGSB_FACTR,
-    LBFGSB_FTOL, Lbfgs, LbfgsBuilder, LbfgsStep,
+    LBFGSB_FTOL, Lbfgs, LbfgsBuilder, LbfgsH0, LbfgsPairs, LbfgsStep, lbfgs_direction,
 };
 #[cfg(feature = "highs")]
 pub use lbfgs_qp::HighsStep;

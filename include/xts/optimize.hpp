@@ -28,6 +28,7 @@ using rgmin::Solver;
 using rgmin::ConstraintError;
 using rgmin::ConstraintSolver;
 using rgmin::DistanceConstraints;
+using rgmin::LbfgsPairs;
 
 namespace minimize = rgmin::minimize;
 namespace nlcg = rgmin::nlcg;

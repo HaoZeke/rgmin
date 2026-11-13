@@ -6,14 +6,15 @@
 //! ([`rgmin::LbfgsStep::Scaled`]). `eon_cap` selects the crate default,
 //! the line-search-free eOn cap. `wolfe` is the strong Wolfe search.
 
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use ndarray::{Array1, ArrayView1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rgmin::{
-    Accept, Control, FireConfig, FireKind, LbfgsStep, LineSearch, Method, Oracle, SearchStep,
-    Solver, StopNorm, SuppliedSearch,
+    Accept, Control, Error, FireConfig, FireKind, LbfgsH0, LbfgsPairs, LbfgsStep, LineSearch,
+    Method, Oracle, SearchStep, Solver, StopNorm, SuppliedSearch,
 };
 
 #[pyclass]
@@ -237,6 +238,118 @@ impl LineSearchPy {
     }
 }
 
+/// Stored `(s, y)` pairs for one L-BFGS direction.
+///
+/// `direction` returns `-H g` and does not evaluate an objective.
+/// `h0` is a float (`H0 = γ I`), a one-dimensional NumPy array or
+/// sequence (the diagonal of `H0`), or a callable `v -> H0 v`.
+#[pyclass(name = "LbfgsPairs")]
+struct LbfgsPairsPy {
+    pairs: LbfgsPairs,
+}
+
+fn as_f64_vec(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
+    if let Ok(values) = obj.extract::<Vec<f64>>() {
+        return Ok(values);
+    }
+    if obj.hasattr("tolist").unwrap_or(false) {
+        let listed = obj.call_method0("tolist")?;
+        return listed
+            .extract::<Vec<f64>>()
+            .map_err(|_| PyValueError::new_err("H0 must be a one-dimensional sequence of floats"));
+    }
+    Err(PyValueError::new_err("expected a sequence of floats"))
+}
+
+fn direction_error(err: Error) -> PyErr {
+    PyValueError::new_err(err.to_string())
+}
+
+#[pymethods]
+impl LbfgsPairsPy {
+    /// `capacity` 0 keeps ten pairs.
+    #[new]
+    #[pyo3(signature = (n, capacity=10))]
+    fn new(n: usize, capacity: usize) -> PyResult<Self> {
+        LbfgsPairs::new(n, capacity)
+            .map(|pairs| Self { pairs })
+            .map_err(direction_error)
+    }
+
+    fn __len__(&self) -> usize {
+        self.pairs.len()
+    }
+
+    fn dim(&self) -> usize {
+        self.pairs.dim()
+    }
+
+    /// Store one pair. Returns false when the curvature gate declines it.
+    fn push(&mut self, s: Vec<f64>, y: Vec<f64>) -> PyResult<bool> {
+        self.pairs
+            .push(
+                ArrayView1::from(s.as_slice()),
+                ArrayView1::from(y.as_slice()),
+            )
+            .map_err(direction_error)
+    }
+
+    fn clear(&mut self) {
+        self.pairs.clear();
+    }
+
+    /// Direction `-H g`. `h0` is a float, a NumPy array, or a callable.
+    fn direction(&self, gradient: Vec<f64>, h0: Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
+        let g = ArrayView1::from(gradient.as_slice());
+        let numpy = h0.hasattr("ndim").unwrap_or(false);
+        let computed = if h0.is_callable() && !numpy {
+            let callback = h0.clone().unbind();
+            let failed = RefCell::new(None);
+            let result = self.pairs.direction(
+                g,
+                LbfgsH0::Apply(&|v| {
+                    Python::with_gil(|py| match callback.call1(py, (v.to_vec(),)) {
+                        Ok(out) => match as_f64_vec(out.bind(py)) {
+                            Ok(values) => Ok(Array1::from_vec(values)),
+                            Err(err) => {
+                                *failed.borrow_mut() = Some(err);
+                                Err(Error::LbfgsDirection {
+                                    what: "H0 callback failed",
+                                })
+                            }
+                        },
+                        Err(err) => {
+                            *failed.borrow_mut() = Some(err);
+                            Err(Error::LbfgsDirection {
+                                what: "H0 callback failed",
+                            })
+                        }
+                    })
+                }),
+            );
+            if let Some(err) = failed.into_inner() {
+                return Err(err);
+            }
+            result
+        } else if numpy {
+            let ndim: usize = h0.getattr("ndim")?.extract()?;
+            if ndim == 0 {
+                let gamma: f64 = h0.call_method0("item")?.extract()?;
+                self.pairs.direction(g, LbfgsH0::Scale(gamma))
+            } else {
+                let diag = Array1::from_vec(as_f64_vec(&h0)?);
+                self.pairs.direction(g, LbfgsH0::Diagonal(diag.view()))
+            }
+        } else if let Ok(gamma) = h0.extract::<f64>() {
+            self.pairs.direction(g, LbfgsH0::Scale(gamma))
+        } else {
+            let diag = Array1::from_vec(as_f64_vec(&h0)?);
+            self.pairs.direction(g, LbfgsH0::Diagonal(diag.view()))
+        };
+        computed.map(|d| d.to_vec()).map_err(direction_error)
+    }
+}
+
 fn call_objective(callback: &PyObject, x: ArrayView1<f64>) -> PyResult<(f64, Array1<f64>)> {
     Python::with_gil(|py| {
         let coords: Vec<f64> = x.iter().copied().collect();
@@ -257,6 +370,7 @@ fn call_objective(callback: &PyObject, x: ArrayView1<f64>) -> PyResult<(f64, Arr
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Session>()?;
     m.add_class::<LineSearchPy>()?;
+    m.add_class::<LbfgsPairsPy>()?;
     m.add("version", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

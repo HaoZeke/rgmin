@@ -9,6 +9,11 @@ rgmin_constraints_set_settle
 rgmin_constraints_set_solver
 rgmin_constraints_set_tolerance
 rgmin_last_constraint_error
+rgmin_lbfgs_direction
+rgmin_lbfgs_pairs_clear
+rgmin_lbfgs_pairs_count
+rgmin_lbfgs_pairs_free
+rgmin_lbfgs_pairs_push
 rgmin_linesearch
 rgmin_linesearch_free
 rgmin_lowest_eigenpair

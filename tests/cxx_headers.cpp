@@ -7,6 +7,14 @@
 #include <cstdio>
 #include <vector>
 
+extern "C" int32_t scale_h0(void* user, double const* v, double* out, std::size_t n) {
+    double const gamma = *static_cast<double const*>(user);
+    for (std::size_t i = 0; i < n; ++i) {
+        out[i] = gamma * v[i];
+    }
+    return 0;
+}
+
 namespace {
 
 rgmin_status_t quad_eval(void* /*user*/, DLManagedTensorVersioned const* x, double* value) {
@@ -242,6 +250,33 @@ int main() {
         rgmin::method_from_name("polak-ribiere-plus") != rgmin::Method::PolakRibierePlus) {
         std::fprintf(stderr, "method_from_name missed a minor-35 method\n");
         return 6;
+    }
+    bool refused = false;
+    try {
+        rgmin::LbfgsPairs empty(0, 4);
+        (void)empty;
+    } catch (std::runtime_error const&) {
+        refused = true;
+    }
+    if (!refused) {
+        std::fprintf(stderr, "a zero dimension must be refused\n");
+        return 7;
+    }
+    rgmin::LbfgsPairs pairs(2, 4);
+    double grad[2] = {1.0, -2.0};
+    double diag[2] = {0.5, 0.25};
+    double dir[2] = {0.0, 0.0};
+    pairs.direction_diagonal(grad, diag, dir, 2);
+    if (std::fabs(dir[0] + 0.5) > 1e-15 || std::fabs(dir[1] - 0.5) > 1e-15) {
+        std::fprintf(stderr, "empty H0 direction (%g, %g)\n", dir[0], dir[1]);
+        return 8;
+    }
+    double gamma = 0.5;
+    double via_callback[2] = {0.0, 0.0};
+    pairs.direction_apply(grad, scale_h0, &gamma, via_callback, 2);
+    if (std::fabs(via_callback[0] + 0.5) > 1e-15 || std::fabs(via_callback[1] - 1.0) > 1e-15) {
+        std::fprintf(stderr, "callback H0 direction (%g, %g)\n", via_callback[0], via_callback[1]);
+        return 9;
     }
     return constrained();
 }

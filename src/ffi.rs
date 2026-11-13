@@ -22,10 +22,10 @@ use crate::holonomic::{ConstraintError, ConstraintSolver, DistanceConstraints};
 use crate::precon::{ExpParams, ExpState, Neighbours};
 use crate::{
     Accept, ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind,
-    Error, HessianObjective, HessianOracle, HessianVector, HvpOracle, LineSearch, ManifoldKind,
-    Method, NewtonKind, Oracle, QnStep, Restart, ScgParams, SearchStep, Solver, StopNorm,
-    SuppliedSearch, lowest_mode, minimize_method, minimize_method_hess, minimize_method_hvp,
-    minimize_scg, minimize_scg_exact,
+    Error, HessianObjective, HessianOracle, HessianVector, HvpOracle, LbfgsH0, LbfgsPairs,
+    LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart, ScgParams, SearchStep,
+    Solver, StopNorm, SuppliedSearch, lowest_mode, minimize_method, minimize_method_hess,
+    minimize_method_hvp, minimize_scg, minimize_scg_exact,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
@@ -75,7 +75,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 37;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 38;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -3767,6 +3767,206 @@ fn write_report(
         (*solver).grad = rep.grad;
     }
     rgmin_status_t::RGMIN_SUCCESS
+}
+
+/// Stored `(s, y)` pairs for [`rgmin_lbfgs_direction`]. The handle does not
+/// evaluate an objective.
+pub struct rgmin_lbfgs_pairs {
+    pairs: LbfgsPairs,
+}
+
+/// Apply `H0` to `v`, writing `n` doubles to `out`. Return 0 on success.
+///
+/// The callback is not an objective. It must not call back into the same
+/// pair handle.
+pub type rgmin_h0_fn =
+    unsafe extern "C" fn(user: *mut c_void, v: *const f64, out: *mut f64, n: usize) -> i32;
+
+/// Create a pair handle of dimension `n`. `capacity` 0 keeps ten pairs.
+/// Null when `n` is 0.
+///
+/// # Safety
+/// The returned pointer is freed with [`rgmin_lbfgs_pairs_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_lbfgs_pairs_create(
+    n: usize,
+    capacity: usize,
+) -> *mut rgmin_lbfgs_pairs {
+    match LbfgsPairs::new(n, capacity) {
+        Ok(pairs) => Box::into_raw(Box::new(rgmin_lbfgs_pairs { pairs })),
+        Err(err) => {
+            set_last_error(&err.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Append one pair. `stored`, when non-null, is 1 if the pair was kept.
+/// A non-positive curvature pair returns success and sets `stored` to 0.
+///
+/// # Safety
+/// `pairs` is null or a live handle from [`rgmin_lbfgs_pairs_create`].
+/// `s` and `y` are null or point at `n` readable doubles. `stored` is
+/// null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_lbfgs_pairs_push(
+    pairs: *mut rgmin_lbfgs_pairs,
+    s: *const f64,
+    y: *const f64,
+    n: usize,
+    stored: *mut i32,
+) -> rgmin_status_t {
+    if pairs.is_null() || s.is_null() || y.is_null() {
+        set_last_error("rgmin_lbfgs_pairs_push: null argument");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let s = unsafe { slice::from_raw_parts(s, n) };
+    let y = unsafe { slice::from_raw_parts(y, n) };
+    match unsafe {
+        (*pairs)
+            .pairs
+            .push(ArrayView1::from(s), ArrayView1::from(y))
+    } {
+        Ok(kept) => {
+            if !stored.is_null() {
+                unsafe { *stored = i32::from(kept) };
+            }
+            rgmin_status_t::RGMIN_SUCCESS
+        }
+        Err(err) => status_from_error(&err),
+    }
+}
+
+/// Number of stored pairs. A null handle returns zero.
+///
+/// # Safety
+/// `pairs` is null or a live handle from [`rgmin_lbfgs_pairs_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_lbfgs_pairs_count(pairs: *const rgmin_lbfgs_pairs) -> usize {
+    if pairs.is_null() {
+        return 0;
+    }
+    unsafe { (*pairs).pairs.len() }
+}
+
+/// Drop every stored pair. A null handle is a no-op.
+///
+/// # Safety
+/// `pairs` is null or a live handle from [`rgmin_lbfgs_pairs_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_lbfgs_pairs_clear(pairs: *mut rgmin_lbfgs_pairs) {
+    if !pairs.is_null() {
+        unsafe { (*pairs).pairs.clear() };
+    }
+}
+
+/// Release a handle from [`rgmin_lbfgs_pairs_create`]. Null is a no-op.
+///
+/// # Safety
+/// `pairs` is null or a pointer from [`rgmin_lbfgs_pairs_create`] that
+/// has not been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_lbfgs_pairs_free(pairs: *mut rgmin_lbfgs_pairs) {
+    if !pairs.is_null() {
+        drop(unsafe { Box::from_raw(pairs) });
+    }
+}
+
+/// Direction `-H g`. Pass either `h0_diag` or `apply_h0`, not both.
+/// An empty memory writes `-H0 g`. The call does not evaluate an
+/// objective. ABI minor 38.
+///
+/// # Safety
+/// `pairs` is null or a live handle from [`rgmin_lbfgs_pairs_create`].
+/// `grad` is null or points at `n` readable doubles, and `dir` is null
+/// or points at `n` writable doubles. `h0_diag`, when non-null, points
+/// at `n` readable doubles. `apply_h0`, when non-null, is callable with
+/// `user` for the duration of this call and must not call back into
+/// `pairs`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_lbfgs_direction(
+    pairs: *const rgmin_lbfgs_pairs,
+    grad: *const f64,
+    h0_diag: *const f64,
+    apply_h0: Option<rgmin_h0_fn>,
+    user: *mut c_void,
+    dir: *mut f64,
+    n: usize,
+) -> rgmin_status_t {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lbfgs_direction_c(pairs, grad, h0_diag, apply_h0, user, dir, n)
+    })) {
+        Ok(status) => status,
+        Err(_) => {
+            set_last_error("rgmin_lbfgs_direction: panic");
+            rgmin_status_t::RGMIN_INTERNAL_ERROR
+        }
+    }
+}
+
+fn lbfgs_direction_c(
+    pairs: *const rgmin_lbfgs_pairs,
+    grad: *const f64,
+    h0_diag: *const f64,
+    apply_h0: Option<rgmin_h0_fn>,
+    user: *mut c_void,
+    dir: *mut f64,
+    n: usize,
+) -> rgmin_status_t {
+    if pairs.is_null() || grad.is_null() || dir.is_null() {
+        set_last_error("rgmin_lbfgs_direction: null argument");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    match (h0_diag.is_null(), apply_h0.is_none()) {
+        (false, false) => {
+            set_last_error("rgmin_lbfgs_direction: pass a diagonal or a callback");
+            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        }
+        (true, true) => {
+            set_last_error("rgmin_lbfgs_direction: H0 is missing");
+            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        }
+        _ => {}
+    }
+    let grad = unsafe { slice::from_raw_parts(grad, n) };
+    let outcome = if let Some(apply) = apply_h0 {
+        let callback = |v: ArrayView1<'_, f64>| {
+            let Some(input) = v.as_slice() else {
+                return Err(Error::LbfgsDirection {
+                    what: "H0 input is not contiguous",
+                });
+            };
+            let mut out = vec![0.0; input.len()];
+            let code = unsafe { apply(user, input.as_ptr(), out.as_mut_ptr(), input.len()) };
+            if code != 0 {
+                return Err(Error::LbfgsDirection {
+                    what: "H0 callback failed",
+                });
+            }
+            Ok(Array1::from_vec(out))
+        };
+        unsafe {
+            (*pairs)
+                .pairs
+                .direction(ArrayView1::from(grad), LbfgsH0::Apply(&callback))
+        }
+    } else {
+        let diag = unsafe { slice::from_raw_parts(h0_diag, n) };
+        unsafe {
+            (*pairs).pairs.direction(
+                ArrayView1::from(grad),
+                LbfgsH0::Diagonal(ArrayView1::from(diag)),
+            )
+        }
+    };
+    match outcome {
+        Ok(direction) => {
+            let out = unsafe { slice::from_raw_parts_mut(dir, n) };
+            out.copy_from_slice(direction.as_slice().expect("contiguous"));
+            rgmin_status_t::RGMIN_SUCCESS
+        }
+        Err(err) => status_from_error(&err),
+    }
 }
 
 #[cfg(test)]

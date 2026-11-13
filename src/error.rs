@@ -112,6 +112,12 @@ pub enum Error {
     /// or could not be met.
     #[error("distance constraints: {0}")]
     Constraint(#[from] crate::holonomic::ConstraintError),
+    /// [`crate::lbfgs_direction`] refused a gradient, a pair, or `H0`.
+    #[error("L-BFGS direction: {what}")]
+    LbfgsDirection {
+        /// What was refused.
+        what: &'static str,
+    },
 }
 
 /// Result alias for this crate.

@@ -10,9 +10,9 @@ are ASE's.
 
 from __future__ import annotations
 
-from rgmin._core import LineSearch, Session, version
+from rgmin._core import LbfgsPairs, LineSearch, Session, version
 
-__all__ = ["BFGS", "FIRE", "LBFGS", "LineSearch", "Session", "__version__"]
+__all__ = ["BFGS", "FIRE", "LBFGS", "LbfgsPairs", "LineSearch", "Session", "__version__"]
 __version__ = version
 
 

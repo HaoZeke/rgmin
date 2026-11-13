@@ -12,6 +12,9 @@
 //! the cap. The cap only shortens a step. [`LbfgsStep::Scaled`] is the
 //! ASE length control: shorten the two-loop step and keep the pairs.
 //! [`LbfgsStep::Wolfe`] is the strong Wolfe search.
+//! [`LbfgsPairs`] and [`lbfgs_direction`] are the same two-loop with a
+//! caller-supplied `H0`. They return `-H g` and do not evaluate an
+//! objective.
 //!
 //! eOn client `LBFGS::getStep` and `ParametersSSOTDefaults.h`,
 //! <https://github.com/TheochemUI/eOn>.
@@ -39,6 +42,9 @@ use crate::step::{
 use eindir_core::{DifferentiableObjective, Objective};
 
 mod cauchy;
+mod direction;
+
+pub use direction::{LbfgsH0, LbfgsPairs, lbfgs_direction};
 
 /// eOn `[Optimizer] max_move`: the longest displacement of one atom in
 /// one step, in the coordinate length. The client default is 0.2.
@@ -389,6 +395,27 @@ struct Pair {
     sy: f64,
     /// `y · y` at the moment the pair was stored.
     yy: f64,
+}
+
+/// `(s, y)` when the relative-curvature gate accepts it.
+///
+/// `sy <= 1e-8 ||s|| ||y||`, a non-finite `s · y`, and a non-positive
+/// product are dropped. The stored `rho` is `1 / (s · y)`.
+fn stored_pair(s: Array1<f64>, y: Array1<f64>) -> Option<Pair> {
+    let sy = s.dot(&y);
+    let sn = s.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let yn = y.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if !sy.is_finite() || sy <= 1e-8 * sn * yn {
+        return None;
+    }
+    let yy = y.dot(&y);
+    Some(Pair {
+        s,
+        y,
+        rho: 1.0 / sy,
+        sy,
+        yy,
+    })
 }
 
 /// The line along which [`Lbfgs::line_search`] steps: direction `d`,
@@ -825,22 +852,7 @@ impl Lbfgs {
         precon: Option<&ndarray::Array2<f64>>,
         exp: Option<&crate::precon::Exp>,
     ) -> Array1<f64> {
-        let mut q = g.to_owned();
-        let m = self.memory.len();
-        let mut idxs: Vec<usize> = (0..m).collect();
-        for _ in 0..self.extra_updates {
-            if m > 0 {
-                idxs.push(m - 1);
-            }
-        }
-        let mut alpha = vec![0.0; idxs.len()];
-        for k in (0..idxs.len()).rev() {
-            let i = idxs[k];
-            let p = &self.memory[i];
-            let a = p.rho * crate::vecops::dot(p.s.view(), q.view());
-            alpha[k] = a;
-            crate::vecops::axpy(-a, p.y.view(), &mut q);
-        }
+        let (mut q, alpha, idxs) = direction::backward(&self.memory, self.extra_updates, g);
         if let Some(pmat) = precon {
             q = solve_dense(pmat, &q).unwrap_or_else(|| self.scale_gamma(q));
         } else if let Some(exp) = exp {
@@ -848,14 +860,7 @@ impl Lbfgs {
         } else {
             q = self.scale_gamma(q);
         }
-        for k in 0..idxs.len() {
-            let i = idxs[k];
-            let p = &self.memory[i];
-            let b = p.rho * crate::vecops::dot(p.y.view(), q.view());
-            crate::vecops::axpy(alpha[k] - b, p.s.view(), &mut q);
-        }
-        q.mapv_inplace(|v| -v);
-        q
+        direction::forward(&self.memory, q, &alpha, &idxs)
     }
 
     /// `P^{-1} v` when an exponential preconditioner is installed and the solve succeeds.
@@ -868,35 +873,13 @@ impl Lbfgs {
     /// preconditioner replaces that scalar: the middle product is
     /// `P^{-1} q`, and a failed solve falls back to `h0`.
     pub(crate) fn direction_h0(&self, g: ArrayView1<f64>, h0: f64) -> Array1<f64> {
-        let mut q = g.to_owned();
-        let m = self.memory.len();
-        let mut idxs: Vec<usize> = (0..m).collect();
-        for _ in 0..self.extra_updates {
-            if m > 0 {
-                idxs.push(m - 1);
-            }
-        }
-        let mut alpha = vec![0.0; idxs.len()];
-        for k in (0..idxs.len()).rev() {
-            let i = idxs[k];
-            let p = &self.memory[i];
-            let a = p.rho * crate::vecops::dot(p.s.view(), q.view());
-            alpha[k] = a;
-            crate::vecops::axpy(-a, p.y.view(), &mut q);
-        }
+        let (mut q, alpha, idxs) = direction::backward(&self.memory, self.extra_updates, g);
         if let Some(solved) = self.exp_apply(q.view()) {
             q = solved;
         } else {
             q *= h0;
         }
-        for k in 0..idxs.len() {
-            let i = idxs[k];
-            let p = &self.memory[i];
-            let b = p.rho * crate::vecops::dot(p.y.view(), q.view());
-            crate::vecops::axpy(alpha[k] - b, p.s.view(), &mut q);
-        }
-        q.mapv_inplace(|v| -v);
-        q
+        direction::forward(&self.memory, q, &alpha, &idxs)
     }
 
     /// Remember `s·y` and `y·y` from the step just taken.
@@ -1018,7 +1001,6 @@ impl Lbfgs {
     pub(crate) fn push_pair(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) -> bool {
         let sy = s.dot(&y);
         let sn = s.iter().map(|v| v * v).sum::<f64>().sqrt();
-        let yn = y.iter().map(|v| v * v).sum::<f64>().sqrt();
         let ss = sn * sn;
         if self.cautious_eps > 0.0
             && let Some(g) = gnorm
@@ -1031,18 +1013,12 @@ impl Lbfgs {
         }
         // Relative curvature: a tiny accepted trust step makes the
         // compact Hessian indefinite and HiGHS's QP solver does not return.
-        if !sy.is_finite() || sy <= 1e-8 * sn * yn {
+        // [`stored_pair`] repeats the products and is the store [`LbfgsPairs`] uses.
+        let Some(pair) = stored_pair(s, y) else {
             self.stored = false;
             return false;
-        }
-        let yy = y.dot(&y);
-        self.memory.push(Pair {
-            s,
-            y,
-            rho: 1.0 / sy,
-            sy,
-            yy,
-        });
+        };
+        self.memory.push(pair);
         self.trim();
         self.stored = true;
         true

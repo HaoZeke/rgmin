@@ -61,7 +61,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 37
+#define RGMIN_ABI_VERSION_MINOR 38
 #define RGMIN_ABI_LAYOUT_REVISION 4
 
 /** Solver selector. \c RGMIN_LBFGS is the production unconstrained method. */
@@ -656,6 +656,37 @@ int32_t rgmin_linesearch(rgmin_linesearch_t *search, double f, const double *g,
                          int32_t *need_eval);
 /** Release a search from \ref rgmin_linesearch_create. Null is a no-op. */
 void rgmin_linesearch_free(rgmin_linesearch_t *search);
+
+/** Opaque `(s, y)` memory for \ref rgmin_lbfgs_direction.
+ *  The handle accumulates pairs and does not evaluate an objective. */
+typedef struct rgmin_lbfgs_pairs rgmin_lbfgs_pairs_t;
+
+/** Apply H0 to `v`, writing `n` doubles to `out`. Return 0 on success.
+ *  The callback is not an objective and must not call back into the
+ *  same pair handle. */
+typedef int32_t (*rgmin_h0_fn)(void *user, const double *v, double *out, size_t n);
+
+/** Pair memory of dimension `n`. `capacity` 0 keeps ten pairs.
+ *  Null when `n` is 0. */
+rgmin_lbfgs_pairs_t *rgmin_lbfgs_pairs_create(size_t n, size_t capacity);
+/** Append one pair. On success, `*stored` is 1 when the pair was kept
+ *  and 0 when the curvature gate declined it. `stored` may be NULL.
+ *  A length other than the handle dimension is \c RGMIN_INVALID_PARAMETER. */
+rgmin_status_t rgmin_lbfgs_pairs_push(rgmin_lbfgs_pairs_t *pairs, const double *s,
+                                      const double *y, size_t n, int32_t *stored);
+/** Number of stored pairs. A null handle returns zero. */
+size_t rgmin_lbfgs_pairs_count(const rgmin_lbfgs_pairs_t *pairs);
+/** Drop every stored pair. A null handle is a no-op. */
+void rgmin_lbfgs_pairs_clear(rgmin_lbfgs_pairs_t *pairs);
+/** Release a handle from \ref rgmin_lbfgs_pairs_create. Null is a no-op. */
+void rgmin_lbfgs_pairs_free(rgmin_lbfgs_pairs_t *pairs);
+/** Direction `-H g`. Pass `h0_diag` or `apply_h0`, not both and not
+ *  neither. An empty memory writes `-H0 g`. Does not evaluate an
+ *  objective. ABI minor 38. */
+rgmin_status_t rgmin_lbfgs_direction(const rgmin_lbfgs_pairs_t *pairs,
+                                     const double *grad, const double *h0_diag,
+                                     rgmin_h0_fn apply_h0, void *user, double *dir,
+                                     size_t n);
 
 /** Two-loop `d = -H g` with no evaluation and no push. Empty memory
  *  is steepest descent (`-g`). Writes \a n entries to \a dir. */

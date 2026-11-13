@@ -501,6 +501,64 @@ public:
     }
 };
 
+/// Stored `(s, y)` pairs for one L-BFGS direction. The handle does not
+/// evaluate an objective. `capacity` 0 keeps ten pairs.
+class LbfgsPairs {
+    rgmin_lbfgs_pairs_t* ptr_ = nullptr;
+
+    explicit LbfgsPairs(rgmin_lbfgs_pairs_t* ptr) : ptr_(ptr) {
+        if (ptr_ == nullptr) {
+            detail::raise(RGMIN_INVALID_PARAMETER, "rgmin_lbfgs_pairs_create failed");
+        }
+    }
+
+public:
+    LbfgsPairs(std::size_t n, std::size_t capacity)
+        : LbfgsPairs(rgmin_lbfgs_pairs_create(n, capacity)) {}
+    ~LbfgsPairs() { rgmin_lbfgs_pairs_free(ptr_); }
+    LbfgsPairs(LbfgsPairs const&) = delete;
+    LbfgsPairs& operator=(LbfgsPairs const&) = delete;
+    LbfgsPairs(LbfgsPairs&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
+    LbfgsPairs& operator=(LbfgsPairs&& other) noexcept {
+        if (this != &other) {
+            rgmin_lbfgs_pairs_free(ptr_);
+            ptr_ = other.ptr_;
+            other.ptr_ = nullptr;
+        }
+        return *this;
+    }
+
+    /// True when the pair was stored. A non-positive curvature pair
+    /// returns false. A bad length throws.
+    bool push(double const* s, double const* y, std::size_t n) {
+        int32_t stored = 0;
+        rgmin_status_t st = rgmin_lbfgs_pairs_push(ptr_, s, y, n, &stored);
+        if (st != RGMIN_SUCCESS) {
+            detail::raise(st, "rgmin_lbfgs_pairs_push failed");
+        }
+        return stored != 0;
+    }
+    std::size_t count() const noexcept { return rgmin_lbfgs_pairs_count(ptr_); }
+    void clear() noexcept { rgmin_lbfgs_pairs_clear(ptr_); }
+
+    /// Write `-H g` for a diagonal `H0`. An empty memory writes `-H0 g`.
+    void direction_diagonal(double const* grad, double const* h0, double* dir,
+                            std::size_t n) const {
+        rgmin_status_t st = rgmin_lbfgs_direction(ptr_, grad, h0, nullptr, nullptr, dir, n);
+        if (st != RGMIN_SUCCESS) {
+            detail::raise(st, "rgmin_lbfgs_direction failed");
+        }
+    }
+    /// Write `-H g` for a callback `H0`. The callback is not an objective.
+    void direction_apply(double const* grad, rgmin_h0_fn apply, void* user, double* dir,
+                         std::size_t n) const {
+        rgmin_status_t st = rgmin_lbfgs_direction(ptr_, grad, nullptr, apply, user, dir, n);
+        if (st != RGMIN_SUCCESS) {
+            detail::raise(st, "rgmin_lbfgs_direction failed");
+        }
+    }
+};
+
 namespace nlcg {
 namespace conjugacy {
 
