@@ -1,0 +1,27 @@
+L-BFGS
+======
+
+The default step is the eOn cap. The longest atom moves by at most 0.2,
+the first step probes curvature, and a proposal that long clears the
+memory. ``Lbfgs::builder().wolfe()`` is the strong Wolfe search.
+``Lbfgs::scaled`` is the ASE length control: shorten the step and keep
+the pairs.
+
+The program is ``examples/tutorial_lbfgs.rs``. Continuous integration runs it.
+
+.. code:: rust
+
+   use ndarray::array;
+   use rgmin::{EON_MAX_MOVE, Lbfgs};
+
+   let mut opt = Lbfgs::default();
+   let (_value, x, _) = opt.minimize(array![1.0, 0.0, 0.0].view(), 1, |v| {
+       Some((0.5 * v.dot(&v), v.to_owned()))
+   });
+   assert!((1.0 - x[0] - EON_MAX_MOVE).abs() < 1e-9);
+
+On the 10-dimensional Rosenbrock start, that cap reaches the minimum at
+0. The ASE scale stops in the well near ``x0 = -1``, where the infinity
+norm is already below ``1e-5`` and the value is about 4.
+``tests/scaled_rosenbrock10.rs`` is that comparison. SciPy's L-BFGS-B
+also reaches 0; the difference is the step rule.

@@ -1,0 +1,25 @@
+#+TITLE: Conjugate gradients
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+
+* Conjugate gradients
+
+Two steps share the Polak-Ribière coefficient. ~Method::eon_cg~ is that coefficient with the Powell restart at 0.5, and the session still line-searches. ~minimize_eon_cg~ is the client step: one curvature probe, no line search, then the per-atom cap.
+
+The program is ~examples/tutorial_cg.rs~. Continuous integration runs it.
+
+#+begin_src rust
+use rgmin::{EonCg, minimize_eon_cg};
+
+let mut x = vec![1.0, -2.0, 0.5];
+let report = minimize_eon_cg(&mut x, |xs, gs| {
+    let mut f = 0.0;
+    for (x, g) in xs.iter().zip(gs.iter_mut()) {
+        f += x * x;
+        *g = 2.0 * x;
+    }
+    f
+}, &EonCg::default());
+assert!(report.converged);
+#+end_src
+
+~Method::polak_ribiere_plus~ is SciPy's ~method="CG"~: ~max(0, β)~. The Python session named ~cg~ uses that coefficient with a strong Wolfe search, because SciPy does. The eOn client step does not.

@@ -63,6 +63,13 @@ It also covers the features of each route, the C library and a checkout.
    :caption: Tutorials
 
    tutorials/quickstart
+   tutorials/lbfgs
+   tutorials/fire
+   tutorials/cg
+   tutorials/bfgs
+   tutorials/newton
+   tutorials/scg
+   tutorials/migration
    tutorials/relax-morse
 
 .. toctree::
@@ -80,6 +87,7 @@ It also covers the features of each route, the C library and a checkout.
    howto/highs-qp
    howto/lbfgs-box
    howto/c-abi
+   howto/python
    howto/doxygen
    howto/cite
 
@@ -92,6 +100,7 @@ It also covers the features of each route, the C library and a checkout.
    explanation/trust-region
    explanation/scg
    explanation/step-bounds
+   explanation/performance
    explanation/randomized
 
 .. toctree::

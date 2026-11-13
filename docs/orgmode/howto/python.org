@@ -1,0 +1,28 @@
+#+TITLE: Python
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+
+* Python
+
+The package is ~python/~. ~pip install~ the directory with maturin. ASE is optional and imported when an optimizer is constructed.
+
+#+begin_src bash
+pip install python/[ase]
+#+end_src
+
+#+begin_src python
+from ase.build import molecule
+from ase.calculators.emt import EMT
+from rgmin import FIRE, LBFGS
+
+atoms = molecule("H2")
+atoms.calc = EMT()
+seen = []
+opt = LBFGS(atoms, trajectory="opt.traj", logfile=None)
+opt.attach(lambda: seen.append(atoms.get_potential_energy()))
+opt.run(fmax=0.05)
+FIRE(atoms, logfile=None).run(fmax=0.05, steps=20)
+#+end_src
+
+~LBFGS(eon_cap=True)~ selects the Rust default. Without it the class matches ASE's length control. Stubs live in ~python/rgmin/*.pyi~ and ~py.typed~ marks the package.
+
+C and C++ use ~include/rgmin.h~ and ~include/rgmin/optimize.hpp~. ~examples/c/quadratic.c~ is the short C program: one handle, one minimize, then free.

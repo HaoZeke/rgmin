@@ -1,0 +1,18 @@
+#+TITLE: BFGS
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+
+* BFGS
+
+Dense BFGS keeps an inverse Hessian, starting from the identity. Himmelblau has four minima. From ~(0, 0)~ the session reaches ~(3.584, -1.848)~, not ~(3, 2)~.
+
+The program is ~examples/tutorial_bfgs.rs~. Continuous integration runs it.
+
+#+begin_src rust
+use ndarray::array;
+use rgmin::{Control, Method, Solver};
+
+let mut solver = Solver::new(Method::Bfgs, Control::default(), 2);
+let _ = (solver, array![0.0, 0.0]);
+#+end_src
+
+ASE's ~BFGS~ multiplies the first step by ~1/alpha~ with ~alpha = 70~. This session does not. The EMT gold in ~python/tests/test_ase_optimizer.py~ checks the minimum, not that first step.
