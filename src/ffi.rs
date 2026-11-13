@@ -23,10 +23,9 @@ use crate::precon::{ExpParams, ExpState, Neighbours};
 use crate::{
     Accept, ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind,
     Error, HessianObjective, HessianOracle, HessianVector, HvpOracle, LbfgsH0, LbfgsPairs,
-    LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart, ScgParams,
-    SearchStep, Solver, StopNorm, SuppliedSearch, lowest_eigenpairs, lowest_mode,
-    minimize_method, minimize_method_hess,
-    minimize_method_hvp, minimize_scg, minimize_scg_exact,
+    LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart, ScgParams, SearchStep,
+    Solver, StopNorm, SuppliedSearch, lowest_eigenpairs, lowest_mode, minimize_method,
+    minimize_method_hess, minimize_method_hvp, minimize_scg, minimize_scg_exact,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
