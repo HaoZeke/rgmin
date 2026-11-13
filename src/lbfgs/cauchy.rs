@@ -205,8 +205,15 @@ mod tests {
     use ndarray::array;
 
     fn pair(s: Array1<f64>, y: Array1<f64>) -> Pair {
-        let rho = 1.0 / s.dot(&y);
-        Pair { s, y, rho }
+        let sy = s.dot(&y);
+        let yy = y.dot(&y);
+        Pair {
+            s,
+            y,
+            rho: 1.0 / sy,
+            sy,
+            yy,
+        }
     }
 
     /// Coordinate pairs `s = e_i`, `y = a_i e_i` make `B = diag(a)` exactly.

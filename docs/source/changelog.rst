@@ -11,6 +11,13 @@ Opt-in ``Lbfgs::minimize_box`` and ``Lbfgs::minimize_box_watched`` relax inside 
 Each direction ends at the subspace minimizer from the Cauchy point, and the strong Wolfe search stops at the box.
 ``Lbfgs::minimize`` keeps the eOn cap. ``LbfgsStep::Wolfe`` remains opt-in.
 
+An interior point skips the bounds clip, and a Euclidean session keeps the gradient it already owns.
+Polak-Ribiere forms ``g · (g - g_old)`` in the dot product.
+A backtracking line search keeps its lowest trial without copying that vector.
+FIRE 2.0 does not build the post-step force, which only FIRE 1.0 mixes.
+L-BFGS reuses the curvature dots stored with each pair.
+The Morse-chain iterates are unchanged.
+
 ``Lbfgs::ftol`` is the opt-in relative-decrease stop of L-BFGS-B, and its default of zero turns it off.
 A line-search step from ``f_k`` to ``f_{k+1}`` ends ``minimize``, ``minimize_watched`` and ``minimize_recognized`` when ``f_k - f_{k+1} <= ftol * max(|f_k|, |f_{k+1}|, 1)``.
 ``LBFGSB_FTOL`` is the SciPy default, and :doc:`reference/sota` measures what it saves.
@@ -95,6 +102,10 @@ It points to the contributing page for the rest.
 
 :doc:`Contributing <contributing/index>` now gives the docs export command that the workflow runs, ``cd docs && emacs --batch -l export.el``.
 Of the two commands it gave before, one failed and the other wrote nothing.
+
+:doc:`Cite rgmin <howto/cite>` gives a BibTeX entry from ``CITATION.cff`` through cffconvert.
+It takes the version from ``cargo tree``, since the record names no version on ``develop`` and an older one on ``main``.
+The README, the index and the Pt256 tutorial point to it.
 
 L-BFGS session ``Accept::None`` takes the clipped two-loop direction.
 Wolfe line search stays on Energy / Nonmonotone.

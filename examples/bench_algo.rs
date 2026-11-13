@@ -10,11 +10,13 @@
 //! `env -i PATH HOME LANG RUSTUP_HOME CARGO_HOME cargo run --release --example bench_algo -- bench/raw/algo.csv bench/raw/steps.csv`
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 use ndarray::{Array1, ArrayView1};
 use rgmin::{
-    Accept, Control, EonFeat, ExpParams, FireKind, LbfgsStep, Method, Neighbours, Oracle, Solver,
-    StopNorm,
+    Accept, Control, EonCg, EonFeat, ExpParams, FireKind, LbfgsStep, LindhSpec, Method, Neighbours,
+    Oracle, Solver, StopNorm, TrainRow, apply_inverse, exp_gate_open, minimize_eon_cg,
+    select_train_setting,
 };
 
 const CAP: f64 = 0.2;
@@ -108,9 +110,29 @@ struct Gupta {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let out = args
-        .next()
-        .unwrap_or_else(|| "bench/raw/algo.csv".to_string());
+    let first = args.next();
+    if first.as_deref() == Some("--overhead") {
+        overhead_only();
+        return;
+    }
+    if first.as_deref() == Some("--lindh") {
+        let out = args
+            .next()
+            .unwrap_or_else(|| "bench/raw/lindh-scale.csv".to_string());
+        let repeats = args.next().and_then(|s| s.parse().ok()).unwrap_or(5);
+        lindh_scale(&out, repeats);
+        return;
+    }
+    if first.as_deref() == Some("--beat") {
+        let out = args
+            .next()
+            .unwrap_or_else(|| "bench/raw/beat.csv".to_string());
+        let repeats = args.next().and_then(|s| s.parse().ok()).unwrap_or(5);
+        let only = args.next();
+        beat(&out, repeats, only.as_deref());
+        return;
+    }
+    let out = first.unwrap_or_else(|| "bench/raw/algo.csv".to_string());
     let steps_path = args
         .next()
         .unwrap_or_else(|| "bench/raw/steps.csv".to_string());
@@ -865,4 +887,701 @@ fn water_start(mols: usize) -> Array1<f64> {
         }
     }
     Array1::from(x)
+}
+
+#[derive(Clone, Copy)]
+struct BeatOpt {
+    memory: usize,
+    cap: f64,
+    model_atom: bool,
+    compact: bool,
+    skip_bad: bool,
+    lindh: bool,
+    gate: bool,
+    cg_atom: bool,
+}
+
+fn beat(out: &str, repeats: usize, only: Option<&str>) {
+    let problems: Vec<_> = problems()
+        .into_iter()
+        .filter(|p| only.is_none_or(|s| p.name.contains(s)))
+        .collect();
+    for p in &problems {
+        check_force(p);
+    }
+    let mut rows =
+        String::from("problem,atoms,split,arm,repeat,evals,energy,gnorm,millis,converged\n");
+    let mut spreads = String::from("problem,c_force,c_bond,spread,gate_open,probe_evals\n");
+    let arms = [
+        ("lbfgs-eon", eon_opt()),
+        ("cg-atom", cg_opt()),
+        ("lbfgs-model", model_opt()),
+        ("lbfgs-gate", gate_opt()),
+        ("lbfgs-lindh", lindh_opt(false)),
+        ("lbfgs-lindh-atom", lindh_opt(true)),
+        ("lbfgs-compact", compact_opt()),
+        ("lbfgs-skip", skip_opt()),
+    ];
+    for p in &problems {
+        let (cf, cb, probes) = rayleigh(p);
+        let spread = if cf > 0.0 && cb > 0.0 {
+            cf.max(cb) / cf.min(cb)
+        } else {
+            f64::INFINITY
+        };
+        let open = exp_gate_open(cf, cb, rgmin::precon::EXP_GATE_MAX_SPREAD);
+        spreads.push_str(&format!(
+            "{},{:.6e},{:.6e},{:.6e},{},{}\n",
+            p.name, cf, cb, spread, open as u8, probes
+        ));
+        eprintln!(
+            "{:16} rayleigh force {:.3e} bond {:.3e} spread {:.3} gate {open}",
+            p.name, cf, cb, spread
+        );
+        for (name, opt) in arms {
+            for rep in 0..repeats {
+                let t0 = Instant::now();
+                let (evals, gnorm, energy, converged, _) = run_beat(p, opt, open);
+                let millis = t0.elapsed().as_secs_f64() * 1.0e3;
+                eprintln!(
+                    "{:16} {:16} r{rep} evals {evals:5} |F| {gnorm:.3e} {millis:.2} ms conv {converged}",
+                    p.name, name
+                );
+                push_row(
+                    &mut rows,
+                    BeatRow {
+                        problem: p,
+                        arm: name,
+                        rep,
+                        evals,
+                        energy,
+                        gnorm,
+                        millis,
+                        converged,
+                    },
+                );
+            }
+        }
+    }
+    let mut train = Vec::new();
+    for p in problems.iter().filter(|p| p.split == "train") {
+        for &memory in &[8usize, 12, 20, 30] {
+            for &cap in &[0.10_f64, 0.15, 0.20, 0.30, 0.40] {
+                let mut opt = eon_opt();
+                opt.memory = memory;
+                opt.cap = cap;
+                let name = format!("grid-m{memory}-c{cap:.2}");
+                let t0 = Instant::now();
+                let (evals, gnorm, energy, converged, _) = run_beat(p, opt, false);
+                let millis = t0.elapsed().as_secs_f64() * 1.0e3;
+                eprintln!(
+                    "{:<16} {:<16} evals {evals:5} conv {converged}",
+                    p.name, name
+                );
+                push_row(
+                    &mut rows,
+                    BeatRow {
+                        problem: p,
+                        arm: &name,
+                        rep: 0,
+                        evals,
+                        energy,
+                        gnorm,
+                        millis,
+                        converged,
+                    },
+                );
+                train.push(TrainRow {
+                    memory,
+                    cap,
+                    evals,
+                    converged,
+                    problem: p.name.to_string(),
+                });
+            }
+        }
+    }
+    if let Some((memory, cap)) = select_train_setting(&train) {
+        eprintln!("train setting memory {memory} cap {cap}");
+        let same = memory == 20 && (cap - 0.2).abs() < 1e-12;
+        if !same {
+            for p in &problems {
+                let mut opt = eon_opt();
+                opt.memory = memory;
+                opt.cap = cap;
+                for rep in 0..repeats {
+                    let t0 = Instant::now();
+                    let (evals, gnorm, energy, converged, _) = run_beat(p, opt, false);
+                    let millis = t0.elapsed().as_secs_f64() * 1.0e3;
+                    push_row(
+                        &mut rows,
+                        BeatRow {
+                            problem: p,
+                            arm: "lbfgs-tuned",
+                            rep,
+                            evals,
+                            energy,
+                            gnorm,
+                            millis,
+                            converged,
+                        },
+                    );
+                    eprintln!(
+                        "{:16} lbfgs-tuned r{rep} evals {evals} {millis:.2} ms conv {converged}",
+                        p.name
+                    );
+                }
+            }
+        }
+    } else {
+        eprintln!("no training setting converged on every training problem");
+    }
+    std::fs::write(out, &rows).expect("beat csv");
+    let spread_path = if out.ends_with("beat.csv") {
+        out.replace("beat.csv", "spread.csv")
+    } else {
+        format!("{out}.spread.csv")
+    };
+    std::fs::write(&spread_path, spreads).expect("spread csv");
+    eprintln!("wrote {out} and {spread_path}");
+}
+
+fn eon_opt() -> BeatOpt {
+    BeatOpt {
+        memory: 20,
+        cap: CAP,
+        model_atom: false,
+        compact: false,
+        skip_bad: false,
+        lindh: false,
+        gate: false,
+        cg_atom: false,
+    }
+}
+
+fn cg_opt() -> BeatOpt {
+    BeatOpt {
+        cg_atom: true,
+        ..eon_opt()
+    }
+}
+
+fn model_opt() -> BeatOpt {
+    BeatOpt {
+        model_atom: true,
+        ..eon_opt()
+    }
+}
+
+fn gate_opt() -> BeatOpt {
+    BeatOpt {
+        gate: true,
+        ..eon_opt()
+    }
+}
+
+fn lindh_opt(model_atom: bool) -> BeatOpt {
+    BeatOpt {
+        lindh: true,
+        model_atom,
+        ..eon_opt()
+    }
+}
+
+fn compact_opt() -> BeatOpt {
+    BeatOpt {
+        compact: true,
+        ..eon_opt()
+    }
+}
+
+fn skip_opt() -> BeatOpt {
+    BeatOpt {
+        skip_bad: true,
+        ..eon_opt()
+    }
+}
+
+struct BeatRow<'a> {
+    problem: &'a Problem,
+    arm: &'a str,
+    rep: usize,
+    evals: usize,
+    energy: f64,
+    gnorm: f64,
+    millis: f64,
+    converged: bool,
+}
+
+fn push_row(rows: &mut String, row: BeatRow<'_>) {
+    let p = row.problem;
+    rows.push_str(&format!(
+        "{},{},{},{},{},{},{:.6e},{:.6e},{:.4},{}\n",
+        p.name,
+        p.x0.len() / 3,
+        p.split,
+        row.arm,
+        row.rep,
+        row.evals,
+        row.energy,
+        row.gnorm,
+        row.millis,
+        row.converged as u8
+    ));
+}
+
+fn run_beat(p: &Problem, opt: BeatOpt, gate_open: bool) -> (usize, f64, f64, bool, f64) {
+    if opt.cg_atom {
+        let (evals, gnorm, energy, converged, force_ms) = run_cg_atom(p);
+        return (evals, gnorm, energy, converged, force_ms);
+    }
+    let mut probes = 0usize;
+    let install_exp = opt.gate && gate_open && p.x0.len() / 3 <= 1_600;
+    if opt.gate {
+        let (_, _, n) = rayleigh(p);
+        probes = n;
+    }
+    let n = p.x0.len();
+    let control = Control {
+        maxiter: p.budget,
+        gtol: p.tol,
+        istep: 1.0,
+        stop_norm: StopNorm::MaxAtom,
+        ..Control::default()
+    };
+    let mut solver = Solver::new(Method::Lbfgs { memory: opt.memory }, control, n);
+    solver.set_atom_maxmove(opt.cap);
+    if opt.model_atom {
+        solver.set_lbfgs_model_atom(true).unwrap();
+    }
+    if opt.compact {
+        solver.set_lbfgs_compact_tr(true).unwrap();
+    }
+    if opt.skip_bad {
+        solver.set_lbfgs_skip_bad(true).unwrap();
+    }
+    if opt.lindh {
+        solver
+            .set_lindh(Some(LindhSpec {
+                z: atomic_numbers(p),
+                c_stab: 0.1,
+                cell: p.cell,
+            }))
+            .unwrap();
+    }
+    if install_exp {
+        let nbr = neighbours(&p.x0, p.rc, p.cell);
+        let params = ExpParams {
+            mu: None,
+            r_cut: Some(p.rc),
+            ..ExpParams::default()
+        };
+        solver.set_exp(p.x0.view(), &nbr, &params).unwrap();
+    }
+    let calls = AtomicUsize::new(0);
+    let force_ns = std::sync::atomic::AtomicU64::new(0);
+    let kind = p.kind;
+    let cell = p.cell;
+    let mut x = p.x0.clone();
+    let report = if install_exp {
+        let oracle = Oracle::unbounded(n, |v: ArrayView1<f64>| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            let mut g = vec![0.0; v.len()];
+            let t0 = Instant::now();
+            let e = potential(kind, cell, v, &mut g);
+            force_ns.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            (e, Array1::from(g))
+        });
+        solver.run(&oracle, &mut x)
+    } else {
+        solver.run_fill(&mut x, |v, g| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            let t0 = Instant::now();
+            let e = potential(kind, cell, v, g.as_slice_mut().unwrap());
+            force_ns.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            e
+        })
+    };
+    let evals = calls.load(Ordering::Relaxed) + probes;
+    let force_ms = force_ns.load(Ordering::Relaxed) as f64 / 1.0e6;
+    match report {
+        Ok(rep) => (
+            evals,
+            rep.grad_norm,
+            rep.value,
+            rep.grad_norm < p.tol,
+            force_ms,
+        ),
+        Err(_) => (evals, f64::INFINITY, f64::NAN, false, force_ms),
+    }
+}
+
+fn run_cg_atom(p: &Problem) -> (usize, f64, f64, bool, f64) {
+    let calls = AtomicUsize::new(0);
+    let kind = p.kind;
+    let cell = p.cell;
+    let mut raw = p.x0.to_vec();
+    let opts = EonCg {
+        max_move: CAP,
+        gtol: p.tol,
+        max_iter: p.budget,
+        cluster: true,
+        atom_only: true,
+    };
+    let force_ns = std::sync::atomic::AtomicU64::new(0);
+    let rep = minimize_eon_cg(
+        &mut raw,
+        |xs, gs| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            let t0 = Instant::now();
+            let e = potential(kind, cell, ArrayView1::from(xs), gs);
+            force_ns.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            e
+        },
+        &opts,
+    );
+    (
+        calls.load(Ordering::Relaxed),
+        rep.grad,
+        rep.energy,
+        rep.converged,
+        force_ns.load(Ordering::Relaxed) as f64 / 1.0e6,
+    )
+}
+
+/// Force-direction and shortest-bond Rayleigh quotients.
+/// Three evaluations: the point, the force probe, the bond probe.
+fn rayleigh(p: &Problem) -> (f64, f64, usize) {
+    let n = p.x0.len();
+    let mut g = vec![0.0; n];
+    let _ = potential(p.kind, p.cell, p.x0.view(), &mut g);
+    let mut n2 = 0.0;
+    for v in &g {
+        n2 += v * v;
+    }
+    let norm = n2.sqrt();
+    if !(norm.is_finite() && norm > 0.0) {
+        return (f64::NAN, f64::NAN, 1);
+    }
+    let fd = rgmin::EON_FINITE_DIFFERENCE;
+    let c_force = directional(p, &g, &force_unit(&g, norm), fd);
+    let c_bond = directional(p, &g, &bond_unit(&p.x0, p.cell), fd);
+    (c_force, c_bond, 3)
+}
+
+fn force_unit(g: &[f64], norm: f64) -> Vec<f64> {
+    g.iter().map(|v| -v / norm).collect()
+}
+
+fn directional(p: &Problem, g: &[f64], u: &[f64], fd: f64) -> f64 {
+    let mut probe = p.x0.to_vec();
+    for i in 0..probe.len() {
+        probe[i] += fd * u[i];
+    }
+    let mut gp = vec![0.0; g.len()];
+    let _ = potential(p.kind, p.cell, ArrayView1::from(&probe), &mut gp);
+    let mut curv = 0.0;
+    for i in 0..g.len() {
+        curv += (gp[i] - g[i]) * u[i];
+    }
+    curv / fd
+}
+
+fn bond_unit(x: &Array1<f64>, cell: [f64; 3]) -> Vec<f64> {
+    let n = x.len() / 3;
+    let mut best = f64::MAX;
+    let mut which = (0usize, 1usize);
+    let mut vec = [1.0, 0.0, 0.0];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let mut d = [0.0; 3];
+            for a in 0..3 {
+                d[a] = wrap(x[3 * i + a] - x[3 * j + a], cell[a]);
+            }
+            let r = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if r < best && r > 1.0e-8 {
+                best = r;
+                which = (i, j);
+                vec = d;
+            }
+        }
+    }
+    let mut u = vec![0.0; x.len()];
+    if best.is_finite() && best > 0.0 && best < f64::MAX / 2.0 {
+        let scale = 1.0 / (best * std::f64::consts::SQRT_2);
+        for a in 0..3 {
+            u[3 * which.0 + a] = vec[a] * scale;
+            u[3 * which.1 + a] = -vec[a] * scale;
+        }
+    }
+    u
+}
+
+fn atomic_numbers(p: &Problem) -> Vec<u8> {
+    let n = p.x0.len() / 3;
+    match p.kind {
+        Kind::Lj => Vec::new(),
+        Kind::Morse => vec![78; n],
+        Kind::Gupta(gp) => {
+            let z = if (gp.r0 - 2.775).abs() < 1.0e-6 {
+                78
+            } else {
+                29
+            };
+            vec![z; n]
+        }
+        Kind::Water => {
+            let mut z = Vec::with_capacity(n);
+            for _ in 0..(n / 3) {
+                z.extend_from_slice(&[8, 1, 1]);
+            }
+            z
+        }
+    }
+}
+
+fn lindh_scale(out: &str, repeats: usize) {
+    let problems = problems();
+    for p in &problems {
+        check_force(p);
+    }
+    let mut rows = String::from(
+        "problem,atoms,split,arm,repeat,evals,energy,gnorm,millis,force_millis,overhead_millis,effective_s,converged\n",
+    );
+    let arms = [
+        ("lbfgs-eon", eon_opt()),
+        ("lbfgs-lindh", lindh_opt(false)),
+        ("lbfgs-lindh-atom", lindh_opt(true)),
+    ];
+    for p in &problems {
+        for (name, opt) in arms {
+            for rep in 0..repeats {
+                let t0 = Instant::now();
+                let (evals, gnorm, energy, converged, force_ms) = run_beat(p, opt, false);
+                let millis = t0.elapsed().as_secs_f64() * 1.0e3;
+                let overhead = (millis - force_ms).max(0.0);
+                let effective = evals as f64 + overhead / 1.0e3;
+                eprintln!(
+                    "{:16} {:16} r{rep} evals {evals:5} E {energy:.6e} |F| {gnorm:.3e} wall {millis:.2} force {force_ms:.2} over {overhead:.2} eff {effective:.3} conv {converged}",
+                    p.name, name
+                );
+                rows.push_str(&format!(
+                    "{},{},{},{},{},{},{:.6e},{:.6e},{:.4},{:.4},{:.4},{:.6},{}\n",
+                    p.name,
+                    p.x0.len() / 3,
+                    p.split,
+                    name,
+                    rep,
+                    evals,
+                    energy,
+                    gnorm,
+                    millis,
+                    force_ms,
+                    overhead,
+                    effective,
+                    converged as u8
+                ));
+            }
+        }
+    }
+    let basin_path = out.replace("lindh-scale.csv", "lindh-basin.csv");
+    let basin = basin_log(problems.iter().find(|p| p.name == "lj150"));
+    std::fs::write(&basin_path, basin).expect("basin csv");
+    let over_path = out.replace("lindh-scale.csv", "lindh-overhead.csv");
+    let over = overhead_table();
+    std::fs::write(&over_path, over).expect("overhead csv");
+    std::fs::write(out, rows).expect("lindh csv");
+    eprintln!("wrote {out}");
+}
+
+fn overhead_only() {
+    let text = overhead_table();
+    eprintln!("{text}");
+    std::fs::write("bench/raw/lindh-overhead.csv", text).expect("overhead csv");
+}
+
+fn overhead_table() -> String {
+    let mut rows = String::from("system,atoms,what,repeat,millis\n");
+    let problems = problems();
+    if let Some(p) = problems.iter().find(|p| p.name == "gupta-cu-slab") {
+        time_force(&mut rows, "gupta-cu-slab", p, 5);
+        time_apply(
+            &mut rows,
+            "gupta-cu-slab",
+            &p.x0,
+            &atomic_numbers(p),
+            p.cell,
+            5,
+        );
+    }
+    let side = 47usize;
+    let n = side * side * side;
+    let mut x = Vec::with_capacity(3 * n);
+    for iz in 0..side {
+        for iy in 0..side {
+            for ix in 0..side {
+                x.push(1.2 * ix as f64);
+                x.push(1.2 * iy as f64);
+                x.push(1.2 * iz as f64);
+            }
+        }
+    }
+    let cube = Array1::from(x);
+    time_lj(&mut rows, n, &cube, 1);
+    time_apply(&mut rows, "lj-cube", &cube, &[], [0.0; 3], 5);
+    rows
+}
+
+fn time_force(rows: &mut String, name: &str, p: &Problem, repeats: usize) {
+    for rep in 0..repeats {
+        let mut g = vec![0.0; p.x0.len()];
+        let t0 = Instant::now();
+        let _ = potential(p.kind, p.cell, p.x0.view(), &mut g);
+        let millis = t0.elapsed().as_secs_f64() * 1.0e3;
+        eprintln!("{name} force r{rep} {millis:.3} ms");
+        rows.push_str(&format!(
+            "{name},{},force,{rep},{millis:.4}\n",
+            p.x0.len() / 3
+        ));
+    }
+}
+
+fn time_lj(rows: &mut String, n: usize, x: &Array1<f64>, repeats: usize) {
+    for rep in 0..repeats {
+        let mut g = vec![0.0; x.len()];
+        let t0 = Instant::now();
+        let _ = lennard_jones(x.view(), &mut g);
+        let millis = t0.elapsed().as_secs_f64() * 1.0e3;
+        eprintln!("lj-cube force r{rep} {millis:.3} ms atoms {n}");
+        rows.push_str(&format!("lj-cube,{n},force,{rep},{millis:.4}\n"));
+    }
+}
+
+fn time_apply(
+    rows: &mut String,
+    name: &str,
+    x: &Array1<f64>,
+    z: &[u8],
+    cell: [f64; 3],
+    repeats: usize,
+) {
+    let mut rhs = vec![0.0; x.len()];
+    for (i, v) in rhs.iter_mut().enumerate() {
+        *v = ((i % 7) as f64 * 0.17).sin();
+    }
+    for rep in 0..repeats {
+        let mut trial = rhs.clone();
+        let t0 = Instant::now();
+        let ok = apply_inverse(x.as_slice().unwrap(), z, 0.1, cell, 1.0, &mut trial);
+        let millis = t0.elapsed().as_secs_f64() * 1.0e3;
+        eprintln!("{name} apply r{rep} {millis:.3} ms ok {ok}");
+        rows.push_str(&format!(
+            "{name},{},lindh-apply,{rep},{millis:.4}\n",
+            x.len() / 3
+        ));
+    }
+}
+
+/// One pass of LJ150. Each accepted step is checked for a downhill
+/// slope and the per-atom cap. The energies are the basin record.
+fn basin_log(problem: Option<&Problem>) -> String {
+    let mut rows = String::from("problem,arm,step,energy,slope,max_atom,descent,within_cap\n");
+    let Some(p) = problem else {
+        return rows;
+    };
+    for (name, opt) in [
+        ("lbfgs-eon", eon_opt()),
+        ("lbfgs-lindh-atom", lindh_opt(true)),
+    ] {
+        let n = p.x0.len();
+        let control = Control {
+            maxiter: p.budget,
+            gtol: p.tol,
+            istep: 1.0,
+            stop_norm: StopNorm::MaxAtom,
+            ..Control::default()
+        };
+        let mut solver = Solver::new(Method::Lbfgs { memory: opt.memory }, control, n);
+        solver.set_atom_maxmove(opt.cap);
+        if opt.model_atom {
+            solver.set_lbfgs_model_atom(true).unwrap();
+        }
+        if opt.lindh {
+            solver
+                .set_lindh(Some(LindhSpec {
+                    z: atomic_numbers(p),
+                    c_stab: 0.1,
+                    cell: p.cell,
+                }))
+                .unwrap();
+        }
+        let oracle = Oracle::unbounded(n, |v: ArrayView1<f64>| {
+            let mut g = vec![0.0; v.len()];
+            let e = potential(p.kind, p.cell, v, &mut g);
+            (e, Array1::from(g))
+        });
+        let mut x = p.x0.clone();
+        let mut g = vec![0.0; n];
+        let mut energy = potential(p.kind, p.cell, x.view(), &mut g);
+        for step in 0..p.budget {
+            let gnorm = max_atom_of(&g);
+            if gnorm < p.tol {
+                break;
+            }
+            let x0 = x.clone();
+            let g0 = g.clone();
+            let report = solver.step(&oracle, &mut x);
+            let Ok(rep) = report else {
+                rows.push_str(&format!(
+                    "{},{name},{step},{energy:.6e},nan,nan,0,0\n",
+                    p.name
+                ));
+                break;
+            };
+            let mut slope = 0.0_f64;
+            let mut max_a = 0.0_f64;
+            let mut i = 0;
+            while i < n {
+                let end = (i + 3).min(n);
+                let mut a2 = 0.0;
+                for k in i..end {
+                    let d = x[k] - x0[k];
+                    slope += g0[k] * d;
+                    a2 += d * d;
+                }
+                max_a = max_a.max(a2.sqrt());
+                i = end;
+            }
+            energy = rep.value;
+            if let Some(grad) = &rep.grad {
+                g = grad.to_vec();
+            }
+            let descent = slope < 0.0;
+            let within = max_a <= opt.cap + 1.0e-8;
+            rows.push_str(&format!(
+                "{},{name},{step},{energy:.6e},{slope:.6e},{max_a:.6e},{},{}\n",
+                p.name, descent as u8, within as u8
+            ));
+            if !descent || !within {
+                eprintln!("{name} step {step} slope {slope:.3e} max_atom {max_a:.3e} UNSAFE");
+            }
+        }
+        eprintln!("{name} basin energy {energy:.6e} |F| {}", max_atom_of(&g));
+    }
+    rows
+}
+
+fn max_atom_of(g: &[f64]) -> f64 {
+    let mut worst = 0.0_f64;
+    let mut i = 0;
+    while i < g.len() {
+        let end = (i + 3).min(g.len());
+        let mut a2 = 0.0;
+        for v in &g[i..end] {
+            a2 += v * v;
+        }
+        worst = worst.max(a2.sqrt());
+        i = end;
+    }
+    worst
 }

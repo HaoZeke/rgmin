@@ -29,6 +29,7 @@ use crate::hvp::{
     sym_eig_jacobi,
 };
 use crate::lbfgs::{GradNorm, Lbfgs, LbfgsStep};
+use crate::lindh::LindhSpec;
 use crate::linesearch::LineSearch;
 use crate::lowest_mode::{ApplyHessian, lowest_eigenpair};
 use crate::manifold::{Manifold, ManifoldKind};
@@ -44,7 +45,7 @@ use crate::qn_step::QnStep;
 use crate::report::Report;
 use crate::rigid::{project_horizontal, project_out_rot_trans};
 use crate::step::{
-    cap_displacement_atom, finite, l2, max_atom_displacement, non_finite,
+    cap_displacement_atom, clip_mut, clip_owned, finite, l2, max_atom_displacement, non_finite,
     scale_displacement_to_atom_cap, scale_step, scale_step_atom,
 };
 use crate::trust::{
@@ -168,6 +169,10 @@ pub struct Solver {
     gradient_calls: usize,
     /// Packwood exponential metric. `None` leaves every method unchanged.
     exp: Option<ExpState>,
+    /// Lindh model Hessian. `None` leaves the scalar initial scale.
+    lindh_spec: Option<LindhSpec>,
+    /// Rayleigh scale of the Lindh matrix, from one force probe.
+    lindh_mu: Option<f64>,
     /// Analytic or finite-difference Hessian-vector products.
     hvp_calls: usize,
     /// Negative-curvature kicks already taken in this solve.
@@ -314,6 +319,8 @@ impl Solver {
             gradient_calls: 0,
             hvp_calls: 0,
             exp: None,
+            lindh_spec: None,
+            lindh_mu: None,
             saddle_kicks: 0,
             stop_norm,
             constraints: None,
@@ -650,6 +657,151 @@ impl Solver {
             solver.keep_long = on;
         }
         Ok(())
+    }
+
+    /// Keep a long downhill quasi-Newton step and scale it per atom.
+    ///
+    /// The eOn cap replaces that step with `H0` times the force and
+    /// clears the pairs. This clears the pairs too, but the step stays
+    /// the model direction, so the Euclidean length may exceed the cap
+    /// while no atom moves further than the cap. That is the L-BFGS
+    /// form of the per-atom-only CG step. Off by default.
+    pub fn set_lbfgs_model_atom(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.model_atom = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Compact Byrd–Nocedal–Schnabel step inside the per-atom cap.
+    ///
+    /// A two-loop step inside the cap is unchanged. A longer step is
+    /// the trust-region solution `(B + λ I) s = −g` with `λ` chosen so
+    /// the longest atom sits on the cap. The pairs are kept. Off by
+    /// default. The radius update in [`Self::set_lbfgs_trust`] is a
+    /// different rule.
+    pub fn set_lbfgs_compact_tr(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.compact_tr = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Skip a curvature pair with `s·y ≤ 0` instead of clearing memory
+    /// on the next step. Nocedal and Wright skip that update. The eOn
+    /// client stores it and resets. Off by default.
+    pub fn set_lbfgs_skip_bad(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.skip_bad = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Lindh model Hessian as the initial inverse. `None` removes it.
+    ///
+    /// The factor is rebuilt from the current geometry. The first call
+    /// spends one gradient to set the scale `μ`. A non-positive ridge,
+    /// a session that is not L-BFGS, or atomic numbers whose length is
+    /// neither 0 nor `N` is an error.
+    pub fn set_lindh(&mut self, spec: Option<LindhSpec>) -> Result<()> {
+        if !matches!(self.inner, Inner::Lbfgs(_)) {
+            return Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            });
+        }
+        if let Some(spec) = &spec {
+            if !(spec.c_stab.is_finite() && spec.c_stab > 0.0) {
+                return Err(Error::Precon {
+                    what: "c_stab is not positive",
+                });
+            }
+            if !spec.z.is_empty() && spec.z.len() * 3 != self.dim {
+                return Err(Error::Precon {
+                    what: "atomic numbers do not match the dimension",
+                });
+            }
+        }
+        self.lindh_spec = spec;
+        self.lindh_mu = None;
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_lindh_factor(None);
+        }
+        Ok(())
+    }
+
+    /// Rebuild the Lindh factor. One gradient probe the first time.
+    fn ensure_lindh<G>(&mut self, x: &[f64], g: &[f64], mut grad_at: G)
+    where
+        G: FnMut(&[f64]) -> Array1<f64>,
+    {
+        if self.lindh_spec.is_none() {
+            return;
+        }
+        if self.lindh_mu.is_none() {
+            self.lindh_mu = Some(self.probe_lindh_mu(x, g, &mut grad_at));
+        }
+        let mu = self.lindh_mu.unwrap_or(1.0);
+        let built = self
+            .lindh_spec
+            .as_ref()
+            .and_then(|spec| crate::lindh::factor(x, &spec.z, spec.c_stab, spec.cell, mu));
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_lindh_factor(built);
+        }
+    }
+
+    fn probe_lindh_mu<G>(&self, x: &[f64], g: &[f64], grad_at: &mut G) -> f64
+    where
+        G: FnMut(&[f64]) -> Array1<f64>,
+    {
+        let mut n2 = 0.0;
+        for v in g {
+            n2 += *v * *v;
+        }
+        let norm = n2.sqrt();
+        if !(norm.is_finite() && norm > 0.0 && g.len() == x.len()) {
+            return 1.0;
+        }
+        let fd = crate::EON_FINITE_DIFFERENCE;
+        let mut probe = x.to_vec();
+        let mut u = vec![0.0; g.len()];
+        for i in 0..g.len() {
+            u[i] = -g[i] / norm;
+            probe[i] = x[i] + fd * u[i];
+        }
+        let gp = grad_at(&probe);
+        if gp.len() != g.len() {
+            return 1.0;
+        }
+        let mut curv = 0.0;
+        for i in 0..g.len() {
+            curv += (gp[i] - g[i]) * u[i];
+        }
+        curv /= fd;
+        let Some(spec) = self.lindh_spec.as_ref() else {
+            return 1.0;
+        };
+        let quad = crate::lindh::shape_quad(x, &spec.z, spec.c_stab, spec.cell, &u);
+        if curv.is_finite() && curv > 0.0 && quad > 1e-18 {
+            curv / quad
+        } else {
+            1.0
+        }
     }
 
     /// eOn `lbfgs_project_rigid`. Isolated clusters only.
@@ -1168,6 +1320,12 @@ impl Solver {
         gold: &Array1<f64>,
         grad: &Array1<f64>,
     ) -> (Array1<f64>, Array1<f64>) {
+        // Euclidean transport is a copy, and with rigid motion left in
+        // nothing is removed afterwards. `s = x - old` and `y = g - g_old`
+        // are those copies.
+        if !self.project_rigid && self.manifold == ManifoldKind::Euclidean {
+            return (x - old, grad - gold);
+        }
         let s = self.transport_vec(old, x, &(x - old));
         let y = grad - &self.transport_vec(old, x, gold);
         (s, y)
@@ -1503,7 +1661,7 @@ impl Solver {
         self.check_manifold(x.len())?;
         let cached = self.same_last_x(x);
         if !cached {
-            *x = obj.bounds().clip(x.view());
+            clip_mut(obj.bounds(), x);
         }
         let (value, raw_grad) = if cached {
             (self.last_value, self.last_grad.clone())
@@ -1708,7 +1866,7 @@ impl Solver {
                 what: "the capped step is zero",
             });
         }
-        let trial = obj.bounds().clip((x + step).view());
+        let trial = clip_owned(obj.bounds(), x + step);
         let taken = max_atom_displacement(&(&trial - x));
         if !taken.is_finite() || taken <= 0.0 {
             return Err(Error::OffManifold {
@@ -1786,7 +1944,7 @@ impl Solver {
         }
         let u = &force / norm;
         let raw = x + &(EON_FINITE_DIFFERENCE * &u);
-        let probe = obj.bounds().clip(raw.view());
+        let probe = clip_owned(obj.bounds(), raw);
         let along = (&probe - x).dot(&u);
         if !(along.is_finite() && along > 0.0) {
             return EonSeed::Scale(EON_INVERSE_CURVATURE);
@@ -1817,6 +1975,11 @@ impl Solver {
         O: DifferentiableObjective<f64> + ?Sized,
     {
         use crate::lbfgs::{EON_INVERSE_CURVATURE, EonSeed};
+        if self.lindh_spec.is_some() {
+            let xs: Vec<f64> = x.iter().copied().collect();
+            let gs: Vec<f64> = grad.iter().copied().collect();
+            self.ensure_lindh(&xs, &gs, |p| obj.grad(ArrayView1::from(p)));
+        }
         let Some(cap) = self.lbfgs_step().capped_limit() else {
             return Err(Error::LbfgsCap {
                 what: "the cap is not positive",
@@ -2006,7 +2169,7 @@ impl Solver {
         let old = x.clone();
         let gold = grad;
         *x = trial;
-        let grad = self.horizontal_grad(x, &tgrad);
+        let grad = self.horizontal_owned(x, tgrad);
         let s = &*x - &old;
         let y = &grad - &gold;
         if let Inner::Lbfgs(solver) = &mut self.inner {
@@ -2083,7 +2246,7 @@ impl Solver {
                 // 0.01 is the eOn probe length. Clip before the evaluation:
                 // the raw point can lie outside the objective box.
                 let raw = &*x + &(0.01 * &unit);
-                let probe = obj.bounds().clip(raw.view());
+                let probe = clip_owned(obj.bounds(), raw);
                 let along = (&probe - &*x).dot(&unit);
                 let curvature = if along > 0.0 && along.is_finite() {
                     let (_efd, gfd) = obj.value_and_gradient(probe.view());
@@ -2150,7 +2313,7 @@ impl Solver {
         let mut tval = value;
         let mut tgrad = grad.clone();
         for _ in 0..10 {
-            trial = obj.bounds().clip((&*x + alpha * &direction).view());
+            trial = clip_owned(obj.bounds(), &*x + alpha * &direction);
             let ev = obj.value_and_gradient(trial.view());
             tval = ev.0;
             tgrad = ev.1;
@@ -2165,7 +2328,7 @@ impl Solver {
                 solver.forget();
             }
             let sd = cap_displacement_atom(&self.geometry_scaled_force(&force, 0.1), cap);
-            trial = obj.bounds().clip((&*x + &sd).view());
+            trial = clip_owned(obj.bounds(), &*x + &sd);
             let ev = obj.value_and_gradient(trial.view());
             tval = ev.0;
             tgrad = ev.1;
@@ -2186,7 +2349,7 @@ impl Solver {
         let old = x.clone();
         let gold = grad.clone();
         *x = trial;
-        grad = self.horizontal_grad(x, &tgrad);
+        grad = self.horizontal_owned(x, tgrad);
         let s = &*x - &old;
         let y = &grad - &gold;
         if let Inner::Lbfgs(solver) = &mut self.inner {
@@ -2280,14 +2443,14 @@ impl Solver {
                 .atom_maxmove
                 .unwrap_or_else(|| self.control.istep.max(RADIUS_START));
             let step = scale_displacement_to_atom_cap(&mode, cap);
-            let trial = obj.bounds().clip((&*x + &step).view());
+            let trial = clip_owned(obj.bounds(), &*x + &step);
             let (v, g) = obj.value_and_gradient(trial.view());
             if !v.is_finite() || g.iter().any(|c| !c.is_finite()) {
                 return;
             }
             *x = trial;
             *value = v;
-            *grad = self.horizontal_grad(x, &g);
+            *grad = self.horizontal_owned(x, g);
             self.saddle_kicks = self.saddle_kicks.saturating_add(1);
             if let Inner::Dogleg { radius } = &mut self.inner {
                 *radius = self.control.istep.max(RADIUS_START);
@@ -2339,14 +2502,14 @@ impl Solver {
         };
         let cached = self.same_last_x(x);
         if !cached {
-            *x = obj.bounds().clip(x.view());
+            clip_mut(obj.bounds(), x);
         }
         let (mut value, mut grad) = if cached {
             (self.last_value, self.last_grad.clone())
         } else {
             obj.value_and_gradient(x.view())
         };
-        grad = self.horizontal_grad(x, &grad);
+        grad = self.horizontal_owned(x, grad);
         let gnorm = self.stationarity_norm(x, &grad);
         if gnorm < self.control.gtol {
             return self.report_or_escape(obj, x, value, grad);
@@ -2409,7 +2572,7 @@ impl Solver {
                 value = nval;
                 grad = ngrad;
             }
-            grad = self.horizontal_grad(x, &grad);
+            grad = self.horizontal_owned(x, grad);
             self.remember(x, value, &grad);
             let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
                 let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
@@ -2458,7 +2621,7 @@ impl Solver {
             value = nval;
             grad = ngrad;
         }
-        grad = self.horizontal_grad(x, &grad);
+        grad = self.horizontal_owned(x, grad);
         self.remember(x, value, &grad);
         let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
             let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
@@ -2542,7 +2705,7 @@ impl Solver {
             } else if let Some(cap) = self.control.maxmove {
                 scale_step(x, &mut trial, cap);
             }
-            trial = obj.bounds().clip(trial.view());
+            trial = clip_owned(obj.bounds(), trial);
             let p = &trial - &*x;
             (trial, p)
         };
@@ -2599,7 +2762,7 @@ impl Solver {
         self.check_manifold(x.len())?;
         let cached = self.same_last_x(x);
         if !cached {
-            *x = obj.bounds().clip(x.view());
+            clip_mut(obj.bounds(), x);
         }
 
         if let Inner::Pso { .. } = &self.inner {
@@ -2706,7 +2869,13 @@ impl Solver {
         }
 
         let start = x.clone();
-        let gold = grad.clone();
+        // The origin gradient is the secant of an L-BFGS step. Other
+        // Euclidean steps do not read it.
+        let gold = if matches!(self.inner, Inner::Lbfgs(_)) {
+            Some(grad.clone())
+        } else {
+            None
+        };
         let mut refused = false;
         match &mut self.inner {
             Inner::Lbfgs(solver) => {
@@ -3066,7 +3235,7 @@ impl Solver {
                             };
                             *x = point;
                         } else {
-                            *x = obj.bounds().clip((&*x + &correction).view());
+                            *x = clip_owned(obj.bounds(), &*x + &correction);
                         }
                         let ev = obj.value_and_gradient(x.view());
                         if !finite(ev.0, ev.1.view()) {
@@ -3125,7 +3294,7 @@ impl Solver {
                     } else if let Some(cap) = cap {
                         scale_step(x, &mut trial, cap);
                     }
-                    obj.bounds().clip(trial.view())
+                    clip_owned(obj.bounds(), trial)
                 };
                 let moved = free.is_none_or(|free| trial != free);
                 if matches!(state.kind, FireKind::V2) && state.dt > 0.0 && moved {
@@ -3146,16 +3315,20 @@ impl Solver {
                 *x = trial;
                 value = ev.0;
                 grad = ev.1;
-                let mut raw_new = grad.mapv(|g| -g);
-                project_box_tangent(obj.bounds(), x, &mut raw_new);
                 project_box_tangent(obj.bounds(), x, &mut state.vel);
-                if self.exp.is_some() {
-                    let mut steep_new = metric_vector(&self.exp, &raw_new);
-                    project_box_tangent(obj.bounds(), x, &mut steep_new);
-                    let mix_new = fire_mix(&self.exp, &state.vel, &raw_new, &steep_new);
-                    fire_after_v1_metric(state, &raw_new, &steep_new, mix_new);
-                } else {
-                    fire_after_v1(state, &raw_new);
+                // FIRE 2.0 mixes before the step. The post-step force is
+                // read only by FIRE 1.0.
+                if matches!(state.kind, FireKind::V1) {
+                    let mut raw_new = grad.mapv(|g| -g);
+                    project_box_tangent(obj.bounds(), x, &mut raw_new);
+                    if self.exp.is_some() {
+                        let mut steep_new = metric_vector(&self.exp, &raw_new);
+                        project_box_tangent(obj.bounds(), x, &mut steep_new);
+                        let mix_new = fire_mix(&self.exp, &state.vel, &raw_new, &steep_new);
+                        fire_after_v1_metric(state, &raw_new, &steep_new, mix_new);
+                    } else {
+                        fire_after_v1(state, &raw_new);
+                    }
                 }
             }
             Inner::Bb { prev_s, prev_y } => {
@@ -3218,12 +3391,13 @@ impl Solver {
                 grad = ev.1;
             }
         }
-        grad = self.horizontal_grad(x, &grad);
+        grad = self.horizontal_owned(x, grad);
 
         let pair = if matches!(self.inner, Inner::Lbfgs(_))
             && x.iter().zip(start.iter()).any(|(a, b)| a != b)
         {
-            let (s, y) = self.lbfgs_sy(&start, x, &gold, &grad);
+            let gold = gold.as_ref().expect("L-BFGS keeps the gradient");
+            let (s, y) = self.lbfgs_sy(&start, x, gold, &grad);
             Some((s, y, l2(&grad)))
         } else {
             None
@@ -3572,5 +3746,43 @@ mod tests {
             }
         }
         assert!(worst <= TANGENT, "|x . v| / |v| reached {worst:.4e}");
+    }
+
+    #[test]
+    fn the_new_lbfgs_arms_refuse_a_fire_session_and_a_bad_ridge() {
+        let mut fire = Solver::new(Method::Fire { kind: FireKind::V1 }, Control::default(), 3);
+        assert!(fire.set_lbfgs_model_atom(true).is_err());
+        assert!(fire.set_lbfgs_compact_tr(true).is_err());
+        assert!(fire.set_lbfgs_skip_bad(true).is_err());
+        assert!(fire.set_lindh(None).is_err());
+        let mut lbfgs = Solver::new(Method::lbfgs(), Control::default(), 6);
+        assert!(
+            lbfgs
+                .set_lindh(Some(LindhSpec {
+                    z: vec![1],
+                    c_stab: 0.1,
+                    cell: [0.0; 3],
+                }))
+                .is_err()
+        );
+        assert!(
+            lbfgs
+                .set_lindh(Some(LindhSpec {
+                    z: vec![1, 1],
+                    c_stab: 0.0,
+                    cell: [0.0; 3],
+                }))
+                .is_err()
+        );
+        lbfgs
+            .set_lindh(Some(LindhSpec {
+                z: vec![1, 8],
+                c_stab: 0.1,
+                cell: [0.0; 3],
+            }))
+            .unwrap();
+        lbfgs.set_lbfgs_model_atom(true).unwrap();
+        lbfgs.set_lbfgs_compact_tr(true).unwrap();
+        lbfgs.set_lbfgs_skip_bad(true).unwrap();
     }
 }

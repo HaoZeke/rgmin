@@ -30,6 +30,7 @@ mod adam;
 mod bb;
 #[cfg(feature = "highs")]
 mod box_objective;
+mod compact_tr;
 mod control;
 mod eon_cg;
 mod error;
@@ -52,6 +53,8 @@ pub mod lbfgs;
 /// L-BFGS quadratic model solved by HiGHS.
 #[cfg(feature = "highs")]
 pub mod lbfgs_qp;
+/// Sparse Lindh model Hessian.
+pub mod lindh;
 /// Matrix-free lowest Hessian eigenpair (IRC kick / lambda_min).
 pub mod lowest_mode;
 /// Embedded Riemannian manifolds (manopt_cpp proj / retr / transp).
@@ -78,6 +81,8 @@ pub mod sella_step;
 mod session;
 mod step;
 mod trust;
+/// Training-set memory and cap selection.
+pub mod tune;
 /// The vector seam: solver algebra behind one interface.
 pub mod vecops;
 
@@ -102,6 +107,7 @@ pub use lbfgs::{
 };
 #[cfg(feature = "highs")]
 pub use lbfgs_qp::HighsStep;
+pub use lindh::{LindhSpec, apply_inverse};
 pub use linesearch::LineSearch;
 pub use lowest_mode::{
     ApplyHessian, DENSE_EIGEN_CUTOFF, EigenParams, EigensolverKind, LowestMode, lowest_eigenpair,
@@ -113,6 +119,7 @@ pub use minimize::{minimize, minimize_method, minimize_method_hess, minimize_met
 pub use newton::{HessianObjective, HessianOracle, NewtonKind, minimize_newton};
 pub use nlcg::{Conjugacy, ConjugacyContext, Restart};
 pub use oracle::Oracle;
+pub use precon::exp_gate_open;
 pub use precon::{Exp, ExpParams, Neighbours, estimate_mu, nearest_neighbour_distance, sine_probe};
 pub use pso::minimize_pso;
 pub use qn::{minimize_bfgs, minimize_lbfgs, minimize_sd, minimize_sr1, minimize_sr2};
@@ -126,5 +133,6 @@ pub use scg::{DirectionalCurvature, ScgParams, minimize_scg, minimize_scg_exact}
 pub use sella_step::{prfo_restricted, ras_clip, rfo_get_s, rfo_restricted, ts_bfgs_update};
 pub use session::Solver;
 pub use session::drive::EonFeat;
+pub use tune::{TrainRow, select_train_setting};
 
 mod sphere_lbfgs;

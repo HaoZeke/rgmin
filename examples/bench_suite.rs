@@ -250,6 +250,7 @@ where
                 gtol: tol,
                 max_iter: BUDGET,
                 cluster,
+                atom_only: false,
             };
             let rep = minimize_eon_cg(
                 &mut raw,

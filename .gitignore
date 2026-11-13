@@ -39,6 +39,11 @@ pixi.lock
 
 # asv results and the local machine file
 .asv/
+# Local timing runs. Committed tables stay under bench/raw and benches/.
+/bench/local/
+*.bench.csv
+*.bench.json
+*.bench.log
 
 # Head-to-head logs. benches/ase_h2h.py regenerates them.
 benches/ase_h2h/raw/

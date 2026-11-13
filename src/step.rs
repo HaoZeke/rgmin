@@ -11,6 +11,51 @@ pub(crate) fn l2(g: &Array1<f64>) -> f64 {
     crate::vecops::nrm2(g.view())
 }
 
+/// `bounds.clip`, returning `x` when every coordinate is strictly inside.
+///
+/// `f64::max` and `f64::min` keep the bits of a finite value strictly
+/// between the two ends, so the clipped vector is that value. A point
+/// on the boundary, a NaN, or a non-contiguous view still goes through
+/// [`eindir_core::Bounds::clip`].
+pub(crate) fn clip_owned(bounds: &eindir_core::Bounds<f64>, x: Array1<f64>) -> Array1<f64> {
+    if point_strictly_inside(bounds, x.view()) {
+        x
+    } else {
+        bounds.clip(x.view())
+    }
+}
+
+/// [`clip_owned`] for a vector the caller already owns.
+pub(crate) fn clip_mut(bounds: &eindir_core::Bounds<f64>, x: &mut Array1<f64>) {
+    if point_strictly_inside(bounds, x.view()) {
+        return;
+    }
+    let clipped = bounds.clip(x.view());
+    if x.len() == clipped.len()
+        && x.iter()
+            .zip(clipped.iter())
+            .all(|(a, b)| a.to_bits() == b.to_bits())
+    {
+        return;
+    }
+    *x = clipped;
+}
+
+fn point_strictly_inside(bounds: &eindir_core::Bounds<f64>, x: ArrayView1<'_, f64>) -> bool {
+    let (Some(xs), Some(lo), Some(hi)) =
+        (x.as_slice(), bounds.low.as_slice(), bounds.high.as_slice())
+    else {
+        return false;
+    };
+    xs.len() == lo.len()
+        && xs.len() == hi.len()
+        && xs
+            .iter()
+            .zip(lo.iter())
+            .zip(hi.iter())
+            .all(|((v, l), h)| *v > *l && *v < *h)
+}
+
 /// An answer a decrease test may compare: value and gradient finite.
 pub(crate) fn finite(f: f64, g: ArrayView1<'_, f64>) -> bool {
     f.is_finite() && g.iter().all(|v| v.is_finite())
@@ -146,7 +191,7 @@ where
 {
     let (npos, _, lsstep) =
         linesearch.search(|x| obj.value_and_gradient(x), pos.view(), dir, istep);
-    let mut trial = obj.bounds().clip(npos.view());
+    let mut trial = clip_owned(obj.bounds(), npos);
     if let Some(cap) = control.maxmove {
         scale_step(pos, &mut trial, cap);
     }
@@ -186,6 +231,34 @@ pub(crate) fn next_istep(lsstep: f64, control: &Control) -> f64 {
 mod tests {
     use super::*;
     use ndarray::array;
+
+    #[test]
+    fn an_interior_point_keeps_the_bits_clip_would_write() {
+        use eindir_core::Bounds;
+        let bounds = Bounds::new(
+            ndarray::Array1::from_elem(4, -2.0),
+            ndarray::Array1::from_elem(4, 2.0),
+            0.0,
+        );
+        let interior = ndarray::array![-0.0, 1.0, -1.5, 0.25];
+        let kept = clip_owned(&bounds, interior.clone());
+        let via = bounds.clip(interior.view());
+        assert_eq!(kept, interior);
+        for (a, b) in kept.iter().zip(via.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+        let outside = ndarray::array![3.0, -3.0, 0.0, f64::NAN];
+        let owned = clip_owned(&bounds, outside.clone());
+        let clipped = bounds.clip(outside.view());
+        for (a, b) in owned.iter().zip(clipped.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+        let mut slot = outside;
+        clip_mut(&bounds, &mut slot);
+        for (a, b) in slot.iter().zip(clipped.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+    }
 
     #[test]
     fn atom_cap_does_not_crush_a_uniform_cluster_step() {

@@ -100,6 +100,61 @@ pub fn nrm2(x: ArrayView1<f64>) -> f64 {
     dot(x, x).sqrt()
 }
 
+/// `||x - y||_2`, the same bits as [`nrm2`] of the stored difference.
+///
+/// Each element is subtracted once. The squares then fold the way
+/// ndarray folds `d · d` on that contiguous difference. Above the
+/// parallel cutoff the difference is stored and [`nrm2`] runs, so the
+/// chunk fold stays the one `d · d` uses.
+pub fn nrm2_diff(x: ArrayView1<f64>, y: ArrayView1<f64>) -> f64 {
+    assert_eq!(x.len(), y.len());
+    #[cfg(feature = "par")]
+    if x.len() >= PAR_MIN_LEN {
+        let diff = &x.to_owned() - &y;
+        return nrm2(diff.view());
+    }
+    diff_sq(x, y).sqrt()
+}
+
+/// Eight-way sum of squares of `x - y`, matching ndarray's unrolled dot
+/// of the stored difference with itself.
+fn diff_sq(x: ArrayView1<f64>, y: ArrayView1<f64>) -> f64 {
+    let n = x.len();
+    let mut i = 0;
+    let (mut p0, mut p1, mut p2, mut p3, mut p4, mut p5, mut p6, mut p7) =
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    while i + 8 <= n {
+        let d0 = x[i] - y[i];
+        let d1 = x[i + 1] - y[i + 1];
+        let d2 = x[i + 2] - y[i + 2];
+        let d3 = x[i + 3] - y[i + 3];
+        let d4 = x[i + 4] - y[i + 4];
+        let d5 = x[i + 5] - y[i + 5];
+        let d6 = x[i + 6] - y[i + 6];
+        let d7 = x[i + 7] - y[i + 7];
+        p0 += d0 * d0;
+        p1 += d1 * d1;
+        p2 += d2 * d2;
+        p3 += d3 * d3;
+        p4 += d4 * d4;
+        p5 += d5 * d5;
+        p6 += d6 * d6;
+        p7 += d7 * d7;
+        i += 8;
+    }
+    let mut sum = 0.0;
+    sum += p0 + p4;
+    sum += p1 + p5;
+    sum += p2 + p6;
+    sum += p3 + p7;
+    while i < n {
+        let d = x[i] - y[i];
+        sum += d * d;
+        i += 1;
+    }
+    sum
+}
+
 /// `||x||_inf`, infinity on any non-finite component: a broken vector
 /// is never a small one.
 pub fn nrminf(x: ArrayView1<f64>) -> f64 {
@@ -228,6 +283,27 @@ pub fn vnrminf(x: &Vector) -> f64 {
 mod tests {
     use super::*;
     use ndarray::Array1;
+
+    #[test]
+    fn a_difference_norm_matches_the_stored_vector() {
+        for n in [0usize, 1, 7, 8, 9, 64, 3000] {
+            let x = Array1::from((0..n).map(|i| (i as f64 * 0.17).sin()).collect::<Vec<_>>());
+            let y = Array1::from((0..n).map(|i| (i as f64 * 0.09).cos()).collect::<Vec<_>>());
+            let stored = &x - &y;
+            assert_eq!(
+                nrm2_diff(x.view(), y.view()).to_bits(),
+                nrm2(stored.view()).to_bits(),
+                "n={n}"
+            );
+        }
+        let x = Array1::from(vec![-0.0, 1.0, f64::MIN_POSITIVE]);
+        let y = Array1::from(vec![0.0, -1.0, 0.0]);
+        let stored = &x - &y;
+        assert_eq!(
+            nrm2_diff(x.view(), y.view()).to_bits(),
+            nrm2(stored.view()).to_bits()
+        );
+    }
 
     #[test]
     fn the_seam_matches_ndarray_on_the_serial_path() {

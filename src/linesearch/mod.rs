@@ -259,22 +259,24 @@ where
     let mut best_f = f0;
     let mut best_alpha = 0.0;
     for _ in 0..maxiter {
-        let (x, f) = match probe(oracle, path, alpha) {
+        let probed = probe(oracle, path, alpha);
+        let (x, f) = match probed {
             Some((x, f, _)) => (Some(x), f),
             None => (None, f64::INFINITY),
         };
-        if let (true, Some(x)) = (f < best_f, &x) {
-            best_f = f;
-            best_x = x.clone();
-            best_alpha = alpha;
-        }
         let accept = if goldstein {
             conditions::goldstein(f, f0, alpha, slope, c)
         } else {
             conditions::armijo(f, f0, alpha, slope, c)
         };
-        if let (true, Some(x)) = (accept, x) {
-            return (x, f, alpha.abs());
+        match x {
+            Some(x) if accept => return (x, f, alpha.abs()),
+            Some(x) if f < best_f => {
+                best_f = f;
+                best_x = x;
+                best_alpha = alpha;
+            }
+            _ => {}
         }
         if goldstein && conditions::armijo(f, f0, alpha, slope, c) {
             // Lower bound failed: step is too short (Nocedal-Wright 3.11).

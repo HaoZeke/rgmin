@@ -24,6 +24,21 @@ pub struct EonCg {
     pub max_iter: usize,
     /// `true`: max atom force. `false`: infinity norm.
     pub cluster: bool,
+    /// Skip the scalar clip and keep only the per-atom cap.
+    ///
+    /// The eOn client clips the model length with
+    /// `std::copysign(max_move, step)` and then applies the per-atom
+    /// cap. On a unit direction the scalar clip already limits the
+    /// Euclidean length, so the per-atom cap does not bind. Rust
+    /// `step.copysign(max_move)` has the arguments the other way
+    /// round: a positive model step longer than the cap is left
+    /// unchanged, and only the per-atom cap scales it. The Euclidean
+    /// length can then exceed `max_move`. That is what cut
+    /// Rosenbrock10 from 883 force calls to 297. `atom_only` is that
+    /// positive-step behaviour, without flipping the sign of a
+    /// negative model step. Off by default, so the client count is
+    /// unchanged.
+    pub atom_only: bool,
 }
 
 impl Default for EonCg {
@@ -33,6 +48,7 @@ impl Default for EonCg {
             gtol: 1e-5,
             max_iter: 20_000,
             cluster: false,
+            atom_only: false,
         }
     }
 }
@@ -153,10 +169,13 @@ where
         if curv > 0.0 && curv.is_finite() {
             step = p1 / curv;
         }
-        // std::copysign(mag, sign): magnitude of the cap, sign of the
-        // model step. `step.copysign(cap)` keeps the long model length.
-        if step.abs() > opts.max_move {
-            step = opts.max_move.copysign(step);
+        // `std::copysign(max_move, step)`: magnitude of the cap, sign
+        // of the model step. `atom_only` leaves a long positive model
+        // step for the per-atom cap. A negative length is still clipped.
+        if step < -opts.max_move {
+            step = -opts.max_move;
+        } else if step > opts.max_move && !opts.atom_only {
+            step = opts.max_move;
         }
         for d in &mut direction {
             *d *= inv * step;
@@ -223,6 +242,7 @@ mod tests {
             gtol: 1e-12,
             max_iter: 1,
             cluster: true,
+            atom_only: false,
         };
         let _ = minimize_eon_cg(&mut x, spring, &opts);
         let mut n2 = 0.0;
@@ -250,5 +270,78 @@ mod tests {
         assert!(rep.converged, "{rep:?} x {x:?}");
         assert_eq!(rep.evals, 87, "evals {}", rep.evals);
         assert!(rep.energy < 1e-8, "{}", rep.energy);
+    }
+
+    /// Two atoms, both away from the origin. The scalar cap holds the
+    /// Euclidean length at `max_move`. The per-atom cap alone lets both
+    /// atoms move by `max_move`.
+    #[test]
+    fn per_atom_only_lets_the_euclidean_length_exceed_the_cap() {
+        fn spring(x: &[f64], g: &mut [f64]) -> f64 {
+            let k = 0.1;
+            let mut f = 0.0;
+            for i in 0..x.len() {
+                g[i] = k * x[i];
+                f += 0.5 * k * x[i] * x[i];
+            }
+            f
+        }
+        let start = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let mut x = start;
+        let opts = EonCg {
+            max_move: 0.2,
+            gtol: 1e-12,
+            max_iter: 1,
+            cluster: true,
+            atom_only: true,
+        };
+        let _ = minimize_eon_cg(&mut x, spring, &opts);
+        let mut n2 = 0.0_f64;
+        let mut max_a = 0.0_f64;
+        for atom in 0..2 {
+            let mut r2 = 0.0;
+            for c in 0..3 {
+                let d = x[3 * atom + c] - start[3 * atom + c];
+                r2 += d * d;
+                n2 += d * d;
+            }
+            max_a = max_a.max(r2.sqrt());
+        }
+        let disp = n2.sqrt();
+        assert!(
+            (max_a - 0.2).abs() < 1e-9,
+            "per-atom cap 0.2, largest atom {max_a}"
+        );
+        assert!(
+            disp > 0.2 + 1e-6,
+            "euclidean length {disp} should exceed the scalar cap"
+        );
+    }
+
+    #[test]
+    fn rosenbrock_10_matches_the_eon_evaluation_count() {
+        let mut x = vec![-1.2, 1.0, -1.2, 1.0, -1.2, 1.0, -1.2, 1.0, -1.2, 1.0];
+        let opts = EonCg {
+            gtol: 1e-5,
+            cluster: false,
+            ..EonCg::default()
+        };
+        let rep = minimize_eon_cg(&mut x, rosen, &opts);
+        assert!(rep.converged, "{rep:?}");
+        assert_eq!(rep.evals, 883, "evals {}", rep.evals);
+    }
+
+    #[test]
+    fn per_atom_only_rosenbrock_10_uses_the_long_model_step() {
+        let mut x = vec![-1.2, 1.0, -1.2, 1.0, -1.2, 1.0, -1.2, 1.0, -1.2, 1.0];
+        let opts = EonCg {
+            gtol: 1e-5,
+            cluster: false,
+            atom_only: true,
+            ..EonCg::default()
+        };
+        let rep = minimize_eon_cg(&mut x, rosen, &opts);
+        assert!(rep.converged, "{rep:?} x {x:?}");
+        assert_eq!(rep.evals, 297, "evals {}", rep.evals);
     }
 }

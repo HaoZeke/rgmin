@@ -15,7 +15,7 @@ use crate::pso::minimize_pso;
 use crate::qn::{minimize_bfgs, minimize_lbfgs, minimize_sd, minimize_sr1, minimize_sr2};
 use crate::report::Report;
 use crate::session::Solver;
-use crate::step::{l2, next_istep, start_answer, take_step};
+use crate::step::{clip_owned, l2, next_istep, start_answer, take_step};
 
 /// Minimize `obj` from `init` with the chosen conjugacy, restart, and line search.
 pub fn minimize<O>(
@@ -216,7 +216,7 @@ where
             dim: Objective::dim(obj),
         });
     }
-    pos = obj.bounds().clip(pos.view());
+    pos = clip_owned(obj.bounds(), pos);
     let (mut value, mut grad) = start_answer(obj, &pos)?;
     let mut dir = grad.mapv(|g| -g);
     let mut g_old = grad.clone();
