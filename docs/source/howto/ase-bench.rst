@@ -1,0 +1,290 @@
+ASE drop-in benchmark
+=====================
+
+The median −0.012693 reported earlier for ASE LBFGS on LJ13 is not a
+minimum. That start was a corner of a cubic lattice at spacing 1.5,
+rattled by ``Normal(0, 0.05)``. On seed 0, ASE LBFGS with its default
+``alpha=70`` (initial inverse Hessian ``I/70``, longest atom at most
+0.2) does this:
+
+.. list-table::
+   :header-rows: 1
+
+   * - step
+     - energy
+     - max force
+     - min pair
+     - radius
+   * - 0
+     - −7.044814
+     - 2.270844
+     - 1.3495
+     - 2.5068
+   * - 1
+     - −4.571523
+     - 1.417897
+     - 1.5824
+     - 2.6311
+   * - 31
+     - −0.023658
+     - 0.009242
+     - 3.0801
+     - 6.4782
+
+The first step still moves inward. After that the radius grows on
+every step and the force falls because the pairs have gone. The same
+``alpha=70`` on a compact 13-atom start stays bound, and ``alpha=10``
+on the cubic start is worse (energy +2448 after 80 steps). The
+lattice, not the drop-in and not ``alpha`` by itself, is what produced
+−0.01.
+
+The runs below do not use that lattice. LJ13 starts from the Mackay
+icosahedron and LJ38 from the Oh truncated octahedron in the Cambridge
+Cluster Database
+(``https://www-wales.ch.cam.ac.uk/~jon/structures/LJ/points/13`` and
+``.../38``). The database energies are −44.326801 and −173.928427.
+With ASE's Lennard-Jones calculator (``epsilon = 1``, ``sigma = 1``,
+``rc = 10``, potential shifted to zero at the cutoff) those geometries
+evaluate to −44.326489 and −173.925615. Ten seeds add
+``Normal(0, 0.05)`` from ``PCG64(20261113 + seed)``. A second set
+draws points uniformly in a sphere of density 1 with no pair closer
+than 0.9. Cu64 is unchanged: fcc ``a=3.615`` repeated ``(4, 4, 4)``,
+rattled the same way, EMT.
+
+A run is converged only when the maximum force is below 0.01 eV/Å and
+the largest distance from the centroid stays under twice the start
+value. The other count is dissociations. Medians below are over the
+converged runs. ``ase-lbfgs`` uses ``alpha=70``. ``ase-lbfgs-a10``
+uses ``alpha=10``.
+
+rgmin FIRE is Bitzek's velocity-Verlet step: the force is mixed after
+the move. The parameters are ASE's defaults (``dt=0.1``, ``dtmax=1``,
+``Nmin=5``, ``finc=1.1``, ``fdec=0.5``, ``astart=0.1``, ``fa=0.99``)
+and the longest atom moves at most 0.2. ASE FIRE mixes before the
+Euler kick and caps the Euclidean length of the whole displacement.
+
+.. list-table::
+   :header-rows: 1
+
+   * - system
+     - optimizer
+     - converged
+     - dissociated
+     - force calls
+     - energy
+     - seconds
+   * - Cu64
+     - ase-bfgs
+     - 10/10
+     - 0
+     - 22.5
+     - −0.315751
+     - 0.1394
+   * - Cu64
+     - ase-fire
+     - 10/10
+     - 0
+     - 47.5
+     - −0.315703
+     - 0.1851
+   * - Cu64
+     - ase-lbfgs
+     - 10/10
+     - 0
+     - 22.5
+     - −0.315751
+     - 0.0935
+   * - Cu64
+     - ase-lbfgs-a10
+     - 10/10
+     - 0
+     - 9.0
+     - −0.315786
+     - 0.0412
+   * - Cu64
+     - rgmin-fire
+     - 10/10
+     - 0
+     - 44.5
+     - −0.315668
+     - 0.1797
+   * - Cu64
+     - rgmin-lbfgs
+     - 10/10
+     - 0
+     - 11.0
+     - −0.315895
+     - 0.0497
+   * - LJ13
+     - ase-bfgs
+     - 10/10
+     - 0
+     - 29.0
+     - −44.326489
+     - 0.0224
+   * - LJ13
+     - ase-fire
+     - 10/10
+     - 0
+     - 71.0
+     - −44.326487
+     - 0.0387
+   * - LJ13
+     - ase-lbfgs
+     - 10/10
+     - 0
+     - 29.0
+     - −44.326489
+     - 0.0205
+   * - LJ13
+     - ase-lbfgs-a10
+     - 9/10
+     - 1
+     - 161.0
+     - −39.624761
+     - 0.1375
+   * - LJ13
+     - rgmin-fire
+     - 10/10
+     - 0
+     - 69.5
+     - −44.326487
+     - 0.0426
+   * - LJ13
+     - rgmin-lbfgs
+     - 10/10
+     - 0
+     - 19.0
+     - −44.326489
+     - 0.0120
+   * - LJ13-sphere
+     - ase-bfgs
+     - 10/10
+     - 0
+     - 47.5
+     - −39.928329
+     - 0.0364
+   * - LJ13-sphere
+     - ase-fire
+     - 10/10
+     - 0
+     - 129.0
+     - −41.057068
+     - 0.0709
+   * - LJ13-sphere
+     - ase-lbfgs
+     - 10/10
+     - 0
+     - 47.5
+     - −39.928329
+     - 0.0349
+   * - LJ13-sphere
+     - ase-lbfgs-a10
+     - 10/10
+     - 0
+     - 160.0
+     - −39.823170
+     - 0.1403
+   * - LJ13-sphere
+     - rgmin-fire
+     - 10/10
+     - 0
+     - 127.5
+     - −40.225870
+     - 0.0801
+   * - LJ13-sphere
+     - rgmin-lbfgs
+     - 10/10
+     - 0
+     - 52.0
+     - −40.225874
+     - 0.0345
+   * - LJ38
+     - ase-bfgs
+     - 10/10
+     - 0
+     - 91.0
+     - −173.925612
+     - 0.1686
+   * - LJ38
+     - ase-fire
+     - 10/10
+     - 0
+     - 81.0
+     - −173.925601
+     - 0.0800
+   * - LJ38
+     - ase-lbfgs
+     - 10/10
+     - 0
+     - 91.0
+     - −173.925612
+     - 0.1156
+   * - LJ38
+     - ase-lbfgs-a10
+     - 0/10
+     - 1
+     -
+     -
+     -
+   * - LJ38
+     - rgmin-fire
+     - 10/10
+     - 0
+     - 82.5
+     - −173.925604
+     - 0.0875
+   * - LJ38
+     - rgmin-lbfgs
+     - 10/10
+     - 0
+     - 27.0
+     - −173.925606
+     - 0.0308
+   * - LJ38-sphere
+     - ase-bfgs
+     - 10/10
+     - 0
+     - 179.0
+     - −167.460624
+     - 0.3568
+   * - LJ38-sphere
+     - ase-fire
+     - 10/10
+     - 0
+     - 515.0
+     - −168.195123
+     - 0.5123
+   * - LJ38-sphere
+     - ase-lbfgs
+     - 10/10
+     - 0
+     - 188.0
+     - −167.137345
+     - 0.2635
+   * - LJ38-sphere
+     - ase-lbfgs-a10
+     - 0/10
+     - 2
+     -
+     -
+     -
+   * - LJ38-sphere
+     - rgmin-fire
+     - 10/10
+     - 0
+     - 549.5
+     - −168.246137
+     - 0.5867
+   * - LJ38-sphere
+     - rgmin-lbfgs
+     - 10/10
+     - 0
+     - 141.5
+     - −168.105354
+     - 0.1689
+
+On the rattled icosahedron and truncated octahedron, rgmin L-BFGS and
+rgmin FIRE reach the cutoff-shifted global minimum on all ten seeds.
+``alpha=10`` does not: one LJ13 run dissociates, and none of the ten
+LJ38 runs reach the force tolerance (one of them dissociates).
