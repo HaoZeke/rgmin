@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "rgmin"
+version = "0.2.0"
+description = "ASE Optimizer drop-in for the rgmin local minimizers."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Rohit Goswami", email = "rgoswami@ieee.org" }]
+keywords = ["optimization", "ase", "lbfgs", "fire"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Chemistry",
+  "Programming Language :: Python :: 3",
+]
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+ase = ["ase>=3.23"]
+test = ["pytest>=7", "numpy>=1.24", "ase>=3.23"]
+
+[project.urls]
+Homepage = "https://github.com/OmniPotentRPC/rgmin"
+Repository = "https://github.com/OmniPotentRPC/rgmin"
+
+[tool.maturin]
+module-name = "rgmin._core"
+python-source = "."

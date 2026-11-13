@@ -1,0 +1,194 @@
+//! One step of an rgmin session, called from Python.
+//!
+//! The host owns the loop. ASE's `Optimizer.run` is that loop: each
+//! `step` evaluates the atoms through the callback and advances the
+//! session. L-BFGS defaults here to the ASE length control
+//! ([`rgmin::LbfgsStep::Scaled`]). `eon_cap` selects the crate default,
+//! the line-search-free eOn cap. `wolfe` is the strong Wolfe search.
+
+use std::sync::{Arc, Mutex};
+
+use ndarray::{Array1, ArrayView1};
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use rgmin::{
+    Accept, Control, FireConfig, FireKind, LbfgsStep, LineSearch, Method, Oracle, Solver, StopNorm,
+};
+
+#[pyclass]
+struct Session {
+    solver: Solver,
+}
+
+fn control(dt: f64) -> Control {
+    Control {
+        maxiter: 1_000_000,
+        gtol: 1e-12,
+        istep: if dt.is_finite() && dt > 0.0 { dt } else { 1.0 },
+        maxmove: None,
+        stop_norm: StopNorm::MaxAtom,
+    }
+}
+
+#[pymethods]
+impl Session {
+    /// `kind` is `lbfgs`, `bfgs`, `fire`, `fire2`, or `cg`.
+    #[new]
+    #[pyo3(signature = (
+        kind,
+        n,
+        *,
+        max_atom=0.2,
+        wolfe=false,
+        eon_cap=false,
+        memory=8,
+        dt=0.1,
+        dt_max=1.0,
+        n_min=5,
+        f_inc=1.1,
+        f_dec=0.5,
+        alpha=0.1,
+        f_alpha=0.99,
+        downhill=false,
+    ))]
+    fn new(
+        kind: &str,
+        n: usize,
+        max_atom: f64,
+        wolfe: bool,
+        eon_cap: bool,
+        memory: usize,
+        dt: f64,
+        dt_max: f64,
+        n_min: usize,
+        f_inc: f64,
+        f_dec: f64,
+        alpha: f64,
+        f_alpha: f64,
+        downhill: bool,
+    ) -> PyResult<Self> {
+        if n == 0 {
+            return Err(PyValueError::new_err("dimension must be positive"));
+        }
+        let method = match kind {
+            "lbfgs" => Method::Lbfgs {
+                memory: memory.max(1),
+            },
+            "bfgs" => Method::Bfgs,
+            "fire" => Method::Fire { kind: FireKind::V1 },
+            "fire2" => Method::Fire { kind: FireKind::V2 },
+            "cg" => Method::polak_ribiere_plus(),
+            other => {
+                return Err(PyValueError::new_err(format!("unknown method {other}")));
+            }
+        };
+        let istep = if kind.starts_with("fire") { dt } else { 1.0 };
+        let mut solver = Solver::new(method, control(istep), n);
+        match kind {
+            "lbfgs" => {
+                let step = if wolfe {
+                    LbfgsStep::Wolfe
+                } else if eon_cap {
+                    LbfgsStep::Capped { max_atom }
+                } else {
+                    LbfgsStep::Scaled { max_atom }
+                };
+                solver
+                    .set_lbfgs_step(step)
+                    .map_err(|err| PyValueError::new_err(err.to_string()))?;
+            }
+            "fire" | "fire2" => {
+                let mut cfg = FireConfig::ase();
+                cfg.dt = dt;
+                cfg.dt_max = dt_max;
+                cfg.n_min = n_min;
+                cfg.f_inc = f_inc;
+                cfg.f_dec = f_dec;
+                cfg.alpha = alpha;
+                cfg.f_alpha = f_alpha;
+                solver
+                    .set_fire_config(cfg)
+                    .map_err(|err| PyValueError::new_err(err.to_string()))?;
+                if downhill {
+                    solver.set_accept(Accept::Energy);
+                }
+            }
+            "cg" => solver.set_linesearch(LineSearch::Wolfe {
+                c1: 1e-4,
+                c2: 0.1,
+                maxiter: 20,
+            }),
+            _ => {}
+        }
+        if max_atom.is_finite() && max_atom > 0.0 {
+            solver.set_atom_maxmove(max_atom);
+        }
+        Ok(Self { solver })
+    }
+
+    /// One outer iteration.
+    ///
+    /// `x` is the current point. `callback(x) -> (value, gradient)` is
+    /// the objective. The gradient must have the same length as `x`.
+    /// Returns the accepted point, its value, and the gradient norm.
+    fn step(
+        &mut self,
+        py: Python<'_>,
+        x: Vec<f64>,
+        callback: PyObject,
+    ) -> PyResult<(Vec<f64>, f64, f64)> {
+        if x.len() != self.solver.dim() {
+            return Err(PyValueError::new_err(format!(
+                "x length {} != session dimension {}",
+                x.len(),
+                self.solver.dim()
+            )));
+        }
+        let mut pos = Array1::from_vec(x);
+        let caught: Arc<Mutex<Option<PyErr>>> = Arc::new(Mutex::new(None));
+        let slot = caught.clone();
+        let cb = callback.clone_ref(py);
+        let oracle = Oracle::unbounded(pos.len(), move |v: ArrayView1<f64>| {
+            match call_objective(&cb, v) {
+                Ok(pair) => pair,
+                Err(err) => {
+                    if let Ok(mut guard) = slot.lock() {
+                        *guard = Some(err);
+                    }
+                    (f64::NAN, Array1::from_elem(v.len(), f64::NAN))
+                }
+            }
+        });
+        let report = py.allow_threads(|| self.solver.step(&oracle, &mut pos));
+        if let Some(err) = caught.lock().ok().and_then(|mut guard| guard.take()) {
+            return Err(err);
+        }
+        match report {
+            Ok(report) => Ok((pos.to_vec(), report.value, report.grad_norm)),
+            Err(err) => Err(PyValueError::new_err(err.to_string())),
+        }
+    }
+}
+
+fn call_objective(callback: &PyObject, x: ArrayView1<f64>) -> PyResult<(f64, Array1<f64>)> {
+    Python::with_gil(|py| {
+        let coords: Vec<f64> = x.iter().copied().collect();
+        let out = callback.call1(py, (coords,))?;
+        let (value, gradient): (f64, Vec<f64>) = out.extract(py)?;
+        if gradient.len() != x.len() {
+            return Err(PyValueError::new_err(format!(
+                "gradient length {} != {}",
+                gradient.len(),
+                x.len()
+            )));
+        }
+        Ok((value, Array1::from_vec(gradient)))
+    })
+}
+
+#[pymodule]
+fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<Session>()?;
+    m.add("version", env!("CARGO_PKG_VERSION"))?;
+    Ok(())
+}
