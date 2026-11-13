@@ -94,6 +94,130 @@ impl Default for LbfgsStep {
     }
 }
 
+/// A positive finite cap, or the strong Wolfe search when `max_atom`
+/// is not a length.
+fn free_or_wolfe(capped: bool, max_atom: f64) -> LbfgsStep {
+    if max_atom.is_finite() && max_atom > 0.0 {
+        if capped {
+            LbfgsStep::Capped { max_atom }
+        } else {
+            LbfgsStep::Scaled { max_atom }
+        }
+    } else {
+        LbfgsStep::Wolfe
+    }
+}
+
+/// Validated [`Lbfgs`] configuration.
+///
+/// [`Lbfgs::default`] is the eOn cap. [`Self::wolfe`] is the strong
+/// Wolfe search. A non-positive or non-finite cap passed to
+/// [`Self::capped`] or [`Self::scaled`] selects Wolfe, the same rule
+/// as [`Lbfgs::capped`].
+pub struct LbfgsBuilder {
+    inner: Lbfgs,
+}
+
+impl LbfgsBuilder {
+    /// Pairs retained. Zero is raised to one.
+    #[must_use]
+    pub fn memory(mut self, pairs: usize) -> Self {
+        self.inner.max_pairs = pairs.max(1);
+        self
+    }
+
+    /// Gradient-norm threshold.
+    #[must_use]
+    pub fn tolerance(mut self, gtol: f64) -> Self {
+        self.inner.gtol = gtol;
+        self
+    }
+
+    /// Norm compared with [`Self::tolerance`].
+    #[must_use]
+    pub fn norm(mut self, norm: GradNorm) -> Self {
+        self.inner.norm = norm;
+        self
+    }
+
+    /// Relative-decrease stop. A non-positive value turns it off.
+    #[must_use]
+    pub fn ftol(mut self, ftol: f64) -> Self {
+        self.inner.ftol = ftol;
+        self
+    }
+
+    /// Step-length rule. An unusable cap becomes [`LbfgsStep::Wolfe`].
+    #[must_use]
+    pub fn step(mut self, step: LbfgsStep) -> Self {
+        self.inner.step = match step {
+            LbfgsStep::Capped { max_atom } => free_or_wolfe(true, max_atom),
+            LbfgsStep::Scaled { max_atom } => free_or_wolfe(false, max_atom),
+            LbfgsStep::Wolfe => LbfgsStep::Wolfe,
+        };
+        self
+    }
+
+    /// Strong Wolfe search.
+    #[must_use]
+    pub fn wolfe(self) -> Self {
+        self.step(LbfgsStep::Wolfe)
+    }
+
+    /// eOn cap. A bad `max_atom` selects Wolfe.
+    #[must_use]
+    pub fn capped(self, max_atom: f64) -> Self {
+        self.step(LbfgsStep::Capped { max_atom })
+    }
+
+    /// ASE length control. A bad `max_atom` selects Wolfe.
+    #[must_use]
+    pub fn scaled(self, max_atom: f64) -> Self {
+        self.step(LbfgsStep::Scaled { max_atom })
+    }
+
+    /// Fixed initial inverse-Hessian scale. A non-positive value clears it.
+    #[must_use]
+    pub fn fixed_scale(mut self, h0: f64) -> Self {
+        self.inner.fixed_h0 = (h0.is_finite() && h0 > 0.0).then_some(h0);
+        self
+    }
+
+    /// Measure the cap by the Euclidean length of the whole step.
+    #[must_use]
+    pub fn euclidean_cap(mut self, on: bool) -> Self {
+        self.inner.euclidean_cap = on;
+        self
+    }
+
+    /// Keep a long downhill model step and scale it per atom.
+    #[must_use]
+    pub fn model_atom(mut self, on: bool) -> Self {
+        self.inner.model_atom = on;
+        self
+    }
+
+    /// Replace a long two-loop step with the compact trust-region step.
+    #[must_use]
+    pub fn compact_trust(mut self, on: bool) -> Self {
+        self.inner.compact_tr = on;
+        self
+    }
+
+    /// Drop a pair with `s·y ≤ 0` instead of clearing the memory.
+    #[must_use]
+    pub fn skip_negative_curvature(mut self, on: bool) -> Self {
+        self.inner.skip_bad = on;
+        self
+    }
+
+    /// The configured solver.
+    #[must_use]
+    pub fn build(self) -> Lbfgs {
+        self.inner
+    }
+}
+
 impl LbfgsStep {
     /// Positive finite cap of a line-search-free rule.
     #[must_use]
@@ -227,10 +351,28 @@ fn two_loop_vecops(
 }
 
 /// The value and slope of a line-search probe, `(+inf, NaN)` when the
-/// objective answered with a non-finite value or gradient. Every comparison
-/// against NaN is false, so a raw NaN would fail no decrease test.
+/// objective answered with a non-finite value or gradient, or with a
+/// gradient whose length is not the direction's. Every comparison
+/// against NaN is false, so a raw NaN would fail no decrease test, and
+/// a short gradient must not index off the end of the direction.
+/// A lower entry must be finite or `-inf`, an upper entry finite or
+/// `+inf`, and the lower entry must not sit above the upper one.
+/// A NaN fails every comparison, so it is not a bound.
+fn bounds_ok(n: usize, lower: ArrayView1<f64>, upper: ArrayView1<f64>) -> bool {
+    lower.len() == n
+        && upper.len() == n
+        && lower.iter().zip(upper.iter()).all(|(lo, hi)| {
+            (lo.is_finite() || *lo == f64::NEG_INFINITY)
+                && (hi.is_finite() || *hi == f64::INFINITY)
+                && matches!(
+                    lo.partial_cmp(hi),
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                )
+        })
+}
+
 fn probed(f: f64, d: &Array1<f64>, g: &Array1<f64>) -> (f64, f64) {
-    if finite(f, g.view()) {
+    if g.len() == d.len() && finite(f, g.view()) {
         (f, d.dot(g))
     } else {
         (f64::INFINITY, f64::NAN)
@@ -303,8 +445,9 @@ pub struct Lbfgs {
     /// Relative-decrease stop of the L-BFGS-B code (Zhu, Byrd, Lu and
     /// Nocedal, Algorithm 778, <https://doi.org/10.1145/279232.279236>).
     /// A line-search step from `f_k`
-    /// to `f_{k+1}` ends [`Lbfgs::minimize`], [`Lbfgs::minimize_watched`]
-    /// and [`Lbfgs::minimize_recognized`] at the new iterate when
+    /// to `f_{k+1}` ends [`Lbfgs::minimize`], [`Lbfgs::minimize_watched`],
+    /// [`Lbfgs::minimize_recognized`], [`Lbfgs::minimize_box`] and
+    /// [`Lbfgs::minimize_box_watched`] at the new iterate when
     /// `f_k - f_{k+1} <= ftol * max(|f_k|, |f_{k+1}|, 1)`.
     /// Zero, the default, turns the test off, as does any value that is
     /// not positive. [`LBFGSB_FTOL`] is the SciPy default.
@@ -408,22 +551,31 @@ impl Lbfgs {
     }
 
     /// [`LbfgsStep::Capped`] with room for eight pairs. A non-positive
-    /// or non-finite `max_atom` keeps the Wolfe search.
+    /// or non-finite `max_atom` selects [`LbfgsStep::Wolfe`].
     #[must_use]
     pub fn capped(max_atom: f64) -> Self {
         Self {
-            step: LbfgsStep::Capped { max_atom },
+            step: free_or_wolfe(true, max_atom),
             ..Self::default()
         }
     }
 
     /// [`LbfgsStep::Scaled`] with room for eight pairs. A non-positive
-    /// or non-finite `max_atom` keeps the Wolfe search.
+    /// or non-finite `max_atom` selects [`LbfgsStep::Wolfe`].
     #[must_use]
     pub fn scaled(max_atom: f64) -> Self {
         Self {
-            step: LbfgsStep::Scaled { max_atom },
+            step: free_or_wolfe(false, max_atom),
             ..Self::default()
+        }
+    }
+
+    /// Validated configuration. The default is the eOn cap.
+    /// [`LbfgsBuilder::wolfe`] opts into the strong Wolfe search.
+    #[must_use]
+    pub fn builder() -> LbfgsBuilder {
+        LbfgsBuilder {
+            inner: Self::default(),
         }
     }
 
@@ -1237,7 +1389,7 @@ impl Lbfgs {
         let Some((value, grad)) = fg(probe.view()) else {
             return (EonSeed::Scale(EON_INVERSE_CURVATURE), 0);
         };
-        if !finite(value, grad.view()) {
+        if grad.len() != g.len() || !finite(value, grad.view()) {
             return (EonSeed::Steepest, 1);
         }
         let curvature = (&grad - g).dot(&u) / EON_FINITE_DIFFERENCE;
@@ -1380,7 +1532,7 @@ impl Lbfgs {
             return CappedProbe::Stop;
         };
         *evals += 1;
-        if !finite(fv, gv.view()) {
+        if gv.len() != g.len() || step.len() != x.len() || !finite(fv, gv.view()) {
             for i in 0..n {
                 x[i] -= step[i];
             }
@@ -1467,7 +1619,7 @@ impl Lbfgs {
             return CappedProbe::Stop;
         };
         *evals += 1;
-        if !finite(fv, gv.view()) {
+        if gv.len() != g.len() || step.len() != x.len() || !finite(fv, gv.view()) {
             return CappedProbe::NonFinite;
         }
         let s = &trial - &*x;
@@ -1743,13 +1895,13 @@ impl Lbfgs {
             None => return (f64::INFINITY, x, evals),
         };
         evals += 1;
-        if !finite(f, g.view()) {
+        if g.len() != x.len() || !finite(f, g.view()) {
             return (f64::INFINITY, x, evals);
         }
 
         let mut stalled = false;
         for it in 0..max_iter {
-            if !watch(it, f) {
+            if g.len() != x.len() || !watch(it, f) {
                 break;
             }
             if stalled || self.gnorm(&g) < self.gtol {
@@ -1836,12 +1988,15 @@ impl Lbfgs {
             None => return (f64::INFINITY, x, evals, false),
         };
         evals += 1;
-        if !finite(f, g.view()) {
+        if g.len() != x.len() || !finite(f, g.view()) {
             return (f64::INFINITY, x, evals, false);
         }
 
         let mut stalled = false;
         for it in 0..max_iter {
+            if g.len() != x.len() {
+                break;
+            }
             if let Some((f_known, x_known)) = recognise(it, f, x.view()) {
                 return (f_known, x_known, evals, true);
             }
@@ -1903,7 +2058,9 @@ impl Lbfgs {
     /// the two-loop direction up to rounding. [`Self::gtol`] is compared
     /// with the projected gradient `x - clip(x - g)`. `fg` only sees points
     /// in the box, and the result is the point, value and evaluation count
-    /// of [`Self::minimize`].
+    /// of [`Self::minimize`]. A bound whose length is not `x0`'s, an
+    /// inverted bound, or a gradient whose length is not `x0`'s ends the
+    /// call at `x0` with value `+inf` and does not panic.
     ///
     /// ```
     /// use ndarray::{ArrayView1, array};
@@ -1957,6 +2114,9 @@ impl Lbfgs {
         W: FnMut(usize, f64) -> bool,
     {
         self.trim();
+        if !bounds_ok(x0.len(), lower, upper) {
+            return (f64::INFINITY, x0.to_owned(), 0);
+        }
         let clip = |v: ArrayView1<f64>| {
             Array1::from_shape_fn(v.len(), |i| v[i].max(lower[i]).min(upper[i]))
         };
@@ -1968,17 +2128,18 @@ impl Lbfgs {
             None => return (f64::INFINITY, x, evals),
         };
         evals += 1;
-        if !finite(f, g.view()) {
+        if g.len() != x.len() || !finite(f, g.view()) {
             return (f64::INFINITY, x, evals);
         }
 
+        let mut stalled = false;
         for it in 0..max_iter {
-            if !watch(it, f) {
+            if g.len() != x.len() || !watch(it, f) {
                 break;
             }
             let pg =
                 Array1::from_shape_fn(x.len(), |i| g[i].max(x[i] - upper[i]).min(x[i] - lower[i]));
-            if self.gnorm(&pg) < self.gtol {
+            if stalled || self.gnorm(&pg) < self.gtol {
                 break;
             }
             let b = cauchy::Compact::new(x.len(), &self.memory);
@@ -2011,9 +2172,11 @@ impl Lbfgs {
                 slope,
                 a_max,
             };
+            let f_old = f;
             let (ok, used) = self.line_search(&mut x, &mut f, &mut g, ray, &mut box_fg);
             evals += used;
             x = clip(x.view());
+            stalled = ok && self.stalled(f_old, f);
             if !ok {
                 if self.memory.is_empty() {
                     break;
@@ -2478,5 +2641,85 @@ mod tests {
         assert!(motion <= 0.05 + 1e-8, "max atom {motion}");
         assert!(take.step.dot(&g) < 0.0, "not descent");
         assert!(!opt.is_empty(), "the compact step keeps the pairs");
+    }
+
+    /// A cap that is not a length is the Wolfe search, not a capped
+    /// step whose limit happens to be missing.
+    #[test]
+    fn a_bad_constructor_cap_selects_wolfe() {
+        for max_atom in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(Lbfgs::capped(max_atom).step, LbfgsStep::Wolfe);
+            assert_eq!(Lbfgs::scaled(max_atom).step, LbfgsStep::Wolfe);
+            assert_eq!(
+                Lbfgs::builder().capped(max_atom).build().step,
+                LbfgsStep::Wolfe
+            );
+        }
+        assert!(matches!(
+            Lbfgs::capped(0.2).step,
+            LbfgsStep::Capped { max_atom } if (max_atom - 0.2).abs() < 1e-15
+        ));
+    }
+
+    /// A short bound is a caller error. It must not index off the end.
+    #[test]
+    fn minimize_box_refuses_a_short_bound() {
+        let mut opt = Lbfgs::default();
+        let (f, x, evals) = opt.minimize_box(
+            array![0.0, 0.0].view(),
+            array![0.0].view(),
+            array![1.0, 1.0].view(),
+            10,
+            |v| Some((v.dot(&v), v.to_owned())),
+        );
+        assert!(f.is_infinite());
+        assert_eq!(evals, 0);
+        assert_eq!(x.as_slice(), Some(&[0.0, 0.0][..]));
+    }
+
+    /// An inverted bound is not a box.
+    #[test]
+    fn minimize_box_refuses_an_inverted_bound() {
+        let mut opt = Lbfgs::default();
+        let (f, _, evals) = opt.minimize_box(
+            array![0.0].view(),
+            array![1.0].view(),
+            array![0.0].view(),
+            5,
+            |v| Some((v[0] * v[0], array![2.0 * v[0]])),
+        );
+        assert!(f.is_infinite());
+        assert_eq!(evals, 0);
+    }
+
+    /// A gradient shorter than the point ends the relaxation.
+    #[test]
+    fn a_short_gradient_does_not_panic() {
+        let mut opt = Lbfgs::default();
+        let (f, x, evals) =
+            opt.minimize(array![1.0, -1.0].view(), 4, |_v| Some((1.0, array![1.0])));
+        assert!(f.is_infinite());
+        assert_eq!(evals, 1);
+        assert_eq!(x.len(), 2);
+
+        let mut wolfe = Lbfgs::builder().wolfe().build();
+        let (f, x, _) = wolfe.minimize(array![1.0, -1.0].view(), 4, |_v| Some((1.0, array![1.0])));
+        assert!(f.is_infinite());
+        assert_eq!(x.len(), 2);
+    }
+
+    /// The builder's default is the eOn cap, and Wolfe is explicit.
+    #[test]
+    fn the_builder_defaults_to_the_eon_cap() {
+        let opt = Lbfgs::builder().tolerance(1e-8).memory(5).build();
+        assert_eq!(opt.max_pairs, 5);
+        assert!((opt.gtol - 1e-8).abs() < 1e-15);
+        assert_eq!(
+            opt.step,
+            LbfgsStep::Capped {
+                max_atom: super::EON_MAX_MOVE
+            }
+        );
+        assert_eq!(Lbfgs::builder().wolfe().build().step, LbfgsStep::Wolfe);
     }
 }
