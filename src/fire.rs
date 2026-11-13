@@ -56,6 +56,47 @@ pub enum FirePreset {
 /// `alpha` here so the bias correction stays finite.
 const ABC_ALPHA_FLOOR: f64 = 1e-10;
 
+/// Integrator parameters for [`FireState`].
+///
+/// [`FireConfig::ase`] is the ASE `FIRE` constructor: `dt = 0.1`,
+/// `dtmax = 1`, `Nmin = 5`, `finc = 1.1`, `fdec = 0.5`,
+/// `astart = 0.1`, `fa = 0.99`. [`FireState::new`] uses a tighter
+/// `dt_max` of `2.5 dt`, which is the eOn / Bitzek session default,
+/// not ASE's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FireConfig {
+    /// Time step.
+    pub dt: f64,
+    /// Time-step cap.
+    pub dt_max: f64,
+    /// Downhill steps before `dt` grows.
+    pub n_min: usize,
+    /// `dt` growth factor.
+    pub f_inc: f64,
+    /// `dt` shrink factor.
+    pub f_dec: f64,
+    /// Mixing parameter after a reset.
+    pub alpha: f64,
+    /// `alpha` decay.
+    pub f_alpha: f64,
+}
+
+impl FireConfig {
+    /// ASE `FIRE` defaults. `dt_max` is 1, ten times `dt`.
+    #[must_use]
+    pub fn ase() -> Self {
+        Self {
+            dt: 0.1,
+            dt_max: 1.0,
+            n_min: 5,
+            f_inc: 1.1,
+            f_dec: 0.5,
+            alpha: 0.1,
+            f_alpha: 0.99,
+        }
+    }
+}
+
 /// Session memory for one FIRE or FIRE 2.0 solve.
 #[derive(Clone)]
 pub struct FireState {
@@ -193,6 +234,36 @@ impl FireState {
     /// Parameter set selected by [`Self::set_preset`].
     pub fn preset(&self) -> FirePreset {
         self.preset
+    }
+
+    /// Replace the integrator parameters and cold-start the velocity.
+    /// A non-positive `dt` or `dt_max` is left as it was.
+    pub fn apply_config(&mut self, config: &FireConfig) {
+        if config.dt.is_finite() && config.dt > 0.0 {
+            self.dt = config.dt;
+            self.dt_start = config.dt;
+        }
+        if config.dt_max.is_finite() && config.dt_max > 0.0 {
+            self.dt_max = config.dt_max;
+        }
+        self.n_min = config.n_min;
+        if config.f_inc.is_finite() && config.f_inc > 1.0 {
+            self.f_inc = config.f_inc;
+        }
+        if config.f_dec.is_finite() && config.f_dec > 0.0 && config.f_dec < 1.0 {
+            self.f_dec = config.f_dec;
+        }
+        if config.alpha.is_finite() && config.alpha > 0.0 {
+            self.alpha_start = config.alpha;
+            self.alpha = config.alpha;
+        }
+        if config.f_alpha.is_finite() && config.f_alpha > 0.0 && config.f_alpha < 1.0 {
+            self.f_alpha = config.f_alpha;
+        }
+        self.vel.fill(0.0);
+        self.n_pos = 0;
+        self.n_neg = 0;
+        self.steps = 0;
     }
 
     /// Drop velocity and mixing; keep the current `dt`.
@@ -730,5 +801,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn ase_config_caps_the_time_step_at_one() {
+        let mut state = FireState::new(FireKind::V1, 3, 0.1);
+        assert!((state.dt_max - 0.25).abs() < 1e-15);
+        state.apply_config(&FireConfig::ase());
+        assert!((state.dt - 0.1).abs() < 1e-15);
+        assert!((state.dt_max - 1.0).abs() < 1e-15);
+        assert_eq!(state.n_min, 5);
+        assert!((state.f_alpha - 0.99).abs() < 1e-15);
     }
 }

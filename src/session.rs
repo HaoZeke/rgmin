@@ -19,9 +19,9 @@ use crate::bb::bb_direction;
 use crate::control::{Control, StopNorm};
 use crate::error::{Error, Result};
 use crate::fire::{
-    FireKind, FireMix, FirePreparation, FirePreset, FireState, fire_after_v1, fire_after_v1_metric,
-    fire_clip_components, fire_displacement, fire_displacement_metric, fire_prepare_v2,
-    project_box_tangent,
+    FireConfig, FireKind, FireMix, FirePreparation, FirePreset, FireState, fire_after_v1,
+    fire_after_v1_metric, fire_clip_components, fire_displacement, fire_displacement_metric,
+    fire_prepare_v2, project_box_tangent,
 };
 use crate::holonomic::DistanceConstraints;
 use crate::hvp::{
@@ -517,6 +517,26 @@ impl Solver {
         }
     }
 
+    /// Integrator parameters of a FIRE or FIRE 2.0 session.
+    ///
+    /// The velocity is cleared. Any other method returns
+    /// [`Error::NeedFire`]. [`FireConfig::ase`] is the ASE `FIRE`
+    /// constructor; a new session uses [`FireState::new`], whose
+    /// `dt_max` is `2.5` times the start step rather than ASE's `1`.
+    pub fn set_fire_config(&mut self, config: FireConfig) -> Result<()> {
+        match &mut self.inner {
+            Inner::Fire(state) => {
+                state.apply_config(&config);
+                if config.dt.is_finite() && config.dt > 0.0 {
+                    self.control.istep = config.dt;
+                    self.istep = config.dt;
+                }
+                Ok(())
+            }
+            _ => Err(Error::NeedFire),
+        }
+    }
+
     /// ABC-FIRE on a FIRE 2.0 session, off by default. The per-atom cap,
     /// else [`Control::maxmove`], then bounds each displacement component
     /// in place of the norm cap. Any other method returns
@@ -546,6 +566,11 @@ impl Solver {
     /// Packed length of `x` this session was created with.
     pub fn dim(&self) -> usize {
         self.dim
+    }
+
+    /// Outer steps completed on this session.
+    pub fn steps(&self) -> usize {
+        self.steps
     }
 
     /// Gradient evaluations charged to this session.
@@ -2408,7 +2433,10 @@ impl Solver {
             for i in 0..n {
                 seed[i] = ((i % 11) as f64) - 5.0;
             }
-            let found = lowest_eigenpair(&Mat(hess), seed.view(), seed.view(), 48.min(n));
+            let Ok(found) = lowest_eigenpair(&Mat(hess), seed.view(), seed.view(), 48.min(n))
+            else {
+                return None;
+            };
             (found.value, found.vector)
         };
         if value < -tol { Some(vector) } else { None }

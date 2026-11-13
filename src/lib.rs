@@ -80,6 +80,8 @@ pub mod scg;
 pub mod sella_step;
 mod session;
 mod step;
+/// One outer iteration. rgsaddle calls this; the host owns the loop.
+pub mod stepper;
 mod trust;
 /// Training-set memory and cap selection.
 pub mod tune;
@@ -91,7 +93,7 @@ pub use adam::minimize_adam;
 pub use control::{Control, StopNorm};
 pub use eon_cg::{EonCg, EonCgReport, minimize_eon_cg};
 pub use error::{Error, Result};
-pub use fire::{FireKind, FirePreset};
+pub use fire::{FireConfig, FireKind, FirePreset};
 pub use highs_kind::{HighsCCallback, HighsCallbackKind, HighsCrossover, HighsSolverKind};
 pub use holonomic::{
     ConstraintAlgorithm, ConstraintError, ConstraintReport, ConstraintSolver, DistanceConstraints,
@@ -103,7 +105,7 @@ pub use hvp::{
 pub use irc_trust::{IrcTrust, sqrt_masses_3n};
 pub use lbfgs::{
     EON_FINITE_DIFFERENCE, EON_INVERSE_CURVATURE, EON_MAX_MOVE, GradNorm, LBFGSB_FACTR,
-    LBFGSB_FTOL, Lbfgs, LbfgsStep,
+    LBFGSB_FTOL, Lbfgs, LbfgsBuilder, LbfgsStep,
 };
 #[cfg(feature = "highs")]
 pub use lbfgs_qp::HighsStep;
@@ -133,6 +135,7 @@ pub use scg::{DirectionalCurvature, ScgParams, minimize_scg, minimize_scg_exact}
 pub use sella_step::{prfo_restricted, ras_clip, rfo_get_s, rfo_restricted, ts_bfgs_update};
 pub use session::Solver;
 pub use session::drive::EonFeat;
+pub use stepper::Stepper;
 pub use tune::{TrainRow, select_train_setting};
 
 mod sphere_lbfgs;

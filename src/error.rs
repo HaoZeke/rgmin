@@ -90,6 +90,9 @@ pub enum Error {
     /// `fire2`.
     #[error("FIRE 2.0 preset or ABC requires fire2")]
     NeedFire2,
+    /// A FIRE parameter change was asked of a session that is not FIRE.
+    #[error("FIRE parameters require a FIRE session")]
+    NeedFire,
     /// Capped L-BFGS was asked for where it cannot run, or a capped
     /// step could not be formed.
     #[error("capped L-BFGS: {what}")]
