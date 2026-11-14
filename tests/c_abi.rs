@@ -4387,3 +4387,254 @@ mod manifold_handles {
         assert_eq!((st, inner), (invalid, 3.0));
     }
 }
+
+const CAP_W: [f64; 6] = [1.0, 2.0, 1.0, 2.0, 1.0, 2.0];
+
+unsafe fn cap_in<'a>(t: *const DLManagedTensorVersioned) -> &'a [f64] {
+    let (p, n) = unsafe { cpu_f64(t) };
+    unsafe { std::slice::from_raw_parts(p, n) }
+}
+
+unsafe fn cap_out<'a>(t: *mut DLManagedTensorVersioned) -> &'a mut [f64] {
+    let (p, n) = unsafe { cpu_f64(t) };
+    unsafe { std::slice::from_raw_parts_mut(p as *mut f64, n) }
+}
+
+unsafe extern "C" fn cap_eval(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    value_out: *mut f64,
+) -> rgmin_status_t {
+    let x = unsafe { cap_in(x) };
+    let f = x.iter().zip(CAP_W).map(|(xi, w)| 0.5 * w * xi * xi).sum();
+    unsafe { *value_out = f };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn cap_grad(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    g: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let x = unsafe { cap_in(x) };
+    for ((gi, xi), w) in unsafe { cap_out(g) }.iter_mut().zip(x).zip(CAP_W) {
+        *gi = w * xi;
+    }
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn cap_hess(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    h: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let n = unsafe { cap_in(x) }.len();
+    let h = unsafe { cap_out(h) };
+    h.fill(0.0);
+    for (i, w) in CAP_W.iter().enumerate().take(n) {
+        h[i * n + i] = *w;
+    }
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn cap_hvp(
+    _user: *mut c_void,
+    _x: *const DLManagedTensorVersioned,
+    v: *const DLManagedTensorVersioned,
+    hv: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let v = unsafe { cap_in(v) };
+    for ((out, vi), w) in unsafe { cap_out(hv) }.iter_mut().zip(v).zip(CAP_W) {
+        *out = w * vi;
+    }
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+#[derive(Clone, Copy)]
+enum CapOracle {
+    Gradient,
+    Hessian,
+    Product,
+}
+
+/// Six steps of `method` on the weighted bowl: each value, or the status
+/// that ended the run.
+fn cap_session(
+    method: rgmin_method_t,
+    oracle: CapOracle,
+    ctrl_maxmove: f64,
+    set_maxmove: Option<f64>,
+    set_atom_maxmove: Option<f64>,
+) -> String {
+    use rgmin::ffi::{
+        rgmin_solver_set_atom_maxmove, rgmin_solver_set_maxmove, rgmin_solver_step_hess,
+    };
+    let ctrl = rgmin_control_t {
+        maxiter: 6,
+        gtol: 1e-14,
+        istep: 1.0,
+        memory: 0,
+        maxmove: ctrl_maxmove,
+        noise_eps: 0.0,
+        noise_c: 0.0,
+    };
+    let mut x = [3.0, -4.0, 1.5, 2.5, -2.0, 0.5];
+    let mut seen = Vec::new();
+    unsafe {
+        let session = rgmin_solver_create(method, &ctrl, 6);
+        assert!(!session.is_null(), "{method:?}");
+        if let Some(cap) = set_maxmove {
+            rgmin_solver_set_maxmove(session, cap);
+        }
+        if let Some(cap) = set_atom_maxmove {
+            rgmin_solver_set_atom_maxmove(session, cap);
+        }
+        let mut out = rgmin_report_t {
+            value: 0.0,
+            steps: 0,
+            grad_norm: 0.0,
+            stop: rgmin_stop_t::RGMIN_STOP_TOLERANCE,
+        };
+        for _ in 0..6 {
+            let xt = rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), 6);
+            let (eval, grad, user) = (
+                Some(cap_eval as _),
+                Some(cap_grad as _),
+                std::ptr::null_mut(),
+            );
+            let st = match oracle {
+                CapOracle::Gradient => rgmin_solver_step(session, eval, grad, user, xt, &mut out),
+                CapOracle::Hessian => {
+                    rgmin_solver_step_hess(session, eval, grad, Some(cap_hess), user, xt, &mut out)
+                }
+                CapOracle::Product => {
+                    rgmin_solver_step_hvp(session, eval, grad, Some(cap_hvp), user, xt, &mut out)
+                }
+            };
+            rgmin_tensor_free(xt);
+            if st != rgmin_status_t::RGMIN_SUCCESS {
+                seen.push(format!("{st:?}"));
+                break;
+            }
+            seen.push(format!("{:?} {:?}", x, out.value));
+        }
+        rgmin_solver_free(session);
+    }
+    seen.join("; ")
+}
+
+/// `rgmin_control_t::maxmove` and both setters agree on what is no cap:
+/// zero, -0 and NaN keep the defaults; a negative or infinite value
+/// turns every cap off, the default per-atom cap included. A
+/// non-positive or non-finite per-atom cap is no per-atom cap.
+#[test]
+fn c_abi_a_non_binding_maxmove_is_no_cap() {
+    use rgmin_method_t::*;
+    let methods = [
+        (RGMIN_STEEPEST, CapOracle::Gradient),
+        (RGMIN_FIRE, CapOracle::Gradient),
+        (RGMIN_FIRE2, CapOracle::Gradient),
+        (RGMIN_QUICKMIN, CapOracle::Gradient),
+        (RGMIN_ODE12R, CapOracle::Gradient),
+        (RGMIN_LBFGS, CapOracle::Gradient),
+        (RGMIN_BFGS, CapOracle::Gradient),
+        (RGMIN_POLAK_RIBIERE_PLUS, CapOracle::Gradient),
+        (RGMIN_BB, CapOracle::Gradient),
+        (RGMIN_SR1, CapOracle::Gradient),
+        (RGMIN_NEWTON, CapOracle::Hessian),
+        (RGMIN_RFO, CapOracle::Hessian),
+        (RGMIN_DOGLEG, CapOracle::Hessian),
+        (RGMIN_NEWTON_CG, CapOracle::Product),
+        (RGMIN_NEWTON_PCG, CapOracle::Product),
+    ];
+    for (method, oracle) in methods {
+        let keep = cap_session(method, oracle, 0.0, None, None);
+        let off = cap_session(method, oracle, -1.0, None, None);
+        assert!(!keep.contains("RGMIN_"), "{method:?} defaults: {keep}");
+        assert!(!off.contains("RGMIN_"), "{method:?} caps off: {off}");
+        for cap in [-0.0, f64::NAN] {
+            assert_eq!(
+                cap_session(method, oracle, cap, None, None),
+                keep,
+                "{method:?} ctrl {cap}"
+            );
+            assert_eq!(
+                cap_session(method, oracle, 0.0, Some(cap), None),
+                keep,
+                "{method:?} set_maxmove({cap})"
+            );
+        }
+        for cap in [-1.0, f64::NEG_INFINITY, f64::INFINITY] {
+            assert_eq!(
+                cap_session(method, oracle, cap, None, None),
+                off,
+                "{method:?} ctrl {cap}"
+            );
+            assert_eq!(
+                cap_session(method, oracle, 0.0, Some(cap), None),
+                off,
+                "{method:?} set_maxmove({cap})"
+            );
+        }
+        let no_atom = cap_session(method, oracle, 0.0, None, Some(0.0));
+        for cap in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                cap_session(method, oracle, 0.0, None, Some(cap)),
+                no_atom,
+                "{method:?} set_atom_maxmove({cap})"
+            );
+        }
+    }
+    let one_shot = |method, maxmove: f64| {
+        let ctrl = rgmin_control_t {
+            maxiter: 6,
+            gtol: 1e-14,
+            istep: 1.0,
+            memory: 0,
+            maxmove,
+            noise_eps: 0.0,
+            noise_c: 0.0,
+        };
+        let mut x = [3.0, -4.0, 1.5, 2.5, -2.0, 0.5];
+        let mut out = rgmin_report_t {
+            value: 0.0,
+            steps: 0,
+            grad_norm: 0.0,
+            stop: rgmin_stop_t::RGMIN_STOP_TOLERANCE,
+        };
+        let st = unsafe {
+            let xt = rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), 6);
+            let st = rgmin_minimize(
+                Some(cap_eval),
+                Some(cap_grad),
+                std::ptr::null_mut(),
+                xt,
+                &ctrl,
+                method,
+                &mut out,
+            );
+            rgmin_tensor_free(xt);
+            st
+        };
+        format!("{st:?} {x:?} {:?} {}", out.value, out.steps)
+    };
+    for method in [
+        RGMIN_STEEPEST,
+        RGMIN_FIRE,
+        RGMIN_FIRE2,
+        RGMIN_QUICKMIN,
+        RGMIN_LBFGS,
+        RGMIN_BB,
+    ] {
+        let keep = one_shot(method, 0.0);
+        let off = one_shot(method, -1.0);
+        assert!(keep.starts_with("RGMIN_SUCCESS"), "{method:?}: {keep}");
+        assert!(off.starts_with("RGMIN_SUCCESS"), "{method:?}: {off}");
+        for cap in [-0.0, f64::NAN] {
+            assert_eq!(one_shot(method, cap), keep, "{method:?} one-shot {cap}");
+        }
+        for cap in [f64::NEG_INFINITY, f64::INFINITY] {
+            assert_eq!(one_shot(method, cap), off, "{method:?} one-shot {cap}");
+        }
+    }
+}
