@@ -356,7 +356,130 @@ int sphere_linesearch() {
     return 0;
 }
 
+double const kCapWeight[6] = {1.0, 2.0, 1.0, 2.0, 1.0, 2.0};
+
+rgmin_status_t cap_eval(void* /*user*/, DLManagedTensorVersioned const* x, double* value) {
+    double const* p = data(x);
+    double acc = 0.0;
+    for (int k = 0; k < 6; ++k) acc += 0.5 * kCapWeight[k] * p[k] * p[k];
+    *value = acc;
+    return RGMIN_SUCCESS;
+}
+
+rgmin_status_t cap_grad(void* /*user*/, DLManagedTensorVersioned const* x,
+                        DLManagedTensorVersioned* g) {
+    double const* p = data(x);
+    double* gp = data(g);
+    for (int k = 0; k < 6; ++k) gp[k] = kCapWeight[k] * p[k];
+    return RGMIN_SUCCESS;
+}
+
+rgmin_status_t cap_hvp(void* /*user*/, DLManagedTensorVersioned const* /*x*/,
+                       DLManagedTensorVersioned const* v, DLManagedTensorVersioned* hv) {
+    double const* vp = data(v);
+    double* out = data(hv);
+    for (int k = 0; k < 6; ++k) out[k] = kCapWeight[k] * vp[k];
+    return RGMIN_SUCCESS;
+}
+
+// Six steps on the weighted bowl: every value, or where a step threw.
+std::string cap_run(rgmin::Solver& solver, bool hvp) {
+    std::vector<double> x{3.0, -4.0, 1.5, 2.5, -2.0, 0.5};
+    std::string seen;
+    char buf[64];
+    for (int it = 0; it < 6; ++it) {
+        DLManagedTensorVersioned* t = rgmin::borrow_cpu_f64(x.data(), 6);
+        try {
+            rgmin::Report r = hvp ? solver.step_hvp(cap_eval, cap_grad, cap_hvp, nullptr, t)
+                                  : solver.step(cap_eval, cap_grad, nullptr, t);
+            std::snprintf(buf, sizeof buf, "%.17g;", r.value);
+            seen += buf;
+        } catch (std::exception const& e) {
+            seen += std::string("threw ") + e.what();
+            rgmin_tensor_free(t);
+            break;
+        }
+        rgmin_tensor_free(t);
+    }
+    return seen;
+}
+
+std::string cap_session(rgmin::Method method, double ctrl_maxmove, bool set_maxmove,
+                        double maxmove, bool set_atom, double atom) {
+    rgmin::Control ctrl;
+    ctrl.maxiter = 6;
+    ctrl.gtol = 1e-14;
+    ctrl.istep = 1.0;
+    ctrl.maxmove = ctrl_maxmove;
+    rgmin::Solver solver(method, ctrl, 6);
+    if (set_maxmove) solver.set_maxmove(maxmove);
+    if (set_atom) solver.set_atom_maxmove(atom);
+    return cap_run(solver, method == rgmin::Method::NewtonCg);
+}
+
+std::string cap_config(char const* method, char const* key, double value) {
+    auto cfg = rgmin::SolverConfig::build(method, {}, {{"gtol", 1e-14}, {"istep", 1.0}, {key, value}},
+                                          {{"maxiter", 6}}, {});
+    rgmin::Solver solver(cfg.method(), cfg.control(), 6);
+    cfg.apply(solver);
+    return cap_run(solver, cfg.method() == rgmin::Method::NewtonCg);
+}
+
+// Zero, -0 and NaN keep the default caps. A negative or infinite
+// maxmove turns every cap off, the default per-atom cap included. A
+// non-positive or non-finite per-atom cap is no per-atom cap.
+int maxmove_off() {
+    double const nan = std::nan("");
+    double const inf = HUGE_VAL;
+    rgmin::Method const methods[] = {rgmin::Method::Fire, rgmin::Method::Fire2,
+                                     rgmin::Method::Lbfgs, rgmin::Method::Steepest,
+                                     rgmin::Method::NewtonCg};
+    for (rgmin::Method method : methods) {
+        int const m = static_cast<int>(method);
+        std::string const keep = cap_session(method, 0.0, false, 0.0, false, 0.0);
+        std::string const off = cap_session(method, -1.0, false, 0.0, false, 0.0);
+        for (double cap : {-0.0, nan}) {
+            if (cap_session(method, cap, false, 0.0, false, 0.0) != keep ||
+                cap_session(method, 0.0, true, cap, false, 0.0) != keep) {
+                std::fprintf(stderr, "method %d maxmove %g did not keep the defaults\n", m, cap);
+                return 40;
+            }
+        }
+        for (double cap : {-1.0, -inf, inf}) {
+            if (cap_session(method, cap, false, 0.0, false, 0.0) != off ||
+                cap_session(method, 0.0, true, cap, false, 0.0) != off) {
+                std::fprintf(stderr, "method %d maxmove %g left a cap on\n", m, cap);
+                return 41;
+            }
+        }
+        std::string const no_atom = cap_session(method, 0.0, false, 0.0, true, 0.0);
+        for (double cap : {-1.0, nan, inf, -inf}) {
+            std::string const got = cap_session(method, 0.0, false, 0.0, true, cap);
+            if (got != no_atom) {
+                std::fprintf(stderr, "method %d set_atom_maxmove(%g): %s\n  vs 0: %s\n", m, cap,
+                             got.c_str(), no_atom.c_str());
+                return 42;
+            }
+        }
+    }
+    for (char const* method : {"fire", "lbfgs", "sd", "newton-cg"}) {
+        std::string const keep = cap_config(method, "maxmove", 0.0);
+        if (cap_config(method, "maxmove", -0.0) != keep) return 43;
+        std::string const off = cap_config(method, "maxmove", -1.0);
+        if (cap_config(method, "maxmove", -1e9) != off) return 44;
+        std::string const cleared = cap_config(method, "maxstep", 0.0);
+        if (cap_config(method, "maxstep", -1.0) != cleared ||
+            cap_config(method, "atom_maxmove", -0.0) != cleared) {
+            return 45;
+        }
+    }
+    std::printf("maxmove off ok\n");
+    return 0;
+}
+
 int main() {
+    int off = maxmove_off();
+    if (off != 0) return off;
     int block = eigen_block();
     if (block != 0) return block;
     std::vector<double> x{1.0, 1.0};
