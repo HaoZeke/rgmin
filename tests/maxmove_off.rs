@@ -9,9 +9,10 @@
 use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
 use ndarray::{Array1, Array2, ArrayView1, array};
 use rgmin::{
-    Accept, Control, DistanceConstraints, FireKind, HessianObjective, HessianOracle, HessianVector,
-    LbfgsStep, LineSearch, ManifoldKind, Method, NewtonKind, NoiseFloor, Solver, minimize_method,
-    minimize_method_hess, minimize_method_hvp, minimize_newton_cg,
+    Accept, Control, DistanceConstraints, EonCg, FireKind, HessianObjective, HessianOracle,
+    HessianVector, LbfgsStep, LineSearch, ManifoldKind, Method, NewtonKind, NoiseFloor, Solver,
+    minimize_eon_cg, minimize_method, minimize_method_hess, minimize_method_hvp,
+    minimize_newton_cg,
 };
 use std::sync::OnceLock;
 
@@ -407,6 +408,44 @@ fn set_atom_maxmove_takes_only_a_positive_finite_cap() {
             assert_eq!(got, free, "{method:?} set_atom_maxmove({cap})");
         }
     }
+}
+
+#[test]
+fn eon_cg_runs_uncapped_under_a_non_binding_max_move() {
+    let fill = |x: &[f64], g: &mut [f64]| {
+        let x = ArrayView1::from(x);
+        g.copy_from_slice(Bowl.grad(x).as_slice().unwrap());
+        Bowl.eval(x)
+    };
+    let run = |max_move| {
+        let mut x = start().to_vec();
+        let opts = EonCg {
+            max_move,
+            max_iter: 6,
+            gtol: 1e-14,
+            ..EonCg::default()
+        };
+        let report = minimize_eon_cg(&mut x, fill, &opts);
+        format!("{x:?} {:?} {}", report.energy, report.evals)
+    };
+    let free = run(1e300);
+    for cap in KEEPS_DEFAULTS.into_iter().chain(ALL_OFF) {
+        assert_eq!(run(cap), free, "max_move {cap}");
+    }
+    let near = start() * 0.05;
+    let mut x = near.to_vec();
+    let f0 = Bowl.eval(near.view());
+    let opts = EonCg {
+        max_move: -1.0,
+        max_iter: 1,
+        ..EonCg::default()
+    };
+    let report = minimize_eon_cg(&mut x, fill, &opts);
+    assert!(
+        report.energy < f0,
+        "max_move -1 went from {f0} to {}",
+        report.energy
+    );
 }
 
 #[test]

@@ -16,7 +16,9 @@
 /// Controls for [`minimize_eon_cg`].
 #[derive(Clone, Copy, Debug)]
 pub struct EonCg {
-    /// Longest per-atom displacement, eOn `max_move`.
+    /// Longest per-atom displacement, eOn `max_move`. A non-positive or
+    /// non-finite value is no cap; a step along non-positive curvature
+    /// then has length [`crate::EON_MAX_MOVE`].
     pub max_move: f64,
     /// Stop when the selected gradient norm is below this value.
     pub gtol: f64,
@@ -126,6 +128,7 @@ where
     let mut energy = fill(x, &mut g);
     let mut evals = 1usize;
     let fd = crate::EON_FINITE_DIFFERENCE;
+    let cap = Some(opts.max_move).filter(|&cap| crate::step::binding(cap));
     for _ in 0..opts.max_iter {
         let gnorm = grad_norm(&g, opts.cluster);
         if gnorm < opts.gtol {
@@ -164,26 +167,32 @@ where
             p2 += -g_probe[i] * u;
         }
         let curv = (p1 - p2) / fd;
-        let mut step = opts.max_move;
-        if curv > 0.0 && curv.is_finite() {
-            step = p1 / curv;
-        }
-        // `std::copysign(max_move, step)`: magnitude of the cap, sign
-        // of the model step. `atom_only` leaves a long positive model
-        // step for the per-atom cap. A negative length is still clipped.
-        if step < -opts.max_move {
-            step = -opts.max_move;
-        } else if step > opts.max_move && !opts.atom_only {
-            step = opts.max_move;
+        let modelled = curv > 0.0 && curv.is_finite();
+        let mut step = if modelled {
+            p1 / curv
+        } else {
+            cap.unwrap_or(crate::EON_MAX_MOVE)
+        };
+        if let Some(cap) = cap {
+            // `std::copysign(max_move, step)`: magnitude of the cap, sign
+            // of the model step. `atom_only` leaves a long positive model
+            // step for the per-atom cap. A negative length is still clipped.
+            if step < -cap {
+                step = -cap;
+            } else if step > cap && !opts.atom_only {
+                step = cap;
+            }
         }
         for d in &mut direction {
             *d *= inv * step;
         }
-        let motion = max_atom(&direction);
-        if motion > opts.max_move && motion > 0.0 {
-            let s = opts.max_move / motion;
-            for v in &mut direction {
-                *v *= s;
+        if let Some(cap) = cap {
+            let motion = max_atom(&direction);
+            if motion > cap && motion > 0.0 {
+                let s = cap / motion;
+                for v in &mut direction {
+                    *v *= s;
+                }
             }
         }
         for i in 0..n {
@@ -191,7 +200,7 @@ where
         }
         energy = fill(x, &mut g);
         evals += 1;
-        if step >= opts.max_move {
+        if cap.map_or(!modelled, |cap| step >= cap) {
             direction_old.fill(0.0);
             force_old.fill(0.0);
         }
