@@ -285,3 +285,83 @@ fn a_positive_budget_walks_past_the_one_dimensional_period() {
     assert_eq!(status, Status::Iterating);
     assert_eq!(accepted, 4);
 }
+
+/// `f = 759036 + 1/2 sum (i + 1) x_i^2`, an ordinary bowl that converges.
+struct Bowl {
+    dim: usize,
+    bounds: Bounds<f64>,
+}
+
+impl Bowl {
+    fn new(dim: usize) -> Self {
+        Self {
+            dim,
+            bounds: Bounds::new(
+                Array1::from_elem(dim, -1e6),
+                Array1::from_elem(dim, 1e6),
+                0.0,
+            ),
+        }
+    }
+}
+
+impl Objective<f64> for Bowl {
+    fn dim(&self) -> usize {
+        self.dim
+    }
+    fn bounds(&self) -> &Bounds<f64> {
+        &self.bounds
+    }
+    fn eval(&self, x: ArrayView1<f64>) -> f64 {
+        VALUE
+            + 0.5
+                * x.iter()
+                    .enumerate()
+                    .map(|(i, v)| (i + 1) as f64 * v * v)
+                    .sum::<f64>()
+    }
+}
+
+impl Gradient<f64> for Bowl {
+    fn dim(&self) -> usize {
+        self.dim
+    }
+    fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+        Array1::from_iter(x.iter().enumerate().map(|(i, v)| (i + 1) as f64 * v))
+    }
+}
+
+impl DifferentiableObjective<f64> for Bowl {
+    fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+        (self.eval(x), self.grad(x))
+    }
+}
+
+/// The one-shot drivers keep reading a zero budget as zero iterations:
+/// the plateau stop is for a caller's own step loop, not a new budget.
+#[test]
+fn a_zero_budget_one_shot_still_takes_no_step() {
+    let control = Control {
+        maxiter: 0,
+        gtol: 1e-8,
+        ..Control::default()
+    };
+    let x0 = array![1.0, -1.0, 0.5];
+    let report = rgmin::minimize_lbfgs(
+        &Bowl::new(3),
+        x0.clone(),
+        &control,
+        LineSearch::default(),
+        5,
+    )
+    .unwrap();
+    assert_eq!(report.steps, 0);
+    assert_eq!(report.status, Status::Budget);
+    assert_eq!(report.coords, x0);
+
+    let mut solver = Solver::new(Method::lbfgs(), control, 3);
+    let mut x = x0.clone();
+    solver.run(&Bowl::new(3), &mut x).unwrap();
+    assert_eq!(x, x0);
+    assert_eq!(solver.steps(), 0);
+}

@@ -4594,13 +4594,8 @@ impl Solver {
         self.brief = true;
         let tol = self.control.gtol;
         let budget = self.control.maxiter;
-        // L-BFGS reads a zero budget the way SCG does: there is no
-        // iteration limit, and `max(n, 2)` repeated accepted steps stop on
-        // [`Status::StepTolerance`] while the gradient is still above `gtol`.
-        let unlimited = budget == 0 && matches!(self.inner, Inner::Lbfgs(_));
         let mut stop: Result<()> = Ok(());
-        let mut taken = 0usize;
-        while unlimited || taken < budget {
+        for _ in 0..budget {
             match self.step(obj, x) {
                 Ok(rep) if rep.grad_norm < tol => {
                     let value = rep.value;
@@ -4608,20 +4603,12 @@ impl Solver {
                     let g = self.last_grad.clone();
                     return Ok(self.report(value, x, &g));
                 }
-                Ok(rep) if unlimited && rep.status == Status::StepTolerance => {
-                    self.brief = false;
-                    let g = self.last_grad.clone();
-                    let mut out = self.report(rep.value, x, &g);
-                    out.status = Status::StepTolerance;
-                    return Ok(out);
-                }
                 Ok(_) => {}
                 Err(err) => {
                     stop = Err(err);
                     break;
                 }
             }
-            taken += 1;
         }
         self.brief = false;
         match stop {
