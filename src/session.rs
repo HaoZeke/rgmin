@@ -253,6 +253,9 @@ pub struct Solver {
     last_pos: Option<Array1<f64>>,
     last_value: f64,
     last_grad: Array1<f64>,
+    /// Unlimited L-BFGS plateau. Unused by every other method, and unused
+    /// when the iteration budget is positive.
+    lbfgs_plateau: crate::lbfgs_plateau::RepeatedAcceptedStep,
     /// Objective gradients. A finite-difference product is an
     /// [`Self::hvp_calls`] entry, not a gradient.
     gradient_calls: usize,
@@ -442,6 +445,7 @@ impl Solver {
             last_pos: None,
             last_value: 0.0,
             last_grad: Array1::zeros(dim),
+            lbfgs_plateau: crate::lbfgs_plateau::RepeatedAcceptedStep::new(),
             gradient_calls: 0,
             hvp_calls: 0,
             saddle_kicks: 0,
@@ -1973,8 +1977,50 @@ impl Solver {
         result
     }
 
+    /// A zero iteration budget is the SCG reading. The plateau itself is
+    /// `lbfgs_plateau`: this only asks it, and only for L-BFGS. A positive
+    /// budget does not ask, so its trajectory is unchanged.
+    fn note_repeated_lbfgs_step(
+        &mut self,
+        before: &Array1<f64>,
+        x: &Array1<f64>,
+        report: &mut Report,
+    ) {
+        if self.control.maxiter != 0 || !matches!(self.inner, Inner::Lbfgs(_)) {
+            return;
+        }
+        if report.status != Status::Iterating {
+            return;
+        }
+        let moved = before.len() == x.len()
+            && before
+                .iter()
+                .zip(x.iter())
+                .any(|(a, b)| a.to_bits() != b.to_bits());
+        if self.lbfgs_plateau.observe(
+            self.dim,
+            moved,
+            report.value,
+            report.grad_norm,
+            self.control.gtol,
+        ) {
+            report.status = Status::StepTolerance;
+        }
+    }
+
     /// One outer iteration. `x` is the iterate and is overwritten in place.
     pub fn step<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let before = x.clone();
+        let mut report = self.step_once(obj, x)?;
+        self.note_repeated_lbfgs_step(&before, x, &mut report);
+        Ok(report)
+    }
+
+    /// One iteration, without the unlimited-budget plateau check.
+    fn step_once<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
@@ -4548,8 +4594,13 @@ impl Solver {
         self.brief = true;
         let tol = self.control.gtol;
         let budget = self.control.maxiter;
+        // L-BFGS reads a zero budget the way SCG does: there is no
+        // iteration limit, and `max(n, 2)` repeated accepted steps stop on
+        // [`Status::StepTolerance`] while the gradient is still above `gtol`.
+        let unlimited = budget == 0 && matches!(self.inner, Inner::Lbfgs(_));
         let mut stop: Result<()> = Ok(());
-        for _ in 0..budget {
+        let mut taken = 0usize;
+        while unlimited || taken < budget {
             match self.step(obj, x) {
                 Ok(rep) if rep.grad_norm < tol => {
                     let value = rep.value;
@@ -4557,12 +4608,20 @@ impl Solver {
                     let g = self.last_grad.clone();
                     return Ok(self.report(value, x, &g));
                 }
+                Ok(rep) if unlimited && rep.status == Status::StepTolerance => {
+                    self.brief = false;
+                    let g = self.last_grad.clone();
+                    let mut out = self.report(rep.value, x, &g);
+                    out.status = Status::StepTolerance;
+                    return Ok(out);
+                }
                 Ok(_) => {}
                 Err(err) => {
                     stop = Err(err);
                     break;
                 }
             }
+            taken += 1;
         }
         self.brief = false;
         match stop {

@@ -2334,6 +2334,12 @@ impl Lbfgs {
     ///
     /// Uses Euclidean `||g||_2` against `control.gtol` so
     /// [`crate::minimize_lbfgs`] keeps its existing reports.
+    /// A zero `control.maxiter` leaves termination to convergence. Such a
+    /// fit also stops, with [`crate::Status::StepTolerance`] while `||g||`
+    /// is at or above `gtol`, after `max(n, 2)` accepted steps that repeat
+    /// the value and the gradient norm. A positive `maxiter` leaves the
+    /// trajectory unchanged. The default step stays the capped eOn move;
+    /// strong Wolfe is opt-in.
     pub fn minimize_objective<O>(
         &mut self,
         obj: &O,
@@ -2356,7 +2362,9 @@ impl Lbfgs {
         crate::step::refuse_non_finite(value, &grad)?;
         let mut istep = control.istep;
 
-        for step in 0..control.maxiter {
+        let mut step = 0usize;
+        let mut plateau = crate::lbfgs_plateau::RepeatedAcceptedStep::new();
+        while control.maxiter == 0 || step < control.maxiter {
             let gnorm = l2(&grad);
             if let Some(status) = control.halt(gnorm, grad.len()) {
                 return Ok(Report {
@@ -2369,6 +2377,7 @@ impl Lbfgs {
                     status,
                 });
             }
+            let before = pos.clone();
             let stall = self.step_objective(
                 obj,
                 &mut pos,
@@ -2390,6 +2399,25 @@ impl Lbfgs {
                     status: crate::report::Status::NoiseFloor,
                 });
             }
+            let gnorm_now = l2(&grad);
+            let moved = before
+                .iter()
+                .zip(pos.iter())
+                .any(|(a, b)| a.to_bits() != b.to_bits());
+            if control.maxiter == 0
+                && plateau.observe(pos.len(), moved, value, gnorm_now, control.gtol)
+            {
+                return Ok(Report {
+                    value,
+                    coords: pos,
+                    steps: step + 1,
+                    grad_norm: gnorm_now,
+                    stop_norm: StopNorm::Two,
+                    grad: None,
+                    status: crate::report::Status::StepTolerance,
+                });
+            }
+            step += 1;
         }
         let gnorm = l2(&grad);
         Ok(Report {

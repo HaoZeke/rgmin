@@ -57,6 +57,7 @@ pub mod hvp;
 pub mod irc_trust;
 /// Persistent L-BFGS (Nocedal-Wright 7.4) with strong Wolfe.
 pub mod lbfgs;
+mod lbfgs_plateau;
 /// L-BFGS quadratic model solved by HiGHS.
 #[cfg(feature = "highs")]
 pub mod lbfgs_qp;
