@@ -239,20 +239,51 @@ def test_pt7_emt_golden_pins_numpy_not_rgmin() -> None:
     the child asserts ``show_runtime`` and ``__cpu_features__``. This
     pins ASE's EMT, which is NumPy-dispatched, and not rgmin.
     Windows NumPy takes a different value. The thread counts still agree.
+    A mismatch reports the observed digest with the platform and the
+    NumPy version. ``RGMIN_PT7_DIGEST_OUT`` names a file for that record.
     """
     pytest.importorskip("ase")
     pin = _emt_pin()
     expect = _pt7_expect()
-    lines = _run_child(_PT7_THREADS, pin=pin)
-    assert lines == [expect, expect, expect]
+    observed = {f"python_threads_{w}": h for w, h in zip((1, 2, 8), _run_child(_PT7_THREADS, pin=pin))}
     for threads in ("1", "2", "3", "8"):
-        hashed = _run_child(
+        for digest in _run_child(
             _PT7_ONCE,
             pin=pin,
             RAYON_NUM_THREADS=threads,
             OMP_NUM_THREADS=threads,
-        )
-        assert hashed == [expect]
+        ):
+            observed[f"rayon_{threads}"] = digest
+    record = _pt7_record(observed, expect, pin)
+    out = os.environ.get("RGMIN_PT7_DIGEST_OUT")
+    if out:
+        with open(out, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2)
+            handle.write("\n")
+    report = json.dumps(record, indent=2)
+    assert len(observed) == 7, report
+    assert set(observed.values()) == {expect}, report
+
+
+def _pt7_record(observed: dict[str, str], expect: str, pin: str | None) -> dict[str, object]:
+    """Everything needed to pin the Pt7 golden from one failing run."""
+    import platform
+
+    import ase
+
+    digests = sorted(set(observed.values()))
+    return {
+        "observed": digests[0] if len(digests) == 1 else digests,
+        "expected": expect,
+        "constant": "PT7_EMT_WINDOWS" if sys.platform == "win32" else "PT7_EMT",
+        "platform": sys.platform,
+        "machine": platform.machine(),
+        "python": sys.version,
+        "numpy": np.__version__,
+        "ase": ase.__version__,
+        "pin": pin,
+        "runs": observed,
+    }
 
 
 def test_rgmin_quadratic_golden() -> None:
