@@ -825,7 +825,6 @@ name = "rgmin"
 version = "0.6.0"
 dependencies = [
  "approx",
- "cbindgen",
  "cc",
  "dlpk",
  "eindir-core",

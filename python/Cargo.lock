@@ -594,7 +594,6 @@ dependencies = [
 name = "rgmin"
 version = "0.6.0"
 dependencies = [
- "cbindgen",
  "dlpk",
  "eindir-core",
  "libm",
