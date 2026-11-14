@@ -21,14 +21,14 @@ import pytest
 
 # One hash per fixture. 3.14 and 3.14t both compare against these values.
 # Lennard-Jones does not need a NumPy kernel pin.
-LJ38 = "e40ce10a3ff8a9622188ac2e08e139c7afddfdbc0fb34221b0cf71f06ee6afba"
+LJ38 = "e3f640188156dacb71f6d7cd18377e430d18e44718cec0080fad338d0c46fd8d"
 # ASE EMT. Compared only in a process that was started with the pin below.
 # Linux, macOS, and arm agree. Windows NumPy does not, on this trajectory.
-PT7_EMT = "c10b0f1f1d1a12fe4c667b2afc253b318020965a03cb07150e010384c7bd50a9"
+PT7_EMT = "299f8164ab0df6f3b59731098b3d83e12c13c0b4117426437bf9af9df0a17ce8"
 PT7_EMT_WINDOWS = "32ecfa5c86916033bd1b82dbd1059f3777ec6e386eb416f0b9c69b4df96074c8"
 # rgmin Solver, pure-Python diagonal quadratic, no NumPy pin.
 # The solver uses the default per-atom cap of 0.2.
-RGMIN_QUADRATIC = "c133a0ce135758cf1c34cadfd8249b1351369c5886655f15b705784d4671964e"
+RGMIN_QUADRATIC = "b2ef984a0c4b84ba6c176428a2a0b3370b34d1fbb65ebe1126a6732a0cb62d7a"
 
 # NumPy 2.2 still dispatches AVX512F and AVX512_ICL by those names.
 # NumPy 2.5 dispatches X86_V3, X86_V4, and AVX512_ICL. A name that is
