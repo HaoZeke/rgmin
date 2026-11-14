@@ -1852,6 +1852,7 @@ impl Solver {
         self.istep = self.control.istep;
         self.e_hist.clear();
         self.last_pos = None;
+        self.lbfgs_plateau = crate::lbfgs_plateau::RepeatedAcceptedStep::new();
         if let Overlay::QuickMin(_, session) = &mut self.overlay {
             session.forget_last();
         }
@@ -1864,6 +1865,7 @@ impl Solver {
         self.istep = self.control.istep;
         self.e_hist.clear();
         self.last_pos = None;
+        self.lbfgs_plateau = crate::lbfgs_plateau::RepeatedAcceptedStep::new();
         let sr_radius = self.sr_opening_radius();
         match &mut self.inner {
             Inner::Lbfgs(solver) => solver.forget(),
@@ -1977,6 +1979,17 @@ impl Solver {
         result
     }
 
+    /// The window states how accurate the objective's values are, so it
+    /// holds under every acceptance policy, as the default four-epsilon
+    /// window it replaces does.
+    fn search_options(&self) -> LineSearchOptions {
+        if self.manifold == ManifoldKind::Euclidean {
+            self.line_options
+        } else {
+            LineSearchOptions::default()
+        }
+    }
+
     /// A zero iteration budget is the SCG reading. The plateau itself is
     /// `lbfgs_plateau`: this only asks it, and only for L-BFGS. A positive
     /// budget does not ask, so its trajectory is unchanged.
@@ -2003,6 +2016,7 @@ impl Solver {
             report.value,
             report.grad_norm,
             self.control.gtol,
+            self.search_options().objective_window(),
         ) {
             report.status = Status::StepTolerance;
         }
@@ -3222,14 +3236,7 @@ impl Solver {
             self.istep = self.control.istep.min(1.0 / l2(&grad));
         }
 
-        // The window states how accurate the objective's values are, so it
-        // holds under every acceptance policy, as the default four-epsilon
-        // window it replaces does.
-        let line_options = if self.manifold == ManifoldKind::Euclidean {
-            self.line_options
-        } else {
-            LineSearchOptions::default()
-        };
+        let line_options = self.search_options();
         let start = x.clone();
         let gold = grad.clone();
         // Accept::Step: the two-loop direction goes through accept_step

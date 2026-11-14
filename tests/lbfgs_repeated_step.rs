@@ -19,10 +19,56 @@ const GRAD: f64 = 2.14983;
 /// Wolfe trial is refused and the search accepts inside the ball.
 const FLAT: f64 = 2e-10;
 
+/// The plateau a real fit sits on: each accepted step moves the value by
+/// a few ulps and the gradient norm by about 1e-12 relative, so neither
+/// repeats its bits while both stay inside the objective's resolution.
+struct Drift {
+    on: bool,
+    step: AtomicUsize,
+}
+
+impl Drift {
+    fn off() -> Self {
+        Self {
+            on: false,
+            step: AtomicUsize::new(0),
+        }
+    }
+
+    fn on() -> Self {
+        Self {
+            on: true,
+            ..Self::off()
+        }
+    }
+
+    fn advance(&self) {
+        self.step.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn phase(&self) -> f64 {
+        if self.on {
+            (self.step.load(Ordering::Relaxed) % 3) as f64
+        } else {
+            0.0
+        }
+    }
+
+    fn value(&self) -> f64 {
+        let ulp = f64::from_bits(VALUE.to_bits() + 1) - VALUE;
+        VALUE + self.phase() * ulp
+    }
+
+    fn grad(&self) -> f64 {
+        GRAD * (1.0 + self.phase() * 1e-12)
+    }
+}
+
 struct ConstantForce {
     dim: usize,
     anchor: Mutex<Array1<f64>>,
     bounds: Bounds<f64>,
+    drift: Drift,
 }
 
 impl ConstantForce {
@@ -35,11 +81,20 @@ impl ConstantForce {
                 Array1::from_elem(dim, 1e6),
                 0.0,
             ),
+            drift: Drift::off(),
+        }
+    }
+
+    fn drifting(dim: usize) -> Self {
+        Self {
+            drift: Drift::on(),
+            ..Self::new(dim)
         }
     }
 
     fn set_anchor(&self, x: &Array1<f64>) {
         *self.anchor.lock().unwrap() = x.clone();
+        self.drift.advance();
     }
 }
 
@@ -53,7 +108,11 @@ impl Objective<f64> for ConstantForce {
     fn eval(&self, x: ArrayView1<f64>) -> f64 {
         let anchor = self.anchor.lock().unwrap();
         let r = (&x - &*anchor).mapv(|v| v * v).sum().sqrt();
-        if r > FLAT { VALUE + (r - FLAT) } else { VALUE }
+        if r > FLAT {
+            VALUE + (r - FLAT)
+        } else {
+            self.drift.value()
+        }
     }
 }
 
@@ -69,7 +128,7 @@ impl Gradient<f64> for ConstantForce {
             return &d * (100.0 / r);
         }
         let mut g = Array1::zeros(self.dim);
-        g[0] = -GRAD;
+        g[0] = -self.drift.grad();
         g
     }
 }
@@ -87,6 +146,7 @@ struct WolfePlane {
     anchor: Mutex<Array1<f64>>,
     bounds: Bounds<f64>,
     calls: AtomicUsize,
+    drift: Drift,
 }
 
 impl WolfePlane {
@@ -95,11 +155,20 @@ impl WolfePlane {
             anchor: Mutex::new(array![0.0, 0.0]),
             bounds: Bounds::new(array![-1e6, -1e6], array![1e6, 1e6], 0.0),
             calls: AtomicUsize::new(0),
+            drift: Drift::off(),
+        }
+    }
+
+    fn drifting() -> Self {
+        Self {
+            drift: Drift::on(),
+            ..Self::new()
         }
     }
 
     fn set_anchor(&self, x: &Array1<f64>) {
         *self.anchor.lock().unwrap() = x.clone();
+        self.drift.advance();
     }
 }
 
@@ -114,7 +183,11 @@ impl Objective<f64> for WolfePlane {
         let anchor = self.anchor.lock().unwrap();
         let d = &x - &*anchor;
         let r = d.dot(&d).sqrt();
-        if r > FLAT { VALUE + (r - FLAT) } else { VALUE }
+        if r > FLAT {
+            VALUE + (r - FLAT)
+        } else {
+            self.drift.value()
+        }
     }
 }
 
@@ -130,10 +203,11 @@ impl Gradient<f64> for WolfePlane {
         if r > FLAT {
             return array![100.0 * dx / r, 100.0 * dy / r];
         }
+        let grad = self.drift.grad();
         if r == 0.0 {
-            return array![-GRAD, 0.0];
+            return array![-grad, 0.0];
         }
-        array![-GRAD * dy / r, GRAD * dx / r]
+        array![-grad * dy / r, grad * dx / r]
     }
 }
 
@@ -182,7 +256,10 @@ fn assert_about_1e_10(step: f64) {
 }
 
 fn assert_frozen(value: f64, grad_norm: f64) {
-    assert_eq!(value.to_bits(), VALUE.to_bits());
+    assert!(
+        (value - VALUE).abs() <= 4.0 * f64::EPSILON * VALUE,
+        "value {value}"
+    );
     assert!(
         (grad_norm - GRAD).abs() <= GRAD * f64::EPSILON.sqrt(),
         "grad {grad_norm}"
@@ -194,8 +271,16 @@ fn step_length(before: &Array1<f64>, after: &Array1<f64>) -> f64 {
     (after - before).mapv(|v| v * v).sum().sqrt()
 }
 
+/// A run that has not stopped by now never will: the stop waits
+/// `max(n, 2)` steps.
+const GUARD: usize = 200;
+
 fn drive_capped(dim: usize, maxiter: usize) -> (Status, usize, f64, f64) {
-    let objective = ConstantForce::new(dim);
+    drive_capped_on(ConstantForce::new(dim), maxiter)
+}
+
+fn drive_capped_on(objective: ConstantForce, maxiter: usize) -> (Status, usize, f64, f64) {
+    let dim = objective.dim;
     let mut solver = session(dim, maxiter, false);
     let mut x = Array1::zeros(dim);
     let mut accepted = 0usize;
@@ -211,14 +296,17 @@ fn drive_capped(dim: usize, maxiter: usize) -> (Status, usize, f64, f64) {
             if accepted == maxiter {
                 return (report.status, accepted, report.value, report.grad_norm);
             }
-        } else if report.status != Status::Iterating {
+        } else if report.status != Status::Iterating || accepted == GUARD {
             return (report.status, accepted, report.value, report.grad_norm);
         }
     }
 }
 
 fn drive_wolfe() -> (Status, usize) {
-    let objective = WolfePlane::new();
+    drive_wolfe_on(WolfePlane::new())
+}
+
+fn drive_wolfe_on(objective: WolfePlane) -> (Status, usize) {
     let mut solver = session(2, 0, true);
     let mut x = array![0.0, 0.0];
     let mut accepted = 0usize;
@@ -229,6 +317,9 @@ fn drive_wolfe() -> (Status, usize) {
         assert_about_1e_10(step_length(&before, &x));
         assert_frozen(report.value, report.grad_norm);
         objective.set_anchor(&x);
+        if accepted == GUARD {
+            return (report.status, accepted);
+        }
         if report.status != Status::Iterating {
             assert!(
                 objective.calls.load(Ordering::Relaxed) < 2_000,
@@ -364,4 +455,140 @@ fn a_zero_budget_one_shot_still_takes_no_step() {
     solver.run(&Bowl::new(3), &mut x).unwrap();
     assert_eq!(x, x0);
     assert_eq!(solver.steps(), 0);
+}
+
+/// The real plateau does not repeat bits. A value inside the roundoff
+/// window and a gradient norm inside `sqrt(eps)` of the step that opened
+/// the run are the same plateau.
+#[test]
+fn a_drifting_plateau_stops_on_the_same_period() {
+    let (status, accepted, _, grad) = drive_capped_on(ConstantForce::drifting(3), 0);
+    assert_eq!(status, Status::StepTolerance);
+    assert_eq!(accepted, 3);
+    assert!(grad >= 1e-2);
+}
+
+#[test]
+fn a_drifting_wolfe_plane_stops_on_the_same_period() {
+    let (status, accepted) = drive_wolfe_on(WolfePlane::drifting());
+    assert_eq!(status, Status::StepTolerance);
+    assert_eq!(accepted, 2);
+}
+
+type ValueAndGradient = fn(ArrayView1<f64>) -> (f64, Array1<f64>);
+
+/// An objective from one `(f, g)` function, for the convergence guards.
+struct Smooth {
+    dim: usize,
+    bounds: Bounds<f64>,
+    f: ValueAndGradient,
+}
+
+impl Smooth {
+    fn new(dim: usize, f: ValueAndGradient) -> Self {
+        Self {
+            dim,
+            bounds: Bounds::new(
+                Array1::from_elem(dim, -1e6),
+                Array1::from_elem(dim, 1e6),
+                0.0,
+            ),
+            f,
+        }
+    }
+}
+
+impl Objective<f64> for Smooth {
+    fn dim(&self) -> usize {
+        self.dim
+    }
+    fn bounds(&self) -> &Bounds<f64> {
+        &self.bounds
+    }
+    fn eval(&self, x: ArrayView1<f64>) -> f64 {
+        (self.f)(x).0
+    }
+}
+
+impl Gradient<f64> for Smooth {
+    fn dim(&self) -> usize {
+        self.dim
+    }
+    fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+        (self.f)(x).1
+    }
+}
+
+impl DifferentiableObjective<f64> for Smooth {
+    fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+        (self.f)(x)
+    }
+}
+
+/// Curvatures `1 .. 1e5` on six coordinates, offset to the plateau value.
+fn ill_conditioned(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+    let h = |i: usize| 10f64.powf(i as f64);
+    let g = Array1::from_iter(x.iter().enumerate().map(|(i, v)| h(i) * v));
+    (VALUE + 0.5 * x.dot(&g), g)
+}
+
+/// Rosenbrock's curved valley, offset to the plateau value.
+fn valley(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+    let (a, b) = (x[0], x[1]);
+    (
+        VALUE + (1.0 - a).powi(2) + 100.0 * (b - a * a).powi(2),
+        array![
+            -2.0 * (1.0 - a) - 400.0 * a * (b - a * a),
+            200.0 * (b - a * a)
+        ],
+    )
+}
+
+/// Late steps on these change the value by less than its resolution
+/// while the gradient norm still falls, so neither is the plateau.
+#[test]
+fn unlimited_fits_on_a_flat_valley_or_an_ill_conditioned_bowl_still_converge() {
+    let cases: [(ValueAndGradient, Array1<f64>, f64); 2] = [
+        (ill_conditioned, Array1::from_elem(6, 1.0), 1e-4),
+        (valley, array![-1.2, 1.0], 1e-5),
+    ];
+    for (f, x0, gtol) in cases {
+        for wolfe in [false, true] {
+            for window in [None, Some(1e-9)] {
+                let objective = Smooth::new(x0.len(), f);
+                let mut solver = Solver::new(
+                    Method::lbfgs(),
+                    Control {
+                        maxiter: 0,
+                        gtol,
+                        ..Control::default()
+                    },
+                    x0.len(),
+                );
+                if wolfe {
+                    solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
+                    solver.set_linesearch(LineSearch::Wolfe {
+                        c1: 1e-4,
+                        c2: 0.9,
+                        maxiter: 80,
+                    });
+                }
+                if let Some(relative) = window {
+                    assert!(solver.set_objective_roundoff(relative));
+                }
+                let mut x = x0.clone();
+                let mut report = solver.step(&objective, &mut x).unwrap();
+                for _ in 0..1_000 {
+                    if report.status != Status::Iterating || report.grad_norm < gtol {
+                        break;
+                    }
+                    report = solver.step(&objective, &mut x).unwrap();
+                }
+                assert!(
+                    report.grad_norm < gtol && report.status != Status::StepTolerance,
+                    "wolfe {wolfe} window {window:?}: {report:?}"
+                );
+            }
+        }
+    }
 }

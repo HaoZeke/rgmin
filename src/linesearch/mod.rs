@@ -88,6 +88,11 @@ impl LineSearchOptions {
         })
     }
 
+    /// Relative value window: the configured roundoff, else four epsilon.
+    pub(crate) fn objective_window(self) -> f64 {
+        self.relative_objective_error.unwrap_or(4.0 * f64::EPSILON)
+    }
+
     pub(crate) fn accepts_approximate_wolfe(
         self,
         phi: f64,
