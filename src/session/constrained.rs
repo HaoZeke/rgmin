@@ -641,7 +641,7 @@ impl Solver {
     fn caps(&self) -> Caps {
         Caps {
             atom: self.atom_maxmove,
-            euclid: self.control.maxmove,
+            euclid: self.control.maxmove_cap(),
         }
     }
 
@@ -1436,7 +1436,7 @@ impl Solver {
         };
         let rmax = self
             .control
-            .maxmove
+            .maxmove_cap()
             .unwrap_or(radius * RADIUS_GROWTH)
             .max(radius);
         let space = &start.space;
@@ -1564,7 +1564,7 @@ impl Solver {
         };
         let rmax = self
             .control
-            .maxmove
+            .maxmove_cap()
             .unwrap_or(radius * RADIUS_GROWTH)
             .max(radius);
         let space = &start.space;

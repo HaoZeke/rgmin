@@ -459,7 +459,7 @@ impl Solver {
         }
         if let Some(cap) = self.atom_maxmove {
             scale_step_atom(&self.scratch, x, cap);
-        } else if let Some(cap) = self.control.maxmove {
+        } else if let Some(cap) = self.control.maxmove_cap() {
             scale_step(&self.scratch, x, cap);
         }
         if v2
@@ -525,7 +525,7 @@ impl Solver {
         // The checkpoint above is dropped. Retake it before the kick so a
         // non-finite trial can undo the velocity. Done inside the block
         // next to the kick; `saved` is re-read below via the state.
-        let cap = self.atom_maxmove.or(self.control.maxmove);
+        let cap = self.atom_maxmove.or(self.control.maxmove_cap());
         {
             let dx = self.scratch_b.as_slice().unwrap();
             let origin = self.saved_x.as_slice().unwrap();
@@ -556,6 +556,9 @@ impl Solver {
 }
 
 fn scale_cap(trial: &mut [f64], origin: &[f64], cap: f64, per_atom: bool) {
+    if !crate::step::binding(cap) {
+        return;
+    }
     if per_atom {
         let mut max_a = 0.0_f64;
         let mut i = 0;

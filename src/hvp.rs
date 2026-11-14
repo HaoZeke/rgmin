@@ -896,7 +896,10 @@ where
     let (mut value, mut grad) = obj.value_and_gradient(pos.view());
     crate::step::refuse_non_finite(value, &grad)?;
 
-    let rmax = control.maxmove.unwrap_or(f64::INFINITY).max(RADIUS_FLOOR);
+    let rmax = control
+        .maxmove_cap()
+        .unwrap_or(f64::INFINITY)
+        .max(RADIUS_FLOOR);
     let mut radius = if control.istep > 0.0 {
         control.istep.min(rmax)
     } else {
@@ -934,7 +937,7 @@ where
                 radius,
                 rmax,
                 atom_cap: None,
-                euclid_cap: control.maxmove,
+                euclid_cap: control.maxmove_cap(),
                 project_rigid: false,
                 precondition: false,
                 seed: step as u64,

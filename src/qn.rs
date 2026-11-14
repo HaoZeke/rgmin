@@ -180,7 +180,7 @@ where
     crate::step::refuse_non_finite(value, &grad)?;
     let mut b = Array2::<f64>::eye(n);
     let atom_cap = implicit_atom_cap(control);
-    let (mut radius, rmax) = sr_trust_limits(control.istep, n, atom_cap, control.maxmove);
+    let (mut radius, rmax) = sr_trust_limits(control.istep, n, atom_cap, control.maxmove_cap());
 
     for step in 0..control.maxiter {
         let gnorm = l2(&grad);
@@ -191,7 +191,7 @@ where
         let mut trial = &pos + &dir;
         if let Some(cap) = atom_cap {
             scale_step_atom(&pos, &mut trial, cap);
-        } else if let Some(cap) = control.maxmove {
+        } else if let Some(cap) = control.maxmove_cap() {
             scale_step(&pos, &mut trial, cap);
         }
         trial = obj.bounds().clip(trial.view());

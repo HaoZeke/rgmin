@@ -77,12 +77,14 @@ pub struct Control {
     /// unit per-atom length. SR1 and SR2 do not line search.
     pub istep: f64,
     /// Optional Euclidean cap on a proposed step (xtsci `maxmove`).
-    /// `Some(c)` with `c <= 0` or NaN is no cap, the same as `None`; a
-    /// non-positive cap never scales a step, so it cannot reverse one.
-    /// A positive value is the step limit, and the per-atom default stays
-    /// off unless the caller sets a per-atom cap. On the C ABI a negative
-    /// `maxmove` is this "no cap" choice, including the default per-atom
-    /// cap; zero keeps the defaults.
+    /// Only a positive finite `c` in `Some(c)` limits a step or a trust
+    /// radius. Any other value is no Euclidean cap, the same as `None`,
+    /// so it never scales a step and cannot reverse one. A positive
+    /// value is the step limit, and the per-atom default stays off
+    /// unless the caller sets a per-atom cap. A negative or infinite
+    /// value also leaves the default per-atom cap off; zero and NaN keep
+    /// it. On the C ABI a negative `maxmove` is that "no cap" choice;
+    /// zero keeps the defaults.
     pub maxmove: Option<f64>,
     /// Norm a [`crate::Solver`] built from this control compares to
     /// [`Self::gtol`]. [`crate::Solver::set_stop_norm`] replaces it.
@@ -165,6 +167,12 @@ impl StopNorm {
 }
 
 impl Control {
+    /// [`Self::maxmove`] when it is a positive finite length, the only
+    /// value that limits a step or a trust radius.
+    pub(crate) fn maxmove_cap(&self) -> Option<f64> {
+        self.maxmove.filter(|&cap| crate::step::binding(cap))
+    }
+
     /// Opt in to the noise floor.
     ///
     /// The iteration stops when the stationarity measure is below

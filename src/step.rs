@@ -97,7 +97,7 @@ where
 /// A cap that binds: positive and finite. Non-positive or NaN caps are
 /// "no cap", the meaning `set_maxmove` and `set_atom_maxmove` give 0.
 #[inline]
-fn binding(cap: f64) -> bool {
+pub(crate) fn binding(cap: f64) -> bool {
     cap > 0.0 && cap.is_finite()
 }
 
@@ -278,9 +278,9 @@ pub(crate) fn cap_alpha(
     control: &Control,
     atom_maxmove: Option<f64>,
 ) -> f64 {
-    let (cap, len) = match (atom_maxmove.filter(|c| binding(*c)), control.maxmove) {
+    let (cap, len) = match (atom_maxmove.filter(|c| binding(*c)), control.maxmove_cap()) {
         (Some(cap), _) => (cap, max_atom_norm(dir)),
-        (None, Some(cap)) if binding(cap) => (cap, crate::vecops::nrm2(dir)),
+        (None, Some(cap)) => (cap, crate::vecops::nrm2(dir)),
         _ => return f64::INFINITY,
     };
     if len > 0.0 && len.is_finite() {

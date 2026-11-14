@@ -34,12 +34,7 @@ where
     let cap = atom_maxmove
         .filter(|c| *c > 0.0 && c.is_finite())
         .map(|c| (c, true))
-        .or_else(|| {
-            control
-                .maxmove
-                .filter(|c| *c > 0.0 && c.is_finite())
-                .map(|c| (c, false))
-        });
+        .or_else(|| control.maxmove_cap().map(|c| (c, false)));
     let allowed_step = |point: &Array1<f64>| match cap {
         None => true,
         Some((limit, atomwise)) => {

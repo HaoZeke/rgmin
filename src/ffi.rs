@@ -210,9 +210,10 @@ pub struct rgmin_control_t {
     pub istep: f64,
     /// L-BFGS correction pairs; 0 selects 10.
     pub memory: usize,
-    /// Euclidean cap. Positive is the cap. Zero keeps the defaults,
-    /// including the default per-atom cap. Negative leaves every cap off
-    /// (layout revision 5; the released 0.5.2 meaning).
+    /// Euclidean cap. Positive is the cap. Zero or NaN keeps the
+    /// defaults, including the default per-atom cap. Negative or +inf
+    /// leaves every cap off (layout revision 5; the released 0.5.2
+    /// meaning).
     pub maxmove: f64,
     /// Gradient-projection noise. Non-positive leaves the floor off.
     pub noise_eps: f64,
@@ -1462,6 +1463,8 @@ pub unsafe extern "C" fn rgmin_solver_rebase(solver: *mut rgmin_solver_t) {
 }
 
 /// Set the Euclidean step cap used by the next [`rgmin_solver_step`].
+/// Positive and finite is the cap, zero or NaN keeps the defaults, and a
+/// negative or infinite value turns every step cap off.
 ///
 /// # Safety
 /// `solver` is null or a live session from [`rgmin_solver_create`].

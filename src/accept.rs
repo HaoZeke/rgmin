@@ -125,14 +125,21 @@ where
     let step = dir * alpha;
     if !manifold.is_flat() {
         let tangent = manifold.project(pos, &step);
-        return retract_within_cap(obj, pos, &tangent, atom_maxmove, control.maxmove, manifold)
-            .map(|(trial, _)| trial);
+        return retract_within_cap(
+            obj,
+            pos,
+            &tangent,
+            atom_maxmove,
+            control.maxmove_cap(),
+            manifold,
+        )
+        .map(|(trial, _)| trial);
     }
     let mut trial = manifold.retract(pos, &step);
     let atom_cap = atom_maxmove.filter(|cap| *cap > 0.0 && cap.is_finite());
     if let Some(cap) = atom_cap {
         scale_step_atom(pos, &mut trial, cap);
-    } else if let Some(cap) = control.maxmove {
+    } else if let Some(cap) = control.maxmove_cap() {
         scale_step(pos, &mut trial, cap);
     }
     Some(clip_owned(obj.bounds(), trial))

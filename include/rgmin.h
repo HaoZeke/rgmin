@@ -160,8 +160,8 @@ typedef struct rgmin_control_t {
     double gtol;
     double istep;
     size_t memory;
-    /** > 0 Euclidean cap; 0 keeps defaults (including the per-atom cap);
-     *  < 0 leaves every step cap off. Layout revision 5. */
+    /** > 0 Euclidean cap; 0 or NaN keeps defaults (including the per-atom
+     *  cap); < 0 or +inf leaves every step cap off. Layout revision 5. */
     double maxmove;
     /** Gradient-projection noise. <= 0 leaves the floor off. */
     double noise_eps;
@@ -285,7 +285,9 @@ void rgmin_solver_rebase(rgmin_solver_t *solver);
  *  ABI minor 28. */
 void rgmin_solver_forget_evaluation(rgmin_solver_t *solver);
 
-/** Euclidean step cap for the next \ref rgmin_solver_step (saddle \c max_move). */
+/** Euclidean step cap for the next \ref rgmin_solver_step (saddle \c max_move).
+ *  Positive and finite: the cap. Zero or NaN: the defaults. Negative or
+ *  infinite: every step cap off, the default per-atom cap included. */
 void rgmin_solver_set_maxmove(rgmin_solver_t *solver, double maxmove);
 /** How an L-BFGS session uses a caller Hessian (eOn \c lbfgs_step). */
 typedef enum rgmin_qn_step_t {

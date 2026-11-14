@@ -792,12 +792,14 @@ impl Solver {
 
     /// Euclidean cap applied on the next [`Self::step`].
     ///
-    /// A positive value is the step limit and the per-atom default stays
-    /// off, unless [`Self::set_atom_maxmove`] was called.
+    /// A positive finite value is the step limit and the per-atom default
+    /// stays off, unless [`Self::set_atom_maxmove`] was called. Zero and
+    /// NaN keep the defaults. A negative or infinite value turns every cap
+    /// off, the per-atom default included.
     pub fn set_maxmove(&mut self, maxmove: f64) {
-        // Positive: Euclidean cap, and the per-atom default stays off.
-        // Zero: keep the defaults. Negative: every cap off, including the
-        // per-atom default. NaN is not a length and keeps the defaults.
+        // A negative or infinite value is stored so that the per-atom
+        // default stays off; every length read takes only a positive
+        // finite cap. NaN is not a length and keeps the defaults.
         self.control.maxmove = if maxmove == 0.0 || maxmove.is_nan() {
             None
         } else {
@@ -1124,7 +1126,7 @@ impl Solver {
                         trust: self
                             .highs_trust
                             .or(self.atom_maxmove)
-                            .or(self.control.maxmove),
+                            .or(self.control.maxmove_cap()),
                         lo: None,
                         hi: None,
                         equalities: self.equalities.clone(),
@@ -2193,7 +2195,11 @@ impl Solver {
         };
         // Same ceiling as dogleg: Euclidean `maxmove` when one is set,
         // otherwise eight times the current radius, and never below it.
-        let rmax = self.control.maxmove.unwrap_or(radius * 8.0).max(radius);
+        let rmax = self
+            .control
+            .maxmove_cap()
+            .unwrap_or(radius * 8.0)
+            .max(radius);
         let project_rigid = self.removal_mode() != RigidMode::Off;
         let taken = newton_cg_step(
             obj,
@@ -2205,7 +2211,7 @@ impl Solver {
                 radius,
                 rmax,
                 atom_cap: self.atom_maxmove,
-                euclid_cap: self.control.maxmove,
+                euclid_cap: self.control.maxmove_cap(),
                 project_rigid,
                 precondition,
                 seed: self.steps as u64,
@@ -2938,7 +2944,7 @@ impl Solver {
                     Some(&model_hess),
                     &grad,
                     self.atom_maxmove,
-                    self.highs_trust.or(self.control.maxmove),
+                    self.highs_trust.or(self.control.maxmove_cap()),
                     center,
                     self.has_coordinate_box().then(|| (x.view(), obj.bounds())),
                     &self.equalities,
@@ -2950,7 +2956,7 @@ impl Solver {
                     Some(&hess),
                     &grad,
                     self.atom_maxmove,
-                    self.control.maxmove,
+                    self.control.maxmove_cap(),
                     center,
                     &self.highs_options,
                 )
@@ -3067,7 +3073,11 @@ impl Solver {
         // the shorter trial looks interior, so Δ does not grow.
         // Δ_max is the Euclidean `maxmove` when one is set, otherwise
         // eight times the current radius. The cap still limits the trial.
-        let rmax = self.control.maxmove.unwrap_or(radius * 8.0).max(radius);
+        let rmax = self
+            .control
+            .maxmove_cap()
+            .unwrap_or(radius * 8.0)
+            .max(radius);
         // A curved kind steps in the tangent space. The dogleg point is
         // tangent, the trial is the retracted tangent step, and the ratio
         // compares the energy there with the tangent model.
@@ -3084,7 +3094,7 @@ impl Solver {
                 x,
                 &dir,
                 self.atom_maxmove,
-                self.control.maxmove,
+                self.control.maxmove_cap(),
                 self.manifold,
             );
             let Some(pair) = fitted else {
@@ -3101,7 +3111,7 @@ impl Solver {
             let mut trial = &*x + &dir;
             if let Some(cap) = self.atom_maxmove {
                 scale_step_atom(x, &mut trial, cap);
-            } else if let Some(cap) = self.control.maxmove {
+            } else if let Some(cap) = self.control.maxmove_cap() {
                 scale_step(x, &mut trial, cap);
             }
             trial = obj.bounds().clip(trial.view());
@@ -3115,7 +3125,7 @@ impl Solver {
         // No displacement cap: the boundary length is the step after the
         // box clip, as before. With a cap, the dogleg length is the one
         // algorithm 4.1 tests against Δ.
-        let boundary_norm = if self.atom_maxmove.is_some() || self.control.maxmove.is_some() {
+        let boundary_norm = if self.atom_maxmove.is_some() || self.control.maxmove_cap().is_some() {
             trust_norm
         } else {
             taken
@@ -3291,7 +3301,7 @@ impl Solver {
                         None,
                         &grad,
                         self.atom_maxmove,
-                        self.highs_trust.or(self.control.maxmove),
+                        self.highs_trust.or(self.control.maxmove_cap()),
                         center,
                         self.has_coordinate_box().then(|| (x.view(), obj.bounds())),
                         &self.equalities,
@@ -3391,7 +3401,7 @@ impl Solver {
         let mut sr_secant: Option<(Array1<f64>, Array1<f64>)> = None;
         let diis_alpha = self.istep;
         let diis_atom_cap = self.atom_maxmove;
-        let diis_euclidean_cap = self.control.maxmove;
+        let diis_euclidean_cap = self.control.maxmove_cap();
         if matches!(&self.inner, Inner::Sr1 { .. } | Inner::Sr2 { .. }) {
             self.sr_trust_attempt(obj, x, &mut value, &mut grad, &start, &gold, &mut sr_secant);
         }
@@ -3792,9 +3802,7 @@ impl Solver {
                     };
                     if !stalled
                         && state.abc
-                        && let Some(cap) = self
-                            .atom_maxmove
-                            .or(self.control.maxmove.filter(|c| c.is_finite() && *c > 0.0))
+                        && let Some(cap) = self.atom_maxmove.or(self.control.maxmove_cap())
                     {
                         dx = fire_clip_components(state, cap);
                     }
@@ -3817,7 +3825,7 @@ impl Solver {
                             let (atom_cap, cap) = if state.abc {
                                 (None, None)
                             } else {
-                                (self.atom_maxmove, self.control.maxmove)
+                                (self.atom_maxmove, self.control.maxmove_cap())
                             };
                             let tangent = manifold.project(x, &dx);
                             let Some((trial, _)) =
@@ -3841,7 +3849,7 @@ impl Solver {
                             if !state.abc {
                                 if let Some(cap) = self.atom_maxmove {
                                     scale_step_atom(x, &mut trial, cap);
-                                } else if let Some(cap) = self.control.maxmove {
+                                } else if let Some(cap) = self.control.maxmove_cap() {
                                     scale_step(x, &mut trial, cap);
                                 }
                             }
@@ -3861,7 +3869,7 @@ impl Solver {
                             if swallowed
                                 || (!state.abc
                                     && (self.atom_maxmove.is_some()
-                                        || self.control.maxmove.is_some()))
+                                        || self.control.maxmove_cap().is_some()))
                             {
                                 let taken = &trial - &*x;
                                 fire_rescale_velocity(state, &dx, &taken);
@@ -4165,7 +4173,7 @@ impl Solver {
             self.control.istep,
             self.dim,
             self.atom_maxmove,
-            self.control.maxmove,
+            self.control.maxmove_cap(),
         )
         .0
     }
@@ -4179,7 +4187,7 @@ impl Solver {
     fn clip_trial(&self, origin: &Array1<f64>, trial: &mut Array1<f64>) {
         if let Some(cap) = self.atom_maxmove {
             scale_step_atom(origin, trial, cap);
-        } else if let Some(cap) = self.control.maxmove {
+        } else if let Some(cap) = self.control.maxmove_cap() {
             scale_step(origin, trial, cap);
         }
     }
@@ -4208,7 +4216,7 @@ impl Solver {
             self.control.istep,
             self.dim,
             self.atom_maxmove,
-            self.control.maxmove,
+            self.control.maxmove_cap(),
         );
         let mut dir = sr_trust_direction(&model, grad, radius);
         if self.project_rigid {
@@ -4880,7 +4888,7 @@ impl Solver {
                 let mut trial = &*x + &dx;
                 if let Some(cap) = self.atom_maxmove {
                     scale_step_atom(x, &mut trial, cap);
-                } else if let Some(cap) = self.control.maxmove {
+                } else if let Some(cap) = self.control.maxmove_cap() {
                     scale_step(x, &mut trial, cap);
                 }
                 trial = obj.bounds().clip(trial.view());
@@ -4914,7 +4922,7 @@ impl Solver {
                 let mut trial = &*x + &dx;
                 if let Some(cap) = self.atom_maxmove {
                     scale_step_atom(x, &mut trial, cap);
-                } else if let Some(cap) = self.control.maxmove {
+                } else if let Some(cap) = self.control.maxmove_cap() {
                     scale_step(x, &mut trial, cap);
                 }
                 trial = obj.bounds().clip(trial.view());

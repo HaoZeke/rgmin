@@ -233,7 +233,7 @@ where
 /// `alpha` shortened so that `||alpha d||_2` is at most a positive finite
 /// `control.maxmove`, with `kappa = d . d`, and whether it was shortened.
 fn bound_step(alpha: f64, kappa: f64, control: &Control) -> (f64, bool) {
-    let Some(cap) = control.maxmove.filter(|c| c.is_finite() && *c > 0.0) else {
+    let Some(cap) = control.maxmove_cap() else {
         return (alpha, false);
     };
     let length = alpha.abs() * kappa.sqrt();

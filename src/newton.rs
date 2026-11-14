@@ -203,7 +203,7 @@ where
         let mut trial = pos + &(dir * alpha);
         if let Some(cap) = implicit_atom_cap(control) {
             scale_step_atom(pos, &mut trial, cap);
-        } else if let Some(cap) = control.maxmove {
+        } else if let Some(cap) = control.maxmove_cap() {
             scale_step(pos, &mut trial, cap);
         }
         trial = obj.bounds().clip(trial.view());
