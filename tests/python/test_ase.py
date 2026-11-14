@@ -335,18 +335,34 @@ def test_fire_calculator_calls_match_ase() -> None:
     assert ours == theirs
 
 
-def test_lbfgs_cache_hit_and_line_search_calls() -> None:
+def test_lbfgs_cache_hit_and_curvature_probe_calls() -> None:
     """The first new EMT call is not the start geometry.
 
-    On this Pt7 start the Wolfe search adds no calculator call beyond
-    ASE LBFGS. ``extra`` is that difference.
+    The default eOn step spends one call on its finite-difference probe,
+    0.01 along the unit force, to set the initial inverse curvature.
+    ``extra`` is that call. The strong Wolfe opt-in adds none on this
+    Pt7 start.
     """
     from ase.optimize import LBFGS as AseLBFGS
 
     ours, theirs, moved = _iteration_calls(LBFGS, AseLBFGS)
     extra = ours - theirs
     assert moved
-    assert extra == 0
+    assert extra == 1
+
+
+def test_lbfgs_probe_is_spent_on_the_first_step_only() -> None:
+    atoms = _pt7(6, scale=0.02)
+    calc = CountingEMT()
+    atoms.calc = calc
+    opt = LBFGS(atoms, logfile=None, maxstep=0.05)
+    counts = []
+    for _ in range(4):
+        before = calc.calls
+        opt.step()
+        atoms.get_forces()
+        counts.append(calc.calls - before)
+    assert counts[1:] == [1, 1, 1], counts
 
 
 def test_accept_follows_optimizable_type() -> None:
