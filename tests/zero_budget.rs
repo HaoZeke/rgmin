@@ -224,8 +224,8 @@ mod capi {
         g: *mut DLManagedTensorVersioned,
     ) -> rgmin_status_t {
         let (x, g) = unsafe { (data(x), data(g)) };
-        for i in 0..N {
-            unsafe { *g.add(i) = CURVATURE[i] * *x.add(i) };
+        for (i, c) in CURVATURE.iter().enumerate() {
+            unsafe { *g.add(i) = c * *x.add(i) };
         }
         rgmin_status_t::RGMIN_SUCCESS
     }
@@ -236,9 +236,9 @@ mod capi {
         h: *mut DLManagedTensorVersioned,
     ) -> rgmin_status_t {
         let h = unsafe { data(h) };
-        for i in 0..N {
+        for (i, c) in CURVATURE.iter().enumerate() {
             for j in 0..N {
-                unsafe { *h.add(i * N + j) = if i == j { CURVATURE[i] } else { 0.0 } };
+                unsafe { *h.add(i * N + j) = if i == j { *c } else { 0.0 } };
             }
         }
         rgmin_status_t::RGMIN_SUCCESS
@@ -251,8 +251,8 @@ mod capi {
         hv: *mut DLManagedTensorVersioned,
     ) -> rgmin_status_t {
         let (v, hv) = unsafe { (data(v), data(hv)) };
-        for i in 0..N {
-            unsafe { *hv.add(i) = CURVATURE[i] * *v.add(i) };
+        for (i, c) in CURVATURE.iter().enumerate() {
+            unsafe { *hv.add(i) = c * *v.add(i) };
         }
         rgmin_status_t::RGMIN_SUCCESS
     }
