@@ -4649,11 +4649,14 @@ impl Solver {
         Ok(self.finish(value, x, &grad, grad_norm, status))
     }
 
-    /// Minimize until the gradient test or the iteration budget.
+    /// Minimize until a step reports a stop or the iteration budget is spent.
     ///
-    /// A zero `maxiter` takes no step: the report is [`Self::assess`] of
-    /// `x`, so it says [`Status::Tolerance`] only when the gradient
-    /// evaluated there is below `gtol`.
+    /// The run ends on the first step whose status is not
+    /// [`Status::Iterating`] and returns that status, so an energy-noise
+    /// [`Status::NoiseFloor`] is kept rather than stepped past. A spent
+    /// budget is [`Status::Budget`]. A zero `maxiter` takes no step: the
+    /// report is [`Self::assess`] of `x`, so it says [`Status::Tolerance`]
+    /// only when the gradient evaluated there is below `gtol`.
     pub fn run<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,
@@ -4664,16 +4667,20 @@ impl Solver {
         }
         self.brief = true;
         let tol = self.control.gtol;
+        let mut last = None;
         let mut stop: Result<()> = Ok(());
         for _ in 0..budget {
             match self.step(obj, x) {
-                Ok(rep) if rep.grad_norm < tol => {
-                    let value = rep.value;
-                    self.brief = false;
-                    let g = self.last_grad.clone();
-                    return Ok(self.report(value, x, &g));
+                Ok(rep) => {
+                    let status = match rep.status {
+                        Status::Iterating if rep.grad_norm < tol => Status::Tolerance,
+                        other => other,
+                    };
+                    last = Some((rep.value, rep.grad_norm, status));
+                    if status != Status::Iterating {
+                        break;
+                    }
                 }
-                Ok(_) => {}
                 Err(err) => {
                     stop = Err(err);
                     break;
@@ -4681,14 +4688,16 @@ impl Solver {
             }
         }
         self.brief = false;
-        match stop {
-            Err(err) => Err(err),
-            Ok(()) => {
-                let value = self.last_value;
-                let g = self.last_grad.clone();
-                Ok(self.report(value, x, &g))
-            }
-        }
+        stop?;
+        let Some((value, grad_norm, status)) = last else {
+            unreachable!("a positive budget takes a step or returns its error");
+        };
+        let status = match status {
+            Status::Iterating => Status::Budget,
+            other => other,
+        };
+        let g = self.last_grad.clone();
+        Ok(self.finish(value, x, &g, grad_norm, status))
     }
 
     /// Euclidean FIRE with the default preset and no preconditioner.
