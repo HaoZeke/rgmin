@@ -183,12 +183,20 @@ Options parse_options(nb::kwargs const& kwargs) {
 }
 
 rgmin::SolverConfig config_from(std::string const& method, Options const& options) {
-    try {
-        return rgmin::SolverConfig::build(method, options.text, options.numbers, options.integers,
-                                          options.flags);
-    } catch (std::invalid_argument const& error) {
-        throw nb::value_error(error.what());
+    rgmin::SolverConfig config = [&] {
+        try {
+            return rgmin::SolverConfig::build(method, options.text, options.numbers,
+                                              options.integers, options.flags);
+        } catch (std::invalid_argument const& error) {
+            throw nb::value_error(error.what());
+        }
+    }();
+    // Python sessions are Euclidean, so an ignored kind is a mistake here.
+    std::string const ignored = config.ignored_linesearch();
+    if (!ignored.empty()) {
+        throw nb::value_error(ignored.c_str());
     }
+    return config;
 }
 
 void raise_for_status(rgmin_status_t status, rgbind::CallContext* context) {

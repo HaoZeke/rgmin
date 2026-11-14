@@ -392,6 +392,12 @@ class Optimizer(_ASEOptimizer):
         if self._rgmin_accept is not None:
             opts["accept"] = self._rgmin_accept
         elif self._needs_step_accept():
+            if "linesearch" in opts:
+                raise ValueError(
+                    f"linesearch={opts['linesearch']!r} has no effect with accept='step', which "
+                    "rgmin.ase takes on a non-conservative optimizable (NEB, dimer, min-mode). "
+                    "Pass accept='energy' or accept='nonmonotone' to line search."
+                )
             opts["accept"] = "step"
             opts.setdefault("neb_guards", True)
         return opts

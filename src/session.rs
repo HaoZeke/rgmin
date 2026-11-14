@@ -734,9 +734,13 @@ impl Solver {
         self.accept = accept;
     }
 
-    /// Line search for the line-searched arms (steepest descent, NLCG,
-    /// BFGS, SR1, SR2, Adam, and L-BFGS under [`Accept::Energy`]) on the
-    /// next [`Self::step`]. Default is strong Wolfe (`c1 = 1e-4`,
+    /// Line search for the line-searched arms on the next [`Self::step`].
+    /// A Euclidean session reads it on steepest descent, NLCG, BFGS, Adam,
+    /// DIIS, and L-BFGS after [`LbfgsStep::Wolfe`], unless the acceptance
+    /// is [`Accept::Step`]. The sphere and Stiefel L-BFGS arm reads it
+    /// under [`Accept::Energy`] or [`Accept::Nonmonotone`], and so does the
+    /// constrained L-BFGS search. The default eOn L-BFGS step and the
+    /// other methods ignore it. Default is strong Wolfe (`c1 = 1e-4`,
     /// `c2 = 0.9`, 20 trials), not [`LineSearch::default`] (Brent).
     pub fn set_linesearch(&mut self, linesearch: LineSearch) {
         self.linesearch = linesearch;

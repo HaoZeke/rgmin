@@ -34,8 +34,9 @@ Later steps cost one call each. A step whose largest atom move exceeds
 than ``maxstep``. A non-positive ``maxstep`` restores the eOn cap of
 0.2. ``linesearch="wolfe"`` opts into the strong Wolfe search, with
 ``c1``, ``c2``, and ``linesearch_maxiter`` as its constants, and
-``maxstep`` still bounds every atom move. Other ``linesearch`` values
-leave the default L-BFGS step unchanged.
+``maxstep`` still bounds every atom move. The eOn step reads no other
+``linesearch`` value, so ``brent``, ``backtracking``, and ``goldstein``
+raise ``ValueError`` on ``lbfgs``.
 
 .. code:: python
 
@@ -43,6 +44,17 @@ leave the default L-BFGS step unchanged.
 
    LBFGS(atoms, logfile=None, maxstep=0.1).run(fmax=0.05)
    LBFGS(atoms, logfile=None, linesearch="wolfe").run(fmax=0.05)
+
+``linesearch`` is accepted only where the step reads it. ``sd``, the
+conjugate-gradient methods, ``bfgs``, ``adam``, and ``diis`` take every
+kind, and ``lbfgs`` takes ``wolfe``. ``accept="step"`` takes each step
+without a line search, and FIRE, QuickMin, ODE12r, BB, SR1, SR2, PSO,
+Newton, RFO, dogleg, and Newton-CG never search a line. A
+``linesearch`` on any of those raises ``ValueError`` and names the
+reason, rather than leaving the run unchanged. ``rgmin.ase`` takes
+``accept="step"`` on a non-conservative optimizable (NEB, dimer,
+min-mode), so a ``linesearch`` there raises unless ``accept`` is
+``energy`` or ``nonmonotone``.
 
 ``lowest_eigenpairs(hvp, x0_block)`` returns values, vectors, residual
 norms, and a converged flag for each of the k lowest pairs.

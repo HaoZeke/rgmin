@@ -128,7 +128,8 @@ class SolverConfig(_SolverConfigBase):
 
     The default ``"lbfgs"`` step is the line-search-free eOn step.
     ``linesearch="wolfe"`` opts into the strong Wolfe search. Both
-    keep every atom move within ``maxstep``.
+    keep every atom move within ``maxstep``. A ``linesearch`` the chosen
+    step ignores raises ``ValueError``.
 
     ``Solver`` takes the native configuration type, so this class
     derives from it rather than wrapping it.

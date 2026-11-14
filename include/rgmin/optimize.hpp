@@ -1047,6 +1047,12 @@ public:
     std::string const& method_name() const noexcept { return method_name_; }
     Control const& control() const noexcept { return control_; }
     void apply(Solver& solver) const;
+    /// Why a Euclidean session of this configuration ignores its line
+    /// search, or an empty string when the session reads it or none is
+    /// set. apply() does not reject an ignored kind: a sphere or Stiefel
+    /// L-BFGS session under energy or nonmonotone acceptance reads every
+    /// kind. The Python binding raises ValueError with this message.
+    std::string ignored_linesearch() const;
 
 private:
     Method method_ = Method::Lbfgs;
@@ -1346,6 +1352,33 @@ inline SolverConfig SolverConfig::build(
             "(brent, backtracking, goldstein, or wolfe)");
     }
     return cfg;
+}
+
+inline std::string SolverConfig::ignored_linesearch() const {
+    if (!linesearch_) return {};
+    char const* kind = "wolfe";
+    switch (*linesearch_) {
+    case RGMIN_LINESEARCH_BRENT: kind = "brent"; break;
+    case RGMIN_LINESEARCH_BACKTRACKING: kind = "backtracking"; break;
+    case RGMIN_LINESEARCH_GOLDSTEIN: kind = "goldstein"; break;
+    default: break;
+    }
+    std::string const head = std::string("linesearch='") + kind + "' has no effect";
+    if (accept_ == RGMIN_ACCEPT_STEP) {
+        return head + " with accept='step', which takes each step without a line search";
+    }
+    if (method_ == Method::Lbfgs) {
+        if (*linesearch_ == RGMIN_LINESEARCH_WOLFE) return {};
+        return head + " on lbfgs: its default eOn step searches no line, and "
+                      "linesearch='wolfe' opts into the strong Wolfe search";
+    }
+    if (method_ == Method::Steepest || method_ == Method::Bfgs || method_ == Method::Adam ||
+        method_ == Method::Diis || detail::is_cg(method_)) {
+        return {};
+    }
+    return head + " on " + method_name_ +
+           ", which takes no line search. sd, the conjugate-gradient methods, bfgs, "
+           "adam, and diis line search, and lbfgs does with linesearch='wolfe'";
 }
 
 inline void SolverConfig::apply(Solver& solver) const {

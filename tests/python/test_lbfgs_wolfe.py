@@ -67,8 +67,8 @@ def test_wolfe_is_not_the_default_step() -> None:
     # The eOn first step evaluates the start, its probe, and the trial.
     assert eon_calls[0] == 3, eon_calls
     assert wolfe_calls[0] == 2, wolfe_calls
-    other, _ = _run(4, linesearch="brent", maxstep=1.0e3)
-    assert all(np.array_equal(a, b) for a, b in zip(eon, other))
+    with pytest.raises(ValueError, match="has no effect on lbfgs"):
+        _run(4, linesearch="brent", maxstep=1.0e3)
 
 
 def test_maxstep_bounds_the_wolfe_steps() -> None:

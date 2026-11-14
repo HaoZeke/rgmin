@@ -37,7 +37,7 @@ The repository root builds a second wheel with scikit-build-core. CMake fetches 
 
 A Cartesian solver starts with a per-atom cap of 0.2 (ASE ~maxstep~, eOn ~max_move~). =maxstep= or =atom_maxmove= replaces it. A non-positive value clears it. A positive =maxmove= is the Euclidean step limit and leaves the per-atom default off. A negative =maxmove= leaves every step cap off, including the default per-atom cap. Zero keeps the defaults. The cap is the largest per-atom displacement, not the norm of the whole step.
 
-=lbfgs= has two step rules. The default is the line-search-free eOn step. Its first step spends one extra calculator call on a finite-difference probe 0.01 along the force. The probe sets the initial inverse curvature and does not move the atoms. Later steps cost one call each. A step whose largest atom move exceeds =maxstep= is scaled down whole, as ASE does, so no atom moves farther than =maxstep=. A non-positive =maxstep= restores the eOn cap of 0.2, since this step always has a per-atom limit. ~linesearch="wolfe"~ opts into the strong Wolfe search instead, with =c1=, =c2=, and =linesearch_maxiter= as its constants. =maxstep= still bounds every atom move. Other =linesearch= values leave the default L-BFGS step unchanged.
+=lbfgs= has two step rules. The default is the line-search-free eOn step. Its first step spends one extra calculator call on a finite-difference probe 0.01 along the force. The probe sets the initial inverse curvature and does not move the atoms. Later steps cost one call each. A step whose largest atom move exceeds =maxstep= is scaled down whole, as ASE does, so no atom moves farther than =maxstep=. A non-positive =maxstep= restores the eOn cap of 0.2, since this step always has a per-atom limit. ~linesearch="wolfe"~ opts into the strong Wolfe search instead, with =c1=, =c2=, and =linesearch_maxiter= as its constants. =maxstep= still bounds every atom move. The eOn step reads no other =linesearch= value, so =brent=, =backtracking=, and =goldstein= raise =ValueError= on =lbfgs=.
 
 #+begin_src python
 from rgmin.ase import LBFGS
@@ -45,6 +45,8 @@ from rgmin.ase import LBFGS
 LBFGS(atoms, logfile=None, maxstep=0.1).run(fmax=0.05)
 LBFGS(atoms, logfile=None, linesearch="wolfe").run(fmax=0.05)
 #+end_src
+
+=linesearch= is accepted only where the step reads it. =sd=, the conjugate-gradient methods, =bfgs=, =adam=, and =diis= take every kind, and =lbfgs= takes =wolfe=. ~accept="step"~ takes each step without a line search, and FIRE, QuickMin, ODE12r, BB, SR1, SR2, PSO, Newton, RFO, dogleg, and Newton-CG never search a line. A =linesearch= on any of those raises =ValueError= and names the reason, rather than leaving the run unchanged. =rgmin.ase= takes ~accept="step"~ on a non-conservative optimizable (NEB, dimer, min-mode), so a =linesearch= there raises unless =accept= is =energy= or =nonmonotone=.
 
 =rgmin.ase.FIRE=, =LBFGS=, =CG=, and the other method classes are ASE optimizers. Each =step= is one rgmin iteration. =maxstep= is the per-atom cap in angstroms. The ASE classes pass it explicitly, and their default is 0.2. ASE calculators are not thread-safe. Each thread that builds an optimizer needs its own calculator. rgmin still guarantees a shareable config, one solver per thread, and an owned copy of the coordinates. The thread-safety page records the details.
 

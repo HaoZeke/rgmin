@@ -23,7 +23,9 @@ RFO, and dogleg.
 =c1=, =c2=, and =linesearch_maxiter= are the line-search constants.
 They are accepted only together with =linesearch=, one of =brent=,
 =backtracking=, =goldstein=, or =wolfe=. Passing a non-default
-constant alone raises =ValueError=.
+constant alone raises =ValueError=. So does a =linesearch= the chosen
+step ignores: any kind with ~accept="step"~ or on a method that takes
+no line search, and any kind but =wolfe= on =lbfgs=.
 
 * Errors
 

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 extern "C" int32_t scale_h0(void* user, double const* v, double* out, std::size_t n) {
@@ -302,6 +303,59 @@ int manifold_fit() {
     return 0;
 }
 
+rgmin_status_t ellipse_eval(void* /*user*/, DLManagedTensorVersioned const* x, double* value) {
+    double const* p = data(x);
+    *value = p[0] * p[0] + 3.0 * p[1] * p[1];
+    return RGMIN_SUCCESS;
+}
+
+rgmin_status_t ellipse_grad(void* /*user*/, DLManagedTensorVersioned const* x,
+                            DLManagedTensorVersioned* g) {
+    double const* p = data(x);
+    double* gp = data(g);
+    gp[0] = 2.0 * p[0];
+    gp[1] = 6.0 * p[1];
+    return RGMIN_SUCCESS;
+}
+
+/// A Euclidean L-BFGS session ignores brent, so the Python binding
+/// rejects it. The sphere L-BFGS arm reads it, so apply() keeps it.
+int sphere_linesearch() {
+    std::vector<std::vector<double>> paths;
+    for (char const* kind : {"brent", "wolfe"}) {
+        rgmin::SolverConfig const cfg = rgmin::SolverConfig::build(
+            "lbfgs", {{"linesearch", kind}, {"accept", "energy"}}, {}, {}, {});
+        bool const brent = std::string(kind) == "brent";
+        if (cfg.ignored_linesearch().empty() == brent) {
+            std::fprintf(stderr, "%s: ignored_linesearch '%s'\n", kind,
+                         cfg.ignored_linesearch().c_str());
+            return 30;
+        }
+        rgmin::Solver solver(cfg.method(), cfg.control(), 2);
+        cfg.apply(solver);
+        solver.set_sphere_complex(1);
+        std::vector<double> x{0.6, 0.8};
+        std::vector<double> path;
+        DLManagedTensorVersioned* t = rgmin::borrow_cpu_f64(x.data(), 2);
+        for (int i = 0; i < 4; ++i) {
+            solver.step(ellipse_eval, ellipse_grad, nullptr, t);
+            path.insert(path.end(), x.begin(), x.end());
+        }
+        rgmin_tensor_free(t);
+        if (std::fabs(std::hypot(x[0], x[1]) - 1.0) > 1e-12) {
+            std::fprintf(stderr, "%s left the sphere: |x| = %.17g\n", kind, std::hypot(x[0], x[1]));
+            return 31;
+        }
+        paths.push_back(path);
+    }
+    if (paths[0] == paths[1]) {
+        std::fprintf(stderr, "the sphere L-BFGS arm ignored the line-search kind\n");
+        return 32;
+    }
+    std::printf("sphere linesearch ok\n");
+    return 0;
+}
+
 int main() {
     int block = eigen_block();
     if (block != 0) return block;
@@ -452,6 +506,10 @@ int main() {
     int fit = manifold_fit();
     if (fit != 0) {
         return fit;
+    }
+    int sphere = sphere_linesearch();
+    if (sphere != 0) {
+        return sphere;
     }
     return constrained();
 }
