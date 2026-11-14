@@ -62,7 +62,8 @@ pub struct EonCgReport {
     pub grad: f64,
     /// Force evaluations, including curvature probes.
     pub evals: usize,
-    /// The gradient test was met.
+    /// The gradient test holds at the returned point, including a start
+    /// that meets it with no iteration and a last iteration that reaches it.
     pub converged: bool,
 }
 
@@ -124,12 +125,10 @@ where
     let mut g_probe = vec![0.0; n];
     let mut energy = fill(x, &mut g);
     let mut evals = 1usize;
-    let mut converged = false;
     let fd = crate::EON_FINITE_DIFFERENCE;
     for _ in 0..opts.max_iter {
         let gnorm = grad_norm(&g, opts.cluster);
         if gnorm < opts.gtol {
-            converged = true;
             break;
         }
         for i in 0..n {
@@ -197,11 +196,12 @@ where
             force_old.fill(0.0);
         }
     }
+    let grad = grad_norm(&g, opts.cluster);
     EonCgReport {
         energy,
-        grad: grad_norm(&g, opts.cluster),
+        grad,
         evals,
-        converged,
+        converged: grad < opts.gtol,
     }
 }
 
@@ -343,5 +343,43 @@ mod tests {
         let rep = minimize_eon_cg(&mut x, rosen, &opts);
         assert!(rep.converged, "{rep:?} x {x:?}");
         assert_eq!(rep.evals, 297, "evals {}", rep.evals);
+    }
+
+    fn spring(x: &[f64], g: &mut [f64]) -> f64 {
+        g.copy_from_slice(x);
+        0.5 * dot(x, x)
+    }
+
+    /// The report reads the gradient it returns. A stationary start with
+    /// no iteration, and a last iteration that lands on the minimum,
+    /// both meet the test; before, only a test at the top of a further
+    /// iteration set `converged`.
+    #[test]
+    fn converged_reads_the_returned_gradient() {
+        let mut x = [0.0, 0.0, 0.0];
+        let opts = EonCg {
+            max_iter: 0,
+            gtol: 1e-8,
+            ..EonCg::default()
+        };
+        let rep = minimize_eon_cg(&mut x, spring, &opts);
+        assert_eq!(rep.grad, 0.0);
+        assert!(rep.converged, "{rep:?}");
+
+        let mut x = [0.1, 0.0, 0.0];
+        let opts = EonCg {
+            max_iter: 1,
+            gtol: 1e-8,
+            max_move: 0.2,
+            ..EonCg::default()
+        };
+        let rep = minimize_eon_cg(&mut x, spring, &opts);
+        assert!(rep.grad < 1e-8, "{rep:?} x {x:?}");
+        assert!(rep.converged, "{rep:?}");
+
+        let mut x = [1.0, 0.0, 0.0];
+        let rep = minimize_eon_cg(&mut x, spring, &opts);
+        assert!(rep.grad >= 1e-8, "{rep:?}");
+        assert!(!rep.converged, "{rep:?}");
     }
 }
