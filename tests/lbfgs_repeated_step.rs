@@ -351,7 +351,7 @@ fn the_default_step_stays_the_capped_eon_move() {
 fn one_dimensional_unlimited_fit_stops_after_two_repeated_steps() {
     let (status, accepted, _, grad) = drive_capped(1, 0);
     assert_eq!(status, Status::StepTolerance);
-    assert_eq!(accepted, 1usize.max(2));
+    assert_eq!(accepted, 2);
     assert!(grad >= 1e-2);
 }
 
@@ -359,7 +359,7 @@ fn one_dimensional_unlimited_fit_stops_after_two_repeated_steps() {
 fn four_dimensional_unlimited_fit_stops_after_its_period() {
     let (status, accepted, _, grad) = drive_capped(4, 0);
     assert_eq!(status, Status::StepTolerance);
-    assert_eq!(accepted, 4usize.max(2));
+    assert_eq!(accepted, 4);
     assert!(grad >= 1e-2);
 }
 
