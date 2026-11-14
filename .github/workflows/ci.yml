@@ -156,6 +156,87 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --locked --all-targets ${{ matrix.args }} -- -D warnings
 
+  # The all-features rows above find no backend libraries, so each
+  # eigensolver backend there is the EigenUnavailable stub. This row links
+  # SLEPc from conda-forge and PRIMME, ChASE and libkrylov built from
+  # source, and fails when any of them stays a stub.
+  backends:
+    name: real backends (SLEPc, PRIMME, ChASE, libkrylov)
+    runs-on: ubuntu-latest
+    env:
+      FEATURES: capi,par,highs,slepc,primme,chase,libkrylov
+      BACKENDS_PREFIX: ${{ github.workspace }}/.backends
+      OMPI_MCA_rmaps_base_oversubscribe: "1"
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: backends
+          create-args: >-
+            petsc=3.26.1=real_*
+            slepc=3.26.1=real_*
+            openmpi=5.0.11
+            scalapack=2.2.0
+            openblas=0.3.34
+            libblas=*=*openblas
+            liblapack=*=*openblas
+            gcc=16.2.0
+            gxx=16.2.0
+            gfortran=16.2.0
+            cmake=4.5.0
+            make=4.4.1
+            pkg-config=0.29.2
+          condarc: |
+            channels:
+              - conda-forge
+            channel_priority: strict
+          cache-environment: true
+      - uses: actions/cache@v4
+        id: source-backends
+        with:
+          path: .backends
+          key: backends-${{ runner.os }}-primme3.2.3-chase1.7.4-libkrylov1.1.0-gfortran12.4.0-openmpi5.0.11-${{ hashFiles('scripts/build_ci_backends.sh') }}
+      - name: gfortran 12 for libkrylov
+        if: steps.source-backends.outputs.cache-hit != 'true'
+        run: >-
+          micromamba create -y -q -p "$RUNNER_TEMP/gf12" -c conda-forge --override-channels
+          gfortran=12.4.0 gcc=12.4.0 cmake=4.5.0 make=4.4.1 openblas=0.3.34
+          "libblas=*=*openblas" "liblapack=*=*openblas"
+      - name: Build PRIMME, ChASE and libkrylov
+        if: steps.source-backends.outputs.cache-hit != 'true'
+        run: GF12_PREFIX="$RUNNER_TEMP/gf12" scripts/build_ci_backends.sh "$BACKENDS_PREFIX" "$RUNNER_TEMP/backend-src"
+      - name: Backend search paths
+        run: |
+          {
+            echo "PRIMME_DIR=$BACKENDS_PREFIX"
+            echo "CHASE_DIR=$BACKENDS_PREFIX"
+            echo "LIBKRYLOV_DIR=$BACKENDS_PREFIX"
+            echo "PKG_CONFIG_PATH=$BACKENDS_PREFIX/lib/pkgconfig:$CONDA_PREFIX/lib/pkgconfig"
+            echo "LD_LIBRARY_PATH=$BACKENDS_PREFIX/lib:$CONDA_PREFIX/lib"
+          } >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          components: clippy
+      - name: Stable clippy
+        run: rustup toolchain install stable --profile minimal --component clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and require every backend
+        run: |
+          cargo build --locked --features "$FEATURES" --message-format=json > build.json
+          id=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "rgmin") | .id')
+          cfgs=$(jq -r --arg id "$id" 'select(.reason == "build-script-executed" and .package_id == $id) | .cfgs[]' build.json)
+          echo "$cfgs"
+          for backend in slepc primme chase libkrylov; do
+            grep -qx "rgmin_has_$backend" <<< "$cfgs" || { echo "rgmin_has_$backend is not set"; exit 1; }
+          done
+      - run: cargo test --locked --features "$FEATURES"
+      - run: cargo clippy --locked --all-targets --features "$FEATURES" -- -D warnings
+      - run: cargo +stable clippy --locked --all-targets --features "$FEATURES" -- -D warnings
+
   # Forcing tests. A clone this runner cannot execute is "not exercised"
   # in the test log. The scalar path is always forced.
   isa:
