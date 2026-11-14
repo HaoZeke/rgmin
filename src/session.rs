@@ -4610,14 +4610,60 @@ impl Solver {
         self.unit_first_step = true;
     }
 
+    /// Judge `x` with no step: [`Status::Tolerance`] or
+    /// [`Status::NoiseFloor`] when the gradient evaluated there meets that
+    /// stop, else [`Status::Budget`]. `x` is clipped to the objective's
+    /// bounds, as a step clips it, and the method memory is untouched. The
+    /// stationarity measure is the one a step opens with; a distance or
+    /// equality constraint set does not project the gradient here, so
+    /// such a session reads the larger, unprojected norm.
+    pub(crate) fn assess<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        if x.len() != self.dim || self.dim != Objective::dim(obj) {
+            return Err(Error::Dim {
+                got: x.len(),
+                dim: self.dim,
+            });
+        }
+        self.check_manifold(x.len())?;
+        self.note_bounds(obj.bounds());
+        let (value, raw_grad) = if self.same_last_x(x) {
+            (self.last_value, self.last_grad.clone())
+        } else {
+            *x = obj.bounds().clip(x.view());
+            self.gradient_calls += 1;
+            obj.value_and_gradient(x.view())
+        };
+        let grad = self.horizontal_grad(x, &raw_grad);
+        if !value.is_finite() || grad.iter().any(|g| !g.is_finite()) {
+            return Err(Error::Oracle {
+                what: "non-finite value or gradient",
+            });
+        }
+        let grad_norm = self.stationarity_norm(x, &grad);
+        let status = self
+            .control
+            .finish_status(grad_norm, self.free_len(obj.bounds()), true);
+        Ok(self.finish(value, x, &grad, grad_norm, status))
+    }
+
     /// Minimize until the gradient test or the iteration budget.
+    ///
+    /// A zero `maxiter` takes no step: the report is [`Self::assess`] of
+    /// `x`, so it says [`Status::Tolerance`] only when the gradient
+    /// evaluated there is below `gtol`.
     pub fn run<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
+        let budget = self.control.maxiter;
+        if budget == 0 {
+            return self.assess(obj, x);
+        }
         self.brief = true;
         let tol = self.control.gtol;
-        let budget = self.control.maxiter;
         let mut stop: Result<()> = Ok(());
         for _ in 0..budget {
             match self.step(obj, x) {
