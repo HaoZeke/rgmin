@@ -5422,7 +5422,9 @@ pub unsafe extern "C" fn rgmin_solver_set_objective_roundoff(
 /// Capped Cartesian L-BFGS takes the geometry step (eOn's L-BFGS with a
 /// finite-difference or `sy/yy` initial curvature, resets, and an energy
 /// test). Nonzero turns it on. Off, the per-atom cap only clips the
-/// two-loop trial. Needs a per-atom cap.
+/// two-loop trial. Needs a per-atom cap. Unset, a Wolfe session with an
+/// explicit per-atom cap takes this step; off keeps its strong Wolfe
+/// search under the cap.
 ///
 /// # Safety
 ///

@@ -244,3 +244,71 @@ fn uncapped_lbfgs_still_takes_the_unit_newton_step() {
         rep.grad_norm
     );
 }
+
+const SCALES: [f64; 6] = [1.0, 4.0, 9.0, 16.0, 2.0, 3.0];
+
+fn stiff(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+    let g = Array1::from_iter(x.iter().zip(SCALES).map(|(xi, s)| s * xi));
+    (0.5 * x.dot(&g), g)
+}
+
+fn max_atom_move(a: &Array1<f64>, b: &Array1<f64>) -> f64 {
+    let d = b - a;
+    d.as_slice()
+        .unwrap()
+        .chunks(3)
+        .map(|c| c.iter().map(|v| v * v).sum::<f64>().sqrt())
+        .fold(0.0, f64::max)
+}
+
+/// Runs a Wolfe session with the geometry step explicitly off. Returns
+/// the steps on the cap and the strong Wolfe steps checked.
+fn wolfe_with_explicit_cap(cap: f64) -> (usize, usize) {
+    let obj = rgmin::Oracle::unbounded(6, stiff);
+    let mut solver = Solver::new(Method::lbfgs(), control(1e-10), 6);
+    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
+    solver.set_atom_maxmove(cap);
+    solver.set_geometry_step(false);
+    let mut x = array![0.4, -0.2, 0.7, 0.1, -0.3, 0.5];
+    let (mut on_cap, mut checked) = (0, 0);
+    for _ in 0..60 {
+        let (f0, g0) = stiff(x.view());
+        if f0 <= 1e-12 {
+            break;
+        }
+        let before = x.clone();
+        solver.step(&obj, &mut x).expect("step");
+        let (f1, g1) = stiff(x.view());
+        let s = &x - &before;
+        let slope = g0.dot(&s);
+        let moved = max_atom_move(&before, &x);
+        assert!(moved <= cap * (1.0 + 1e-12), "moved {moved} past {cap}");
+        assert!(slope < 0.0, "not a descent step: {slope}");
+        assert!(
+            f1 <= f0 + 1e-4 * slope,
+            "no sufficient decrease: {f0} -> {f1}"
+        );
+        if moved >= 0.999 * cap {
+            on_cap += 1;
+        } else {
+            assert!(
+                g1.dot(&s).abs() <= 0.9 * slope.abs(),
+                "curvature condition fails: {} vs {}",
+                g1.dot(&s),
+                slope
+            );
+            checked += 1;
+        }
+    }
+    (on_cap, checked)
+}
+
+#[test]
+fn wolfe_with_the_geometry_step_off_keeps_strong_wolfe_under_a_cap() {
+    let (on_cap, checked) = wolfe_with_explicit_cap(1.0e3);
+    assert_eq!(on_cap, 0);
+    assert!(checked >= 5, "only {checked} strong Wolfe steps");
+    let (on_cap, checked) = wolfe_with_explicit_cap(0.05);
+    assert!(on_cap >= 3, "the cap never bound: {on_cap}");
+    assert!(checked >= 1, "no interior step: {checked}");
+}

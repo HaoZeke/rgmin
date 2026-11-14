@@ -519,7 +519,9 @@ void rgmin_solver_set_atom_maxmove(rgmin_solver_t *solver, double maxmove);
 /** Capped Cartesian L-BFGS takes the geometry step: eOn's L-BFGS with a
  *  finite-difference or sy/yy initial curvature, resets on negative
  *  curvature, and an energy test with halvings. Nonzero turns it on; off,
- *  the per-atom cap only clips the two-loop trial. Needs a per-atom cap. */
+ *  the per-atom cap only clips the two-loop trial. Needs a per-atom cap.
+ *  Unset, a Wolfe session with an explicit per-atom cap takes this step;
+ *  off keeps its strong Wolfe search under the cap. */
 void rgmin_solver_set_geometry_step(rgmin_solver_t *solver, int32_t enabled);
 void rgmin_solver_set_project_rigid(rgmin_solver_t *solver, int32_t enabled);
 /** 0 off, 1 auto, 2 translation, 3 translation and rotation.

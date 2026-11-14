@@ -265,8 +265,9 @@ pub struct Solver {
     saddle_kicks: u8,
     /// Whether geometry L-BFGS needs a finite-difference stiffness probe.
     geometry_lbfgs_stiff: Option<bool>,
-    /// Capped Cartesian L-BFGS takes the geometry step.
-    geometry_step: bool,
+    /// Capped Cartesian L-BFGS takes the geometry step. `None` leaves
+    /// a Wolfe session with an explicit per-atom cap on it.
+    geometry_step: Option<bool>,
     /// Geometry metric. `None` leaves every method unchanged.
     precon: Option<Slot>,
     /// Bumped when `P` is installed, cleared, or rebuilt.
@@ -450,7 +451,7 @@ impl Solver {
             hvp_calls: 0,
             saddle_kicks: 0,
             geometry_lbfgs_stiff: None,
-            geometry_step: false,
+            geometry_step: None,
             precon: None,
             metric_epoch: 0,
             nlcg_descent_fallbacks: 0,
@@ -830,8 +831,11 @@ impl Solver {
     /// against the force, and an energy test with at most ten halvings.
     /// Off, the per-atom cap only clips the two-loop trial and the NEB
     /// guards of [`Self::set_neb_guards`] apply. Needs [`Self::set_atom_maxmove`].
+    /// Unset, a Wolfe session with an explicit per-atom cap takes this
+    /// step; off keeps its strong Wolfe search under the cap.
+    /// [`Self::set_lbfgs_step`] unsets it.
     pub fn set_geometry_step(&mut self, on: bool) {
-        self.geometry_step = on;
+        self.geometry_step = Some(on);
     }
 
     /// eOn `lbfgs_project_rigid`.
@@ -2263,7 +2267,7 @@ impl Solver {
     fn use_eon_lbfgs(&self) -> bool {
         // Accept::Step is the one-oracle two-loop clip. The default
         // Accept::None session takes the eOn cap.
-        if self.geometry_step
+        if self.geometry_step == Some(true)
             || self.accept == Accept::Step
             || !matches!(self.lbfgs_step(), LbfgsStep::Capped { .. })
         {
@@ -2504,13 +2508,15 @@ impl Solver {
     /// has a per-atom cap. The default eOn cap is not this path.
     fn use_geometry_lbfgs(&self) -> bool {
         // An explicit per-atom cap on a Wolfe session is the geometry
-        // step. Accept::Step keeps the one-oracle two-loop. The implicit
-        // default cap does not select this path.
+        // step unless the caller turned it off. Accept::Step keeps the
+        // one-oracle two-loop. The implicit default cap does not select
+        // this path.
         let wolfe_cap = matches!(self.lbfgs_step(), LbfgsStep::Wolfe)
+            && self.geometry_step.is_none()
             && self.atom_maxmove_set
             && self.atom_maxmove.is_some()
             && self.accept != Accept::Step;
-        if !self.geometry_step && !wolfe_cap {
+        if self.geometry_step != Some(true) && !wolfe_cap {
             return false;
         }
         if self.atom_maxmove.is_none() || !matches!(self.manifold, ManifoldKind::Euclidean) {
@@ -4364,10 +4370,10 @@ impl Solver {
                 });
             }
         }
-        // Selecting a step rule leaves the geometry algorithm off.
+        // Selecting a step rule clears the geometry choice.
         // [`Self::set_geometry_step`] is that algorithm, and a Wolfe
-        // session with a per-atom cap also takes it.
-        self.geometry_step = false;
+        // session with a per-atom cap also takes it unless set off.
+        self.geometry_step = None;
         if let Some(cap) = cap {
             self.set_atom_maxmove(cap);
         }
@@ -4656,7 +4662,7 @@ impl Solver {
         if !matches!(self.lbfgs_step(), LbfgsStep::Scaled { .. }) {
             return false;
         }
-        if self.geometry_step || !matches!(self.manifold, ManifoldKind::Euclidean) {
+        if self.geometry_step == Some(true) || !matches!(self.manifold, ManifoldKind::Euclidean) {
             return false;
         }
         if !matches!(self.inner, Inner::Lbfgs(_)) || self.constraints.is_some() {

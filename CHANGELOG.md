@@ -26,6 +26,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A Wolfe L-BFGS session with an explicit per-atom cap took the geometry step even after `set_geometry_step(false)`.
+  Its energy window could accept a rise, so the step met neither strong Wolfe condition.
+  Off now keeps the strong Wolfe search, with the cap scaling each trial.
+  Unset, the combination is still the geometry step.
 - A backtracking or Goldstein `LineSearch` that ran out of trials returned its best point with the step length of its last trial.
   It now reports the step that produced that point.
 - An L-BFGS session step whose own pair failed the curvature test also dropped the pair before it.
