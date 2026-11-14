@@ -20,9 +20,29 @@ imported when an optimizer is constructed.
    opt.attach(lambda: atoms.get_potential_energy())
    opt.run(fmax=0.05)
 
-``LBFGS(eon_cap=True)`` selects the Rust default. Without it the class
-matches ASE's length control. Stubs live in ``python/rgmin`` and
-``py.typed`` marks the package.
+``LBFGS(eon_cap=True)`` selects the Rust default, the line-search-free
+eOn cap. ``LBFGS(wolfe=True)`` selects the strong Wolfe search. Without
+either the class matches ASE's length control. Stubs live in
+``python/rgmin`` and ``py.typed`` marks the package.
+
+In the nanobind wheel, ``SolverConfig("lbfgs")`` and ``rgmin.ase.LBFGS``
+take the eOn step by default. Its first step spends one extra
+calculator call on a finite-difference probe 0.01 along the force. The
+probe sets the initial inverse curvature and does not move the atoms.
+Later steps cost one call each. A step whose largest atom move exceeds
+``maxstep`` is scaled down whole, as ASE does, so no atom moves farther
+than ``maxstep``. A non-positive ``maxstep`` restores the eOn cap of
+0.2. ``linesearch="wolfe"`` opts into the strong Wolfe search, with
+``c1``, ``c2``, and ``linesearch_maxiter`` as its constants, and
+``maxstep`` still bounds every atom move. Other ``linesearch`` values
+leave the default L-BFGS step unchanged.
+
+.. code:: python
+
+   from rgmin.ase import LBFGS
+
+   LBFGS(atoms, logfile=None, maxstep=0.1).run(fmax=0.05)
+   LBFGS(atoms, logfile=None, linesearch="wolfe").run(fmax=0.05)
 
 ``lowest_eigenpairs(hvp, x0_block)`` returns values, vectors, residual
 norms, and a converged flag for each of the k lowest pairs.

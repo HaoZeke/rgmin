@@ -1349,6 +1349,15 @@ inline SolverConfig SolverConfig::build(
 }
 
 inline void SolverConfig::apply(Solver& solver) const {
+    // The default L-BFGS step searches no line. Strong Wolfe is opt-in.
+    // Geometry off keeps that search under an explicit per-atom cap.
+    if (method_ == Method::Lbfgs && linesearch_ == RGMIN_LINESEARCH_WOLFE) {
+        if (solver.set_lbfgs_wolfe() != 0) {
+            char const* msg = rgmin_last_error();
+            throw std::invalid_argument(msg ? msg : "set_lbfgs_wolfe failed");
+        }
+        solver.set_geometry_step(false);
+    }
     if (accept_) solver.set_accept(*accept_);
     if (atom_maxmove_) solver.set_atom_maxmove(*atom_maxmove_);
     if (neb_guards_) solver.set_lbfgs_neb_guards(*neb_guards_);

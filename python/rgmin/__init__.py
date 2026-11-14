@@ -123,7 +123,12 @@ class SolverConfig(_SolverConfigBase):
     A Cartesian solver installs a per-atom cap of 0.2 unless the method
     already limits the step. BFGS, dogleg, and FIRE 2.0 start without
     that cap. ``maxstep`` or ``atom_maxmove`` replaces it on every
-    method, and a non-positive value clears it.
+    method. A non-positive value clears it, except on the default
+    L-BFGS step, where it restores 0.2.
+
+    The default ``"lbfgs"`` step is the line-search-free eOn step.
+    ``linesearch="wolfe"`` opts into the strong Wolfe search. Both
+    keep every atom move within ``maxstep``.
 
     ``Solver`` takes the native configuration type, so this class
     derives from it rather than wrapping it.
