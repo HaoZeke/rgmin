@@ -24,6 +24,25 @@ At the default of zero the search is strict. The eOn cap does not consult it.
 On LJ75, with the Wolfe search, ``approx_wolfe = 1e-12`` ends all 400 relaxations on the ``gtol`` test, against 6 without it, and they need 278.6 evaluations per relaxation against 371.2.
 A reused solver can then take a much too long first step after a large perturbation, so the test stays off by default.
 
+The L-BFGS two-loop reuses its length-n buffers after the first use.
+The curvature pairs and the line-search trial do the same.
+A warm ``Lbfgs::minimize`` iteration allocates only inside the objective.
+The arithmetic is unchanged.
+
+A steady ``Solver::step`` reuses its coordinate and gradient buffers.
+This holds for L-BFGS with ``Accept::Energy`` and for FIRE 2.0.
+The first step at a length still allocates the scratch.
+Later steps do not.
+The flat FIRE step writes the velocity update in one pass.
+It writes the mix and the displacement in one pass each.
+Guenole FIRE 2.0 does the same with or without the per-atom cap.
+It does the same with or without ABC.
+The recycle pool keeps ``2 * max_pairs`` buffers of one length.
+A dot at n of at least 65536 is a fixed-chunk pairwise sum.
+That sum is the same on every thread count.
+Each two-loop direction is one team sweep.
+The final negation is folded into the last update.
+
 An interior point skips the bounds clip, and a Euclidean session keeps the gradient it already owns.
 Polak-Ribiere forms ``g · (g - g_old)`` in the dot product.
 A backtracking line search keeps its lowest trial without copying that vector.
