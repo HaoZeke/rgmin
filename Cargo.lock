@@ -777,7 +777,8 @@ dependencies = [
 [[package]]
 name = "readcon-core"
 version = "0.17.1"
-source = "git+https://github.com/lode-org/readcon-core?rev=694e808080c49979ee3099afcfa18e5420c40433#694e808080c49979ee3099afcfa18e5420c40433"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8c9ec4a34748765fc3ef137aef2c4eb007b0ae395dd2ac165071471e6fcaf0c"
 dependencies = [
  "dlpk",
  "fast-float2",
