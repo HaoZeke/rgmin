@@ -21,10 +21,12 @@ pub enum Status {
     /// comparison uses `sqrt(n_free)`. The energy test keeps the point
     /// from before that search.
     NoiseFloor,
-    /// SCG, or an L-BFGS fit with no iteration budget, stopped on its
-    /// step or objective test while `||g||` was still at or above `gtol`.
-    /// The L-BFGS run is `max(n, 2)` accepted steps that repeat the value
-    /// and the gradient norm. One such step is an overshoot.
+    /// SCG, or an L-BFGS session stepped with no iteration budget, stopped
+    /// on its step or objective test while `||g||` was still at or above
+    /// `gtol`. The L-BFGS run is `max(n, 2)` accepted steps that move `x`
+    /// while the value stays inside the objective roundoff window and
+    /// `||g||` inside `sqrt(eps)` of the step that opened the run. One
+    /// such step is an overshoot.
     StepTolerance,
     /// The iteration budget was spent above every stop.
     Budget,

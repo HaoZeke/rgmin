@@ -2023,6 +2023,17 @@ impl Solver {
     }
 
     /// One outer iteration. `x` is the iterate and is overwritten in place.
+    ///
+    /// With `control.maxiter == 0` an L-BFGS session reports
+    /// [`Status::StepTolerance`] once `max(n, 2)` consecutive accepted steps
+    /// move `x` while `||g||` stays at or above `gtol`, the value stays
+    /// inside the objective roundoff window
+    /// ([`Self::set_objective_roundoff`], else four epsilon relative) and
+    /// `||g||` inside `sqrt(eps)` relative, both of the first of those
+    /// steps. The step that reports it is taken. A caller's own loop reads
+    /// it as the end of the fit: the objective cannot resolve the progress
+    /// the steps make. A positive `maxiter` never reports it here, and
+    /// [`Self::run`] keeps reading a zero `maxiter` as no steps.
     pub fn step<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,

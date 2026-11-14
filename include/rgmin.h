@@ -798,6 +798,16 @@ void rgmin_solver_clear_distance_constraints(rgmin_solver_t *solver);
 /**
  * One outer iteration: direction, line search, curvature update.
  * \a eval and \a grad are valid for this call only. \a x is in/out.
+ *
+ * \c out->stop is \c RGMIN_STOP_BUDGET while the fit goes on. With a zero
+ * \c maxiter an L-BFGS session reports \c RGMIN_STOP_STEP_TOLERANCE once
+ * max(n, 2) consecutive accepted steps move \a x while ||g|| stays at or
+ * above gtol, the value stays inside the objective roundoff window
+ * (\ref rgmin_solver_set_objective_roundoff, else four epsilon relative)
+ * and ||g|| inside sqrt(eps) relative, both of the first of those steps.
+ * The objective cannot resolve the progress those steps make, so a
+ * caller's loop ends there. A positive \c maxiter never reports it.
+ * The \c _fg variant behaves the same.
  */
 rgmin_status_t rgmin_solver_step(rgmin_solver_t *solver, rgmin_eval_fn eval,
                              rgmin_grad_fn grad, void *user,
