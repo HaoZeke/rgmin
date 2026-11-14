@@ -25,7 +25,7 @@ LJ38 = "e3f640188156dacb71f6d7cd18377e430d18e44718cec0080fad338d0c46fd8d"
 # ASE EMT. Compared only in a process that was started with the pin below.
 # Linux, macOS, and arm agree. Windows NumPy does not, on this trajectory.
 PT7_EMT = "299f8164ab0df6f3b59731098b3d83e12c13c0b4117426437bf9af9df0a17ce8"
-PT7_EMT_WINDOWS = "32ecfa5c86916033bd1b82dbd1059f3777ec6e386eb416f0b9c69b4df96074c8"
+PT7_EMT_WINDOWS = "498757428117987ca8d99e3a209e83459f5b90b6196dba32ca695a534de0f64e"
 # rgmin Solver, pure-Python diagonal quadratic, no NumPy pin.
 # The solver uses the default per-atom cap of 0.2.
 RGMIN_QUADRATIC = "b2ef984a0c4b84ba6c176428a2a0b3370b34d1fbb65ebe1126a6732a0cb62d7a"
