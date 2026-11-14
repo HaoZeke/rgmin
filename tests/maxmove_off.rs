@@ -396,6 +396,20 @@ fn a_one_shot_is_uncapped_under_a_non_binding_maxmove() {
 }
 
 #[test]
+fn set_atom_maxmove_takes_only_a_positive_finite_cap() {
+    let x0 = start();
+    for (method, oracle) in methods() {
+        let off = |s: &mut Solver| s.set_atom_maxmove(0.0);
+        let free = trajectory(&method, oracle, control(None), &x0, &off, false);
+        for cap in [-1.0, -0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let set = |s: &mut Solver| s.set_atom_maxmove(cap);
+            let got = trajectory(&method, oracle, control(None), &x0, &set, false);
+            assert_eq!(got, free, "{method:?} set_atom_maxmove({cap})");
+        }
+    }
+}
+
+#[test]
 fn a_positive_maxmove_still_caps_the_step() {
     let x0 = start();
     let mut solver = Solver::new(Method::Steepest, control(None), DIM);

@@ -813,10 +813,11 @@ impl Solver {
     /// A fresh Cartesian session holds [`crate::DEFAULT_ATOM_MAXMOVE`]
     /// when [`Method::installs_default_atom_cap`] is set. BFGS, dogleg,
     /// and FIRE 2.0 start without that cap. A positive `maxmove`
-    /// replaces the value in force. A non-positive value clears the cap.
+    /// replaces the value in force. A non-positive or non-finite value
+    /// clears the cap.
     pub fn set_atom_maxmove(&mut self, maxmove: f64) {
         self.atom_maxmove_set = true;
-        self.atom_maxmove = if maxmove > 0.0 { Some(maxmove) } else { None };
+        self.atom_maxmove = Some(maxmove).filter(|&cap| crate::step::binding(cap));
         if let Inner::Lbfgs(solver) = &mut self.inner {
             let cap = self.atom_maxmove.unwrap_or(crate::lbfgs::EON_MAX_MOVE);
             match &mut solver.step {

@@ -522,7 +522,7 @@ int32_t rgmin_solver_set_lbfgs_wolfe(rgmin_solver_t *solver);
  *  Ordinary starts use 0.1 I and a five-value nonmonotone window.
  *  An installed exponential preconditioner replaces that scalar seed,
  *  including the steepest fallbacks. Newton and dogleg scale a saddle
- *  kick to this length. Non-positive clears it. */
+ *  kick to this length. Non-positive or non-finite clears it. */
 void rgmin_solver_set_atom_maxmove(rgmin_solver_t *solver, double maxmove);
 /** Capped Cartesian L-BFGS takes the geometry step: eOn's L-BFGS with a
  *  finite-difference or sy/yy initial curvature, resets on negative

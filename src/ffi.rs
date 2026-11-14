@@ -1928,7 +1928,7 @@ pub unsafe extern "C" fn rgmin_solver_set_lbfgs_wolfe(solver: *mut rgmin_solver_
 /// Ordinary starts use `0.1 I` and a five-value nonmonotone window.
 /// An installed exponential preconditioner replaces that scalar seed,
 /// including the steepest fallbacks. Newton and dogleg scale a saddle
-/// kick to this length. Non-positive clears it.
+/// kick to this length. Non-positive or non-finite clears it.
 ///
 /// # Safety
 /// `solver` is null or a live session from [`rgmin_solver_create`].
