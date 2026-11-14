@@ -217,6 +217,12 @@ void rgmin_tensor_free(DLManagedTensorVersioned *tensor);
  * \param ctrl  Iteration / L-BFGS memory controls.
  * \param method Solver. \c RGMIN_LBFGS is the production choice.
  * \param out   Filled on success.
+ *
+ * A zero \c ctrl->maxiter takes no step and leaves \a x as it is. \a out
+ * then holds the value and gradient norm at \a x with
+ * \c RGMIN_STOP_TOLERANCE below \c gtol, \c RGMIN_STOP_NOISE_FLOOR under
+ * the noise floor, else \c RGMIN_STOP_BUDGET. \ref rgmin_minimize_hess,
+ * \ref rgmin_minimize_hvp and \ref rgmin_minimize_eindir do the same.
  */
 rgmin_status_t rgmin_minimize(rgmin_eval_fn eval, rgmin_grad_fn grad, void *user,
                             DLManagedTensorVersioned *x, const rgmin_control_t *ctrl,
