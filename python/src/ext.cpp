@@ -337,6 +337,42 @@ rgmin::Report finish_step(rgmin_status_t status, rgmin_report_t const& out, rgbi
     return rgmin::Report{out.value, out.steps, out.grad_norm, out.stop};
 }
 
+// A zero budget takes no step, and the C API has no evaluation without
+// one. The report is f_and_grad at x0 judged as rgmin's Control::classify
+// judges a Euclidean gradient: below gtol, then under the noise floor
+// c * sqrt(n) * eps_g (c = 3 unless noise_c is positive), else the spent
+// budget. project_rigid does not project this gradient, so a start whose
+// only gradient is rigid motion reads the larger norm.
+rgmin::Report zero_budget_report(nb::callable function, Vector x, rgmin::Control const& control) {
+    std::size_t const n = static_cast<std::size_t>(x.shape(0));
+    nb::object result = function(owned_copy(x.data(), n));
+    if (!nb::isinstance<nb::tuple>(result) || nb::len(result) != 2) {
+        throw nb::type_error("f_and_grad must return (value, gradient)");
+    }
+    double const value = nb::cast<double>(result[0]);
+    if (!std::isfinite(value)) {
+        throw rgbind::NumericalError("f_and_grad returned a non-finite value");
+    }
+    std::vector<double> gradient(n);
+    read_gradient(result[1], n, gradient.data());
+    double squares = 0.0;
+    for (double g : gradient) {
+        squares += g * g;
+    }
+    double const grad_norm = std::sqrt(squares);
+    rgmin_stop_t stop = RGMIN_STOP_BUDGET;
+    if (grad_norm < control.gtol) {
+        stop = RGMIN_STOP_TOLERANCE;
+    } else if (std::isfinite(control.noise_eps) && control.noise_eps > 0.0) {
+        double const c =
+            std::isfinite(control.noise_c) && control.noise_c > 0.0 ? control.noise_c : 3.0;
+        if (grad_norm < c * std::sqrt(static_cast<double>(n)) * control.noise_eps) {
+            stop = RGMIN_STOP_NOISE_FLOOR;
+        }
+    }
+    return rgmin::Report{value, 0, grad_norm, stop};
+}
+
 DLManagedTensorVersioned* borrow_x(Vector x, std::size_t n) {
     DLManagedTensorVersioned* tensor = rgmin_tensor_borrow_cpu_f64(x.data(), n);
     if (tensor == nullptr) {
@@ -596,8 +632,11 @@ NB_MODULE(_core, m) {
             } catch (std::invalid_argument const& error) {
                 throw nb::value_error(error.what());
             }
-            rgmin::Report report{};
             std::size_t const budget = config.control().maxiter;
+            if (budget == 0) {
+                return nb::make_tuple(zero_budget_report(function, x0, config.control()), x0);
+            }
+            rgmin::Report report{};
             for (std::size_t i = 0; i < budget; ++i) {
                 report = step_python(solver, function, x0);
                 if (report.stop != RGMIN_STOP_BUDGET) {
