@@ -592,3 +592,92 @@ fn unlimited_fits_on_a_flat_valley_or_an_ill_conditioned_bowl_still_converge() {
         }
     }
 }
+
+#[cfg(feature = "capi")]
+mod capi {
+    use super::{GRAD, VALUE};
+    use dlpk::sys::DLManagedTensorVersioned;
+    use rgmin::ffi::*;
+    use std::os::raw::c_void;
+
+    const DIM: usize = 3;
+
+    unsafe fn first(t: *const DLManagedTensorVersioned) -> *mut f64 {
+        let dl = unsafe { &(*t).dl_tensor };
+        unsafe { (dl.data as *mut u8).add(dl.byte_offset as usize) as *mut f64 }
+    }
+
+    /// A constant value and force: every capped step moves `x` and
+    /// changes nothing the objective reports.
+    unsafe extern "C" fn plateau(
+        _user: *mut c_void,
+        _x: *const DLManagedTensorVersioned,
+        value: *mut f64,
+        g: *mut DLManagedTensorVersioned,
+    ) -> rgmin_status_t {
+        unsafe {
+            *value = VALUE;
+            let g = first(g);
+            *g = -GRAD;
+            for i in 1..DIM {
+                *g.add(i) = 0.0;
+            }
+        }
+        rgmin_status_t::RGMIN_SUCCESS
+    }
+
+    /// The stop codes a fused C step loop reads, under the energy
+    /// acceptance `rgmin_solver_create` opens with.
+    fn stops(maxiter: usize, steps: usize) -> Vec<rgmin_stop_t> {
+        let control = rgmin_control_t {
+            maxiter,
+            gtol: 1e-2,
+            istep: 1.0,
+            memory: 8,
+            maxmove: 0.0,
+            noise_eps: 0.0,
+            noise_c: 0.0,
+        };
+        let mut x = [0.0; DIM];
+        let mut seen = Vec::new();
+        unsafe {
+            let session = rgmin_solver_create(rgmin_method_t::RGMIN_LBFGS, &control, DIM);
+            assert!(!session.is_null());
+            for _ in 0..steps {
+                let mut out = rgmin_report_t {
+                    value: 0.0,
+                    steps: 0,
+                    grad_norm: 0.0,
+                    stop: rgmin_stop_t::RGMIN_STOP_TOLERANCE,
+                };
+                let before = x;
+                let xt = rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), DIM);
+                let st = rgmin_solver_step_fg(
+                    session,
+                    Some(plateau),
+                    std::ptr::null_mut(),
+                    xt,
+                    &mut out,
+                );
+                rgmin_tensor_free(xt);
+                assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+                assert_ne!(x, before);
+                assert_eq!(out.value, VALUE);
+                assert_eq!(out.grad_norm, GRAD);
+                seen.push(out.stop);
+                if out.stop != rgmin_stop_t::RGMIN_STOP_BUDGET {
+                    break;
+                }
+            }
+            rgmin_solver_free(session);
+        }
+        seen
+    }
+
+    #[test]
+    fn a_c_step_loop_with_no_budget_reads_step_tolerance_after_n_steps() {
+        use rgmin_stop_t::{RGMIN_STOP_BUDGET as GO, RGMIN_STOP_STEP_TOLERANCE as STALL};
+        assert_eq!(stops(0, 100), [GO, GO, STALL]);
+        assert_eq!(stops(5, 5), [GO; 5]);
+    }
+}
