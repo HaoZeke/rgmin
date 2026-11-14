@@ -2,7 +2,9 @@
 //! its budget above every stop.
 
 use ndarray::{ArrayView1, array};
-use rgmin::{Control, FireKind, Method, NoiseFloor, Oracle, Solver, Status};
+use rgmin::{
+    Control, FireKind, LineSearch, Method, NoiseFloor, Oracle, Solver, Status, minimize_method,
+};
 
 fn rosenbrock() -> impl eindir_core::DifferentiableObjective<f64> {
     Oracle::unbounded(2, |x: ArrayView1<f64>| {
@@ -80,4 +82,28 @@ fn a_run_stops_on_the_energy_noise_floor_a_step_reports() {
         assert_eq!(solver.steps(), 1, "{method:?}");
         assert_eq!(report.value, 0.125, "{method:?}: {report:?}");
     }
+}
+
+/// The session-backed one-shot ends on the same stop. DIIS reported it
+/// after spending all twenty steps on the refused search.
+#[test]
+fn a_session_one_shot_stops_on_the_energy_noise_floor() {
+    let quad = Oracle::unbounded(1, |x: ArrayView1<f64>| (0.5 * x[0] * x[0], array![x[0]]));
+    let control = Control {
+        maxiter: 20,
+        gtol: 1e-8,
+        noise_floor: Some(NoiseFloor::new(0.0).with_eps_f(1.0)),
+        ..Control::default()
+    };
+    let report = minimize_method(
+        &quad,
+        array![0.5],
+        &control,
+        Method::diis(),
+        LineSearch::default(),
+    )
+    .unwrap();
+    assert_eq!(report.status, Status::NoiseFloor, "{report:?}");
+    assert_eq!(report.steps, 1, "{report:?}");
+    assert_eq!(report.coords, array![0.5]);
 }

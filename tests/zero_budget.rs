@@ -4,7 +4,10 @@
 
 use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
 use ndarray::{Array1, Array2, ArrayView1, array};
-use rgmin::{Control, FireKind, HessianObjective, HessianVector, Method, Report, Solver, Status};
+use rgmin::{
+    Control, FireKind, HessianObjective, HessianVector, LineSearch, Method, NewtonKind, Report,
+    Solver, Status, minimize_method, minimize_method_hess, minimize_method_hvp,
+};
 
 const GTOL: f64 = 1e-8;
 
@@ -126,6 +129,59 @@ fn a_zero_budget_session_run_judges_the_evaluated_start() {
             assert_eq!(x, x0, "{method:?}");
             assert_eq!(solver.steps(), 0, "{method:?}");
             assert_judged_at_start(&format!("run {method:?}"), &x0, &report);
+        }
+    }
+}
+
+/// `minimize_method` and its Hessian and Hessian-vector forms. The
+/// session-backed methods (FIRE, BB, QuickMin, ODE12r, DIIS, Newton-CG,
+/// dogleg) reported value 0, `||g|| = inf` and `Budget` without an
+/// evaluation, even at the minimum.
+#[test]
+fn zero_budget_one_shots_judge_the_evaluated_start() {
+    for x0 in [moving(), stationary()] {
+        for method in first_order() {
+            let report = minimize_method(
+                &bowl(),
+                x0.clone(),
+                &zero_budget(),
+                method.clone(),
+                LineSearch::default(),
+            )
+            .unwrap();
+            assert_eq!(report.coords, x0, "{method:?}");
+            assert_judged_at_start(&format!("minimize_method {method:?}"), &x0, &report);
+        }
+        let second_order = [
+            Method::Newton {
+                kind: NewtonKind::Shifted,
+            },
+            Method::Newton {
+                kind: NewtonKind::Rfo,
+            },
+            Method::Dogleg,
+        ];
+        for method in first_order().into_iter().chain(second_order) {
+            let report = minimize_method_hess(
+                &bowl(),
+                x0.clone(),
+                &zero_budget(),
+                method.clone(),
+                LineSearch::default(),
+            )
+            .unwrap();
+            assert_judged_at_start(&format!("minimize_method_hess {method:?}"), &x0, &report);
+        }
+        for method in first_order() {
+            let report = minimize_method_hvp(
+                &bowl(),
+                x0.clone(),
+                &zero_budget(),
+                method.clone(),
+                LineSearch::default(),
+            )
+            .unwrap();
+            assert_judged_at_start(&format!("minimize_method_hvp {method:?}"), &x0, &report);
         }
     }
 }

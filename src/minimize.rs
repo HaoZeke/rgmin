@@ -87,24 +87,48 @@ fn run_session<O>(
 where
     O: DifferentiableObjective<f64> + ?Sized,
 {
+    drive_session(obj, init, control, method, |solver, obj, pos| {
+        solver.step(obj, pos)
+    })
+}
+
+/// Step a fresh session to a stop or the end of `control.maxiter`.
+///
+/// A zero budget takes no step and judges the evaluated start. The first
+/// step whose status is not [`Status::Iterating`], or whose gradient meets
+/// [`Control::halt`], ends the run with that status; a spent budget is
+/// [`Status::Budget`].
+fn drive_session<O, S>(
+    obj: &O,
+    init: impl Into<Array1<f64>>,
+    control: &Control,
+    method: Method,
+    mut step: S,
+) -> Result<Report>
+where
+    O: DifferentiableObjective<f64> + ?Sized,
+    S: FnMut(&mut Solver, &O, &mut Array1<f64>) -> Result<Report>,
+{
     let mut pos = init.into();
     let mut solver = Solver::new(method, control.clone(), pos.len());
-    let mut last = Report {
-        value: 0.0,
-        coords: pos.clone(),
-        steps: 0,
-        grad_norm: f64::INFINITY,
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: Status::Iterating,
-    };
+    if control.maxiter == 0 {
+        return solver.assess(obj, &mut pos);
+    }
+    let mut last = None;
     for _ in 0..control.maxiter {
-        last = solver.step(obj, &mut pos)?;
-        if let Some(status) = control.halt(last.grad_norm, solver.free_len(obj.bounds())) {
-            last.status = status;
+        let mut report = step(&mut solver, obj, &mut pos)?;
+        if let Some(status) = control.halt(report.grad_norm, solver.free_len(obj.bounds())) {
+            report.status = status;
+        }
+        let stopped = report.status != Status::Iterating;
+        last = Some(report);
+        if stopped {
             break;
         }
     }
+    let Some(mut last) = last else {
+        unreachable!("a positive budget takes a step or returns its error");
+    };
     if last.status == Status::Iterating {
         last.status = Status::Budget;
     }
@@ -138,28 +162,9 @@ fn run_session_hess<O>(
 where
     O: HessianObjective + ?Sized,
 {
-    let mut pos = init.into();
-    let mut solver = Solver::new(method, control.clone(), pos.len());
-    let mut last = Report {
-        value: 0.0,
-        coords: pos.clone(),
-        steps: 0,
-        grad_norm: f64::INFINITY,
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: Status::Iterating,
-    };
-    for _ in 0..control.maxiter {
-        last = solver.step_hess(obj, &mut pos)?;
-        if let Some(status) = control.halt(last.grad_norm, solver.free_len(obj.bounds())) {
-            last.status = status;
-            break;
-        }
-    }
-    if last.status == Status::Iterating {
-        last.status = Status::Budget;
-    }
-    Ok(last)
+    drive_session(obj, init, control, method, |solver, obj, pos| {
+        solver.step_hess(obj, pos)
+    })
 }
 
 /// Minimize with any [`Method`]. Newton-CG and Newton-PCG use analytic
@@ -190,28 +195,9 @@ fn run_session_hvp<O>(
 where
     O: HessianVector + ?Sized,
 {
-    let mut pos = init.into();
-    let mut solver = Solver::new(method, control.clone(), pos.len());
-    let mut last = Report {
-        value: 0.0,
-        coords: pos.clone(),
-        steps: 0,
-        grad_norm: f64::INFINITY,
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: Status::Iterating,
-    };
-    for _ in 0..control.maxiter {
-        last = solver.step_hvp(obj, &mut pos)?;
-        if let Some(status) = control.halt(last.grad_norm, solver.free_len(obj.bounds())) {
-            last.status = status;
-            break;
-        }
-    }
-    if last.status == Status::Iterating {
-        last.status = Status::Budget;
-    }
-    Ok(last)
+    drive_session(obj, init, control, method, |solver, obj, pos| {
+        solver.step_hvp(obj, pos)
+    })
 }
 
 fn minimize_nlcg<O>(
