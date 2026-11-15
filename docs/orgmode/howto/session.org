@@ -72,7 +72,7 @@ building the session:
 #+begin_src rust
 use rgmin::{Control, Method, QuickMinOptions, Solver};
 
-let control = Control { istep: 0.1, ..Control::default() };
+let control = Control::default().with_istep(0.1);
 let mut solver = Solver::new(Method::QuickMin, control, x.len());
 solver.set_atom_maxmove(0.2);
 solver.set_quickmin_options(QuickMinOptions::per_atom()); // or ::eon()
@@ -96,11 +96,9 @@ the per-atom cap scales each trial before it returns to the set.
 use rgmin::{Control, Method, Solver, StopNorm};
 
 let n_atoms = 7;
-let control = Control {
-    gtol: 0.01,
-    stop_norm: StopNorm::MaxAtom,
-    ..Default::default()
-};
+let control = Control::default()
+    .with_gtol(0.01)
+    .with_stop_norm(StopNorm::MaxAtom);
 let solver = Solver::new(Method::lbfgs(), control, 3 * n_atoms);
 #+end_src
 
