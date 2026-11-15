@@ -21,11 +21,9 @@ and the largest distance from the centroid stays under twice the
 value at the start. Anything past that radius is a dissociation.
 ASE LBFGS is run twice: alpha=70, the ASE default, and alpha=10.
 
-rgmin FIRE is Bitzek's velocity-Verlet step, with the force mixed
-after the move. The parameters are ASE's defaults (dt=0.1, dtmax=1,
-Nmin=5, finc=1.1, fdec=0.5, astart=0.1, fa=0.99) and the longest atom
-moves at most 0.2. ASE FIRE mixes before the Euler kick and caps the
-Euclidean length of the whole displacement.
+rgmin FIRE is rgmin.optimize.FIRE at ASE's defaults, which takes ASE
+FIRE's iterates to rounding. rgmin LBFGS uses eon_cap=True, the
+crate's default step.
 
     python benches/ase_dropin.py
 """

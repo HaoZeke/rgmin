@@ -57,11 +57,13 @@ value. The other count is dissociations. Medians below are over the
 converged runs. ``ase-lbfgs`` uses ``alpha=70``. ``ase-lbfgs-a10``
 uses ``alpha=10``.
 
-rgmin FIRE is Bitzek's velocity-Verlet step: the force is mixed after
-the move. The parameters are ASE's defaults (``dt=0.1``, ``dtmax=1``,
-``Nmin=5``, ``finc=1.1``, ``fdec=0.5``, ``astart=0.1``, ``fa=0.99``)
-and the longest atom moves at most 0.2. ASE FIRE mixes before the
-Euler kick and caps the Euclidean length of the whole displacement.
+rgmin FIRE is ``rgmin.optimize.FIRE`` at its defaults, which are ASE's.
+It takes ASE FIRE's iterates to rounding, so its force calls and
+energies equal those of ``ase-fire``. rgmin L-BFGS is
+``rgmin.optimize.LBFGS(eon_cap=True, maxstep=0.2)``, the crate's
+default step. The table is a rerun of ``benches/ase_dropin.py`` with
+ASE 3.29.0 after FIRE became ASE's iteration. Apart from wall
+time, only the rgmin FIRE rows changed.
 
 .. list-table::
    :header-rows: 1
@@ -79,91 +81,91 @@ Euler kick and caps the Euclidean length of the whole displacement.
      - 0
      - 22.5
      - −0.315751
-     - 0.1394
+     - 0.1369
    * - Cu64
      - ase-fire
      - 10/10
      - 0
      - 47.5
      - −0.315703
-     - 0.1851
+     - 0.1870
    * - Cu64
      - ase-lbfgs
      - 10/10
      - 0
      - 22.5
      - −0.315751
-     - 0.0935
+     - 0.0937
    * - Cu64
      - ase-lbfgs-a10
      - 10/10
      - 0
      - 9.0
      - −0.315786
-     - 0.0412
+     - 0.0409
    * - Cu64
      - rgmin-fire
      - 10/10
      - 0
-     - 44.5
-     - −0.315668
-     - 0.1797
+     - 47.5
+     - −0.315703
+     - 0.1921
    * - Cu64
      - rgmin-lbfgs
      - 10/10
      - 0
      - 11.0
      - −0.315895
-     - 0.0497
+     - 0.0495
    * - LJ13
      - ase-bfgs
      - 10/10
      - 0
      - 29.0
      - −44.326489
-     - 0.0224
+     - 0.0222
    * - LJ13
      - ase-fire
      - 10/10
      - 0
      - 71.0
      - −44.326487
-     - 0.0387
+     - 0.0380
    * - LJ13
      - ase-lbfgs
      - 10/10
      - 0
      - 29.0
      - −44.326489
-     - 0.0205
+     - 0.0199
    * - LJ13
      - ase-lbfgs-a10
      - 9/10
      - 1
      - 161.0
      - −39.624761
-     - 0.1375
+     - 0.1391
    * - LJ13
      - rgmin-fire
      - 10/10
      - 0
-     - 69.5
+     - 71.0
      - −44.326487
-     - 0.0426
+     - 0.0448
    * - LJ13
      - rgmin-lbfgs
      - 10/10
      - 0
      - 19.0
      - −44.326489
-     - 0.0120
+     - 0.0124
    * - LJ13-sphere
      - ase-bfgs
      - 10/10
      - 0
      - 47.5
      - −39.928329
-     - 0.0364
+     - 0.0363
    * - LJ13-sphere
      - ase-fire
      - 10/10
@@ -177,49 +179,49 @@ Euler kick and caps the Euclidean length of the whole displacement.
      - 0
      - 47.5
      - −39.928329
-     - 0.0349
+     - 0.0344
    * - LJ13-sphere
      - ase-lbfgs-a10
      - 10/10
      - 0
      - 160.0
      - −39.823170
-     - 0.1403
+     - 0.1382
    * - LJ13-sphere
      - rgmin-fire
      - 10/10
      - 0
-     - 127.5
-     - −40.225870
-     - 0.0801
+     - 129.0
+     - −41.057068
+     - 0.0830
    * - LJ13-sphere
      - rgmin-lbfgs
      - 10/10
      - 0
      - 52.0
      - −40.225874
-     - 0.0345
+     - 0.0349
    * - LJ38
      - ase-bfgs
      - 10/10
      - 0
      - 91.0
      - −173.925612
-     - 0.1686
+     - 0.1654
    * - LJ38
      - ase-fire
      - 10/10
      - 0
      - 81.0
      - −173.925601
-     - 0.0800
+     - 0.0798
    * - LJ38
      - ase-lbfgs
      - 10/10
      - 0
      - 91.0
      - −173.925612
-     - 0.1156
+     - 0.1154
    * - LJ38
      - ase-lbfgs-a10
      - 0/10
@@ -231,37 +233,37 @@ Euler kick and caps the Euclidean length of the whole displacement.
      - rgmin-fire
      - 10/10
      - 0
-     - 82.5
-     - −173.925604
-     - 0.0875
+     - 81.0
+     - −173.925601
+     - 0.0880
    * - LJ38
      - rgmin-lbfgs
      - 10/10
      - 0
      - 27.0
      - −173.925606
-     - 0.0308
+     - 0.0316
    * - LJ38-sphere
      - ase-bfgs
      - 10/10
      - 0
      - 179.0
      - −167.460624
-     - 0.3568
+     - 0.3894
    * - LJ38-sphere
      - ase-fire
      - 10/10
      - 0
      - 515.0
      - −168.195123
-     - 0.5123
+     - 0.5065
    * - LJ38-sphere
      - ase-lbfgs
      - 10/10
      - 0
      - 188.0
      - −167.137345
-     - 0.2635
+     - 0.2693
    * - LJ38-sphere
      - ase-lbfgs-a10
      - 0/10
@@ -273,16 +275,16 @@ Euler kick and caps the Euclidean length of the whole displacement.
      - rgmin-fire
      - 10/10
      - 0
-     - 549.5
-     - −168.246137
-     - 0.5867
+     - 515.0
+     - −168.195123
+     - 0.5613
    * - LJ38-sphere
      - rgmin-lbfgs
      - 10/10
      - 0
      - 141.5
      - −168.105354
-     - 0.1689
+     - 0.1649
 
 On the rattled icosahedron and truncated octahedron, rgmin L-BFGS and
 rgmin FIRE reach the cutoff-shifted global minimum on all ten seeds.
