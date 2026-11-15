@@ -927,14 +927,11 @@ impl Vector {
     /// Claim `data` for `device`. Only the CPU has a backend today;
     /// any other tag is refused so device data is never silently
     /// staged through the host.
-    pub fn try_on(
-        device: dlpk::sys::DLDevice,
-        data: Array1<f64>,
-    ) -> std::result::Result<Self, UnsupportedDevice> {
+    pub fn try_on(device: dlpk::sys::DLDevice, data: Array1<f64>) -> crate::Result<Self> {
         if device.device_type == dlpk::sys::DLDeviceType::kDLCPU {
             Ok(Self { data, device })
         } else {
-            Err(UnsupportedDevice {
+            Err(crate::Error::UnsupportedDevice {
                 device_type: device.device_type as i32,
             })
         }
@@ -960,25 +957,6 @@ impl Vector {
         self.data
     }
 }
-
-/// The device tag names a backend this build does not carry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnsupportedDevice {
-    /// The DLPack `DLDeviceType` discriminant that was refused.
-    pub device_type: i32,
-}
-
-impl std::fmt::Display for UnsupportedDevice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "DLPack device {} has no kernel backend in this build (CPU only)",
-            self.device_type
-        )
-    }
-}
-
-impl std::error::Error for UnsupportedDevice {}
 
 /// `x . y` on the vectors' device.
 pub fn vdot(x: &Vector, y: &Vector) -> f64 {
@@ -1073,6 +1051,10 @@ mod tests {
             device_id: 0,
         };
         let err = Vector::try_on(cuda, Array1::zeros(4)).unwrap_err();
-        assert_eq!(err.device_type, dlpk::sys::DLDeviceType::kDLCUDA as i32);
+        assert!(matches!(
+            err,
+            crate::Error::UnsupportedDevice { device_type }
+                if device_type == dlpk::sys::DLDeviceType::kDLCUDA as i32
+        ));
     }
 }

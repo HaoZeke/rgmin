@@ -666,12 +666,6 @@ impl Fire2Extras {
     }
 }
 
-/// FIRE 2.0 stopped because consecutive non-positive power exceeded
-/// [`Fire2Extras::n_neg_max`]. That step does not change the position,
-/// the time step, the mixing parameter, or the velocity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fire2Stalled;
-
 /// A [`FireState`] and [`Fire2Extras`] with Table 1 of Guénolé et al.,
 /// Comput. Mater. Sci. 175 (2020) 109584,
 /// DOI 10.1016/j.commatsci.2020.109584: `alpha_start = 0.25`,
@@ -699,7 +693,9 @@ pub fn guenole2020(dim: usize, dt0: f64) -> (FireState, Fire2Extras) {
 /// `dt v` only on a downhill step. The mix never lengthens `v` and never
 /// lowers `f . v` (`validation/fire2.py`). A step that makes the
 /// consecutive non-positive count exceed [`Fire2Extras::n_neg_max`]
-/// returns [`Fire2Stalled`] before the shrink and the half-step.
+/// returns [`crate::Error::FireStalled`] before the shrink and the
+/// half-step, and leaves the position, the time step, the mixing
+/// parameter, and the velocity unchanged.
 ///
 /// Guénolé, Nöhring, Vaid, Houllé, Xie, Prakash, Bitzek, *Assessment
 /// and optimization of the fast inertial relaxation engine (FIRE)*,
@@ -708,7 +704,7 @@ pub fn fire2_displacement(
     state: &mut FireState,
     ext: &mut Fire2Extras,
     force: &Array1<f64>,
-) -> Result<Array1<f64>, Fire2Stalled> {
+) -> crate::Result<Array1<f64>> {
     fire2_displacement_metric(state, ext, force, force, None)
 }
 
@@ -723,7 +719,7 @@ pub fn fire2_displacement_metric(
     power_force: &Array1<f64>,
     steepest: &Array1<f64>,
     mix: Option<FireMix>,
-) -> Result<Array1<f64>, Fire2Stalled> {
+) -> crate::Result<Array1<f64>> {
     let power = crate::vecops::dot(power_force.view(), state.vel.view());
     let mut dx = Array1::zeros(state.vel.len());
     if power > 0.0 {
@@ -737,7 +733,7 @@ pub fn fire2_displacement_metric(
         state.n_pos = 0;
         ext.n_neg = ext.n_neg.saturating_add(1);
         if ext.n_neg > ext.n_neg_max {
-            return Err(Fire2Stalled);
+            return Err(crate::Error::FireStalled { steps: ext.steps });
         }
         if !(ext.initial_delay && ext.steps < ext.n_delay) {
             if state.dt * state.f_dec >= ext.dt_min {
@@ -924,10 +920,10 @@ mod tests {
         state.vel[0] = 1.0;
         let dt = state.dt;
         let alpha = state.alpha;
-        assert_eq!(
+        assert!(matches!(
             fire2_displacement(&mut state, &mut ext, &force),
-            Err(Fire2Stalled)
-        );
+            Err(crate::Error::FireStalled { .. })
+        ));
         assert_eq!(ext.n_neg, 2_001);
         assert_eq!(state.dt, dt);
         assert_eq!(state.alpha, alpha);
@@ -948,10 +944,10 @@ mod tests {
         state.vel[0] = 1.0;
         state.alpha = 0.05;
         let dt = state.dt;
-        assert_eq!(
+        assert!(matches!(
             fire2_displacement(&mut state, &mut ext, &up),
-            Err(Fire2Stalled)
-        );
+            Err(crate::Error::FireStalled { .. })
+        ));
         assert_eq!(ext.n_neg, 2);
         assert_eq!(state.dt, dt);
         assert_eq!(state.alpha, 0.05);

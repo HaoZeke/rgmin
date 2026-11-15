@@ -28,6 +28,22 @@ pub enum Error {
         /// Length of the working vector.
         got: usize,
     },
+    /// A manifold factory refused its shape.
+    #[error("{kind} rejected shape n = {n}, p = {p}")]
+    ManifoldShape {
+        /// Token (`stiefel`, `grassmann`, `unitary`).
+        kind: &'static str,
+        /// Ambient size.
+        n: usize,
+        /// Column or subspace count; `n` for a square factor.
+        p: usize,
+    },
+    /// The DLPack device tag names a backend this build does not carry.
+    #[error("DLPack device {device_type} has no kernel backend in this build (CPU only)")]
+    UnsupportedDevice {
+        /// The DLPack `DLDeviceType` discriminant that was refused.
+        device_type: i32,
+    },
     /// SCG cannot make progress (non-finite objective everywhere it
     /// can step, or damping at its limit).
     #[error("SCG stalled: {what}")]

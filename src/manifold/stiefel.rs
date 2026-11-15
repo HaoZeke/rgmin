@@ -68,11 +68,15 @@ impl StiefelNp {
     }
 
     /// \(\mathrm{St}(n,p)\) with \(n \ge p \ge 2\).
-    pub fn new(n: usize, p: usize) -> Result<Self, (usize, usize)> {
+    pub fn new(n: usize, p: usize) -> crate::Result<Self> {
         if n >= p && p >= 2 {
             Ok(Self { n, p })
         } else {
-            Err((n, p))
+            Err(crate::Error::ManifoldShape {
+                kind: "stiefel",
+                n,
+                p,
+            })
         }
     }
 

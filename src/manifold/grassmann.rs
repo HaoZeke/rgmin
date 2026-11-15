@@ -28,11 +28,15 @@ pub struct Grassmann {
 
 impl Grassmann {
     /// `Ok` when `n >= p` and `p >= 1` (manopt `grassmannfactory`).
-    pub fn new(n: usize, p: usize) -> Result<Self, (usize, usize)> {
+    pub fn new(n: usize, p: usize) -> crate::Result<Self> {
         if n >= p && p >= 1 {
             Ok(Self { n, p })
         } else {
-            Err((n, p))
+            Err(crate::Error::ManifoldShape {
+                kind: "grassmann",
+                n,
+                p,
+            })
         }
     }
 
@@ -353,7 +357,10 @@ mod tests {
         assert!(yty_err(rp, &y1) < 1e-12, "through-origin left RP^2 {y1:?}");
         assert_eq!(g.dim(), 4);
         assert_eq!(rp.dim(), 2);
-        assert_eq!(Grassmann::new(2, 3), Err((2, 3)));
+        assert!(matches!(
+            Grassmann::new(2, 3),
+            Err(crate::Error::ManifoldShape { n: 2, p: 3, .. })
+        ));
         assert!(Grassmann::new(4, 2).is_ok());
     }
 
@@ -427,8 +434,14 @@ mod tests {
 
     #[test]
     fn new_rejects_p_gt_n_and_p_zero() {
-        assert_eq!(Grassmann::new(2, 3).err(), Some((2, 3)));
-        assert_eq!(Grassmann::new(4, 0).err(), Some((4, 0)));
+        assert!(matches!(
+            Grassmann::new(2, 3),
+            Err(crate::Error::ManifoldShape { n: 2, p: 3, .. })
+        ));
+        assert!(matches!(
+            Grassmann::new(4, 0),
+            Err(crate::Error::ManifoldShape { n: 4, p: 0, .. })
+        ));
         assert!(Grassmann::new(5, 3).is_ok());
     }
 

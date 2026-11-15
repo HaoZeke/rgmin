@@ -85,8 +85,16 @@ impl Default for Unitary {
 
 impl Unitary {
     /// \(\mathrm{U}(n)\) with \(n \ge 1\).
-    pub fn new(n: usize) -> Result<Self, usize> {
-        if n >= 1 { Ok(Self { n }) } else { Err(n) }
+    pub fn new(n: usize) -> crate::Result<Self> {
+        if n >= 1 {
+            Ok(Self { n })
+        } else {
+            Err(crate::Error::ManifoldShape {
+                kind: "unitary",
+                n,
+                p: n,
+            })
+        }
     }
 
     /// Packed length `2 n^2`, or `None` on overflow.
