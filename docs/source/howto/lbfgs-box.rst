@@ -49,6 +49,8 @@ What the call does with the bounds
 
 - ``minimize_box_watched`` takes a second closure that sees each accepted iterate and can stop the run.
 
+- ``minimize_box_on`` passes those coordinates. The first call sees the clipped start.
+
 When to use something else
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 

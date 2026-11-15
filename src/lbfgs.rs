@@ -474,8 +474,9 @@ pub struct Lbfgs {
     /// Nocedal, Algorithm 778, <https://doi.org/10.1145/279232.279236>).
     /// A line-search step from `f_k`
     /// to `f_{k+1}` ends [`Lbfgs::minimize`], [`Lbfgs::minimize_watched`],
-    /// [`Lbfgs::minimize_recognized`], [`Lbfgs::minimize_box`] and
-    /// [`Lbfgs::minimize_box_watched`] at the new iterate when
+    /// [`Lbfgs::minimize_on`], [`Lbfgs::minimize_recognized`],
+    /// [`Lbfgs::minimize_box`], [`Lbfgs::minimize_box_watched`] and
+    /// [`Lbfgs::minimize_box_on`] at the new iterate when
     /// `f_k - f_{k+1} <= ftol * max(|f_k|, |f_{k+1}|, 1)`.
     /// Zero, the default, turns the test off, as does any value that is
     /// not positive. [`LBFGSB_FTOL`] is the SciPy default.
@@ -1980,16 +1981,57 @@ impl Lbfgs {
     ///
     /// `watch` receives the iteration index and the value at that iterate,
     /// and returning `false` ends the relaxation there.
+    /// [`Self::minimize_on`] is the same run with the coordinates included.
     pub fn minimize_watched<F, W>(
         &mut self,
         x0: ArrayView1<f64>,
         max_iter: usize,
-        mut fg: F,
+        fg: F,
         mut watch: W,
     ) -> (f64, Array1<f64>, usize)
     where
         F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
         W: FnMut(usize, f64) -> bool,
+    {
+        self.minimize_on(x0, max_iter, fg, |it, value, _| watch(it, value))
+    }
+
+    /// Relaxes `x0`, offering each accepted iterate's coordinates to `on`.
+    ///
+    /// `on` receives the iteration index, the value, and the coordinates
+    /// at that iterate. Returning `false` ends the relaxation there, as
+    /// [`Self::minimize_watched`] does. The point is one the solver has
+    /// accepted, so the caller can project it (a bond length, a height
+    /// above a slab) without the solver storing that map.
+    ///
+    /// ```
+    /// use ndarray::{ArrayView1, array};
+    /// use rgmin::Lbfgs;
+    ///
+    /// let fg = |x: ArrayView1<f64>| {
+    ///     let f = x[0] * x[0] + x[1] * x[1];
+    ///     Some((f, array![2.0 * x[0], 2.0 * x[1]]))
+    /// };
+    /// let mut gap = Vec::new();
+    /// let mut opt = Lbfgs::default();
+    /// let (f, x, _) = opt.minimize_on(array![1.0, -1.0].view(), 40, fg, |_i, _f, p| {
+    ///     gap.push(p[1] - p[0]);
+    ///     true
+    /// });
+    /// assert_eq!(gap[0], -2.0);
+    /// assert!((x[1] - x[0] - gap.last().copied().unwrap()).abs() < 1e-9);
+    /// assert!(f < 1e-8);
+    /// ```
+    pub fn minimize_on<F, W>(
+        &mut self,
+        x0: ArrayView1<f64>,
+        max_iter: usize,
+        mut fg: F,
+        mut on: W,
+    ) -> (f64, Array1<f64>, usize)
+    where
+        F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
+        W: FnMut(usize, f64, ArrayView1<f64>) -> bool,
     {
         self.trim();
         let mut x = x0.to_owned();
@@ -2005,7 +2047,7 @@ impl Lbfgs {
 
         let mut stalled = false;
         for it in 0..max_iter {
-            if g.len() != x.len() || !watch(it, f) {
+            if g.len() != x.len() || !on(it, f, x.view()) {
                 break;
             }
             if stalled || self.gnorm(&g) < self.gtol {
@@ -2204,18 +2246,42 @@ impl Lbfgs {
 
     /// [`Self::minimize_box`], offering each accepted iterate to `watch` as
     /// [`Self::minimize_watched`] does.
+    /// [`Self::minimize_box_on`] is the same run with the coordinates included.
     pub fn minimize_box_watched<F, W>(
         &mut self,
         x0: ArrayView1<f64>,
         lower: ArrayView1<f64>,
         upper: ArrayView1<f64>,
         max_iter: usize,
-        mut fg: F,
+        fg: F,
         mut watch: W,
     ) -> (f64, Array1<f64>, usize)
     where
         F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
         W: FnMut(usize, f64) -> bool,
+    {
+        self.minimize_box_on(x0, lower, upper, max_iter, fg, |it, value, _| {
+            watch(it, value)
+        })
+    }
+
+    /// [`Self::minimize_box`], offering each accepted iterate's coordinates
+    /// to `on` as [`Self::minimize_on`] does.
+    ///
+    /// A start outside the box is clipped before the first call, so `on`
+    /// sees a point inside the box.
+    pub fn minimize_box_on<F, W>(
+        &mut self,
+        x0: ArrayView1<f64>,
+        lower: ArrayView1<f64>,
+        upper: ArrayView1<f64>,
+        max_iter: usize,
+        mut fg: F,
+        mut on: W,
+    ) -> (f64, Array1<f64>, usize)
+    where
+        F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
+        W: FnMut(usize, f64, ArrayView1<f64>) -> bool,
     {
         self.trim();
         if !bounds_ok(x0.len(), lower, upper) {
@@ -2238,7 +2304,7 @@ impl Lbfgs {
 
         let mut stalled = false;
         for it in 0..max_iter {
-            if g.len() != x.len() || !watch(it, f) {
+            if g.len() != x.len() || !on(it, f, x.view()) {
                 break;
             }
             let pg =

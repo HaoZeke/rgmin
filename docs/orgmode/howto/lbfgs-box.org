@@ -44,6 +44,7 @@ The same sample is the doctest of ~minimize_box~, so ~cargo test --doc~ runs it.
   The run can end while the gradient presses a coordinate against its bound.
 - The pairs stay in ~opt~ after the call, as with ~minimize~, and ~opt.forget()~ drops them.
 - ~minimize_box_watched~ takes a second closure that sees each accepted iterate and can stop the run.
+- ~minimize_box_on~ passes those coordinates. The first call sees the clipped start.
 
 ** When to use something else
 

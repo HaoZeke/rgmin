@@ -7,6 +7,12 @@ Unreleased
 
 ~~~~~~~~~~
 
+``Lbfgs::minimize_on`` and ``Lbfgs::minimize_box_on`` offer each accepted iterate to a callback as the iteration, the value and the coordinates.
+Returning false ends the run at that point, as ``minimize_watched`` does.
+A caller can project those coordinates, a bond length or a height above a slab, without the solver storing that map.
+``minimize_watched`` and ``minimize_box_watched`` keep their two-argument callbacks and call these methods.
+A start outside the box is clipped before the first ``minimize_box_on`` call.
+
 ``rgmin.optimize`` is a drop-in for ``ase.optimize``.
 ``BFGS``, ``LBFGS``, ``LBFGSLineSearch``, ``FIRE`` and ``FIRE2`` take ASE 3.29's constructors and drive ``self.optimizable``, so ASE's cell filters and constraints work.
 On the same start ``BFGS``, ``LBFGS`` and ``FIRE`` reproduce ASE's steps, force calls, log lines and trajectory frames.
