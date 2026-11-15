@@ -159,7 +159,9 @@ jobs:
   # The all-features rows above find no backend libraries, so each
   # eigensolver backend there is the EigenUnavailable stub. This row links
   # SLEPc from conda-forge and PRIMME, ChASE and libkrylov built from
-  # source, and fails when any of them stays a stub.
+  # source, and fails when any of them stays a stub. The login shell
+  # activates the environment, so its python3 runs the NumPy and SciPy
+  # reference scripts that the tests spawn.
   backends:
     name: real backends (SLEPc, PRIMME, ChASE, libkrylov)
     runs-on: ubuntu-latest
@@ -189,6 +191,9 @@ jobs:
             cmake=4.5.0
             make=4.4.1
             pkg-config=0.29.2
+            python=3.12
+            numpy=2.5.4
+            scipy=1.18.1
           condarc: |
             channels:
               - conda-forge
