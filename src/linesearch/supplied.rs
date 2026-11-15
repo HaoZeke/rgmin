@@ -51,7 +51,7 @@ pub enum SearchStep {
 /// let start = array![0.0];
 /// let dir = array![1.0];
 /// let mut search = SuppliedSearch::new(
-///     LineSearch::Backtracking { c: 1e-4, beta: 0.5, maxiter: 8 },
+///     LineSearch::backtracking(1e-4, 0.5, 8),
 ///     start.view(),
 ///     dir.view(),
 ///     1.0,
