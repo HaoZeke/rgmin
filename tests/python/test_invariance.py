@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 """SHA-256 of trajectories at several thread counts.
 
-The Pt7 golden pins ASE's EMT, which is NumPy-dispatched. It is not a
-pin of rgmin. rgmin's own results must be bit-identical across ISAs
-with no environment variable. That check is the diagonal quadratic.
+The LJ38 and Pt7 goldens pin ASE's LennardJones and EMT, which are
+NumPy-dispatched. They are not pins of rgmin. rgmin's own results must
+be bit-identical across ISAs with no environment variable. That check
+is the diagonal quadratic.
 """
 
 from __future__ import annotations
@@ -20,8 +21,11 @@ import numpy as np
 import pytest
 
 # One hash per fixture. 3.14 and 3.14t both compare against these values.
-# Lennard-Jones does not need a NumPy kernel pin.
-LJ38 = "e3f640188156dacb71f6d7cd18377e430d18e44718cec0080fad338d0c46fd8d"
+# ASE LennardJones. Compared only in a process started with the pin below:
+# its ``(sigma**2 / r2) ** 3`` goes through NumPy's AVX512F power kernel,
+# which rounds differently, and the eOn step's finite-difference probe
+# carries that last bit into every frame. Every platform agrees under it.
+LJ38 = "9ff5ac4e272b58e733c2336e8b2580a566cfd0eefd77c3c1797359fb024cf24a"
 # ASE EMT. Compared only in a process that was started with the pin below.
 # Linux, macOS, and arm agree. Windows NumPy does not, on this trajectory.
 PT7_EMT = "299f8164ab0df6f3b59731098b3d83e12c13c0b4117426437bf9af9df0a17ce8"
@@ -39,8 +43,8 @@ _SCALES = (1.0, 4.0, 9.0, 16.0, 2.0, 3.0)
 _QUADRATIC_X0 = (0.4, -0.2, 0.7, 0.1, -0.3, 0.5)
 
 _PT7_THREADS = """
-from test_invariance import assert_emt_numpy_dispatch_disabled, pt7_hashes
-assert_emt_numpy_dispatch_disabled()
+from test_invariance import assert_numpy_dispatch_disabled, pt7_hashes
+assert_numpy_dispatch_disabled()
 for workers in (1, 2, 8):
     hashes = pt7_hashes(workers)
     if len(set(hashes)) != 1:
@@ -49,13 +53,21 @@ for workers in (1, 2, 8):
 """
 
 _PT7_ONCE = """
-from test_invariance import assert_emt_numpy_dispatch_disabled, trajectory_sha256
-assert_emt_numpy_dispatch_disabled()
+from test_invariance import assert_numpy_dispatch_disabled, trajectory_sha256
+assert_numpy_dispatch_disabled()
 print(trajectory_sha256("pt7"))
 """
 
+_LJ38_THREADS = """
+from test_invariance import assert_numpy_dispatch_disabled, lj38_hashes
+assert_numpy_dispatch_disabled()
+for workers in (1, 2, 8):
+    print(" ".join(lj38_hashes(workers)))
+"""
+
 _LJ38_ONCE = """
-from test_invariance import trajectory_sha256
+from test_invariance import assert_numpy_dispatch_disabled, trajectory_sha256
+assert_numpy_dispatch_disabled()
 print(trajectory_sha256("lj38"))
 """
 
@@ -70,13 +82,13 @@ def _blocked(name: str) -> bool:
     return name in {"X86_V3", "X86_V4"} or name.startswith("AVX512")
 
 
-def assert_emt_numpy_dispatch_disabled() -> None:
+def assert_numpy_dispatch_disabled() -> None:
     """Confirm this process disabled NumPy's AVX-512 and X86_V3/V4 paths.
 
     ``numpy.show_runtime`` prints the enabled dispatch targets and
     returns None. The same split comes from ``__cpu_features__``. CPUID
     bits that are not dispatch targets stay enabled. This pins ASE's
-    EMT, which is NumPy-dispatched, and not rgmin.
+    LennardJones and EMT, which are NumPy-dispatched, and not rgmin.
     """
     import contextlib
     import io
@@ -147,6 +159,11 @@ def trajectory_sha256(kind: str) -> str:
     return hashlib.sha256(b"".join(frames)).hexdigest()
 
 
+def lj38_hashes(workers: int) -> list[str]:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(lambda _i: trajectory_sha256("lj38"), range(workers)))
+
+
 def pt7_hashes(workers: int) -> list[str]:
     with ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(lambda _i: trajectory_sha256("pt7"), range(workers)))
@@ -197,7 +214,7 @@ def _pt7_expect() -> str:
     return PT7_EMT
 
 
-def _emt_pin() -> str | None:
+def _numpy_pin() -> str | None:
     """Dispatch names for the AVX-512 and X86_V3/V4 paths, if this build has them."""
     names = json.loads(_run_child(_DISPATCH_PROBE, pin=None)[-1])
     blocked = [name for name in names if _blocked(name)]
@@ -206,24 +223,24 @@ def _emt_pin() -> str | None:
     return ",".join(blocked)
 
 
-# Spawns a ThreadPoolExecutor. The marker keeps pytest-run-parallel from
-# nesting another pool around this test.
+# The child spawns a ThreadPoolExecutor of up to 8 workers. The marker
+# keeps pytest-run-parallel from multiplying those pools.
 @pytest.mark.thread_unsafe
 def test_python_thread_invariance() -> None:
+    """Lennard-Jones matches the golden at 1, 2 and 8 Python threads, pinned."""
     pytest.importorskip("ase")
-    for workers in (1, 2, 8):
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            hashes = list(pool.map(lambda _i: trajectory_sha256("lj38"), range(workers)))
-        assert hashes == [LJ38] * workers
+    lines = _run_child(_LJ38_THREADS, pin=_numpy_pin())
+    assert [line.split() for line in lines] == [[LJ38] * workers for workers in (1, 2, 8)]
 
 
 def test_lj38_rayon_env_invariance() -> None:
-    """Lennard-Jones matches the golden with no NumPy pin."""
+    """Lennard-Jones matches the golden at every Rayon thread count, pinned."""
     pytest.importorskip("ase")
+    pin = _numpy_pin()
     for threads in ("1", "2", "3", "8"):
         lines = _run_child(
             _LJ38_ONCE,
-            pin=None,
+            pin=pin,
             RAYON_NUM_THREADS=threads,
             OMP_NUM_THREADS=threads,
         )
@@ -243,7 +260,7 @@ def test_pt7_emt_golden_pins_numpy_not_rgmin() -> None:
     NumPy version. ``RGMIN_PT7_DIGEST_OUT`` names a file for that record.
     """
     pytest.importorskip("ase")
-    pin = _emt_pin()
+    pin = _numpy_pin()
     expect = _pt7_expect()
     observed = {f"python_threads_{w}": h for w, h in zip((1, 2, 8), _run_child(_PT7_THREADS, pin=pin))}
     for threads in ("1", "2", "3", "8"):
