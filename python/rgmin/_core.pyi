@@ -23,6 +23,7 @@ class Session:
         preset: str | None = None,
         abc: bool = False,
         accept: str | None = None,
+        istep: float | None = None,
     ) -> None: ...
     def step(
         self,

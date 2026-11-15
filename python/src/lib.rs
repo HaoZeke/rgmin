@@ -83,6 +83,9 @@ impl Session {
     /// scale (ASE's `1 / alpha`). `preset="guenole2020"` and `abc`
     /// select the FIRE 2.0 parameter set and ABC-FIRE. `accept` is
     /// `none`, `energy` or `nonmonotone`; `downhill` is `energy`.
+    /// `istep` is the step scale of a method other than FIRE, whose
+    /// scale is `dt`: Adam's step size, which bounds each coordinate's
+    /// move, and the unit step of the others. It defaults to 1.
     #[new]
     #[pyo3(signature = (
         kind,
@@ -105,6 +108,7 @@ impl Session {
         preset=None,
         abc=false,
         accept=None,
+        istep=None,
     ))]
     fn new(
         kind: &str,
@@ -126,6 +130,7 @@ impl Session {
         preset: Option<&str>,
         abc: bool,
         accept: Option<&str>,
+        istep: Option<f64>,
     ) -> PyResult<Self> {
         if n == 0 {
             return Err(PyValueError::new_err("dimension must be positive"));
@@ -135,7 +140,21 @@ impl Session {
         let fire2 = matches!(method, Method::Fire { kind: FireKind::V2 });
         let lbfgs = matches!(method, Method::Lbfgs { .. });
         let nlcg = matches!(method, Method::Nlcg { .. });
-        let istep = if fire { dt } else { 1.0 };
+        let istep = match istep {
+            Some(_) if fire => {
+                return Err(PyValueError::new_err(
+                    "istep does not apply to FIRE, whose step scale is dt",
+                ));
+            }
+            Some(scale) if !(scale.is_finite() && scale > 0.0) => {
+                return Err(PyValueError::new_err(format!(
+                    "istep must be positive and finite, not {scale}"
+                )));
+            }
+            Some(scale) => scale,
+            None if fire => dt,
+            None => 1.0,
+        };
         let accept = session_accept(accept, downhill)?;
         let mut solver = Solver::new(method, control(istep), n);
         if lbfgs {
