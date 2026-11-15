@@ -84,6 +84,13 @@ Install the 0.5.2 release from crates.io with `cargo add rgmin ndarray@0.17` on 
 [`docs/orgmode/howto/install.org`](docs/orgmode/howto/install.org) covers the `develop` branch and how it differs from the release.
 It also covers the features of each route and the C library.
 
+## Python
+
+`python/` builds the `rgmin` Python package with maturin (`pip install "python/[ase]"`).
+`rgmin.optimize` is a drop-in for `ase.optimize`: change `from ase.optimize import BFGS` to `from rgmin.optimize import BFGS` and keep the rest of the script.
+`BFGS`, `LBFGS` and `FIRE` reproduce ASE's iterates on the same start, ASE filters such as `FrechetCellFilter` and the ASE constraints work, and the other session methods have ASE-style classes.
+[`docs/orgmode/howto/ase-migration.org`](docs/orgmode/howto/ase-migration.org) lists the classes, every difference from ASE, and the benchmark from `benches/ase_optimize.py` ([`benches/ase_optimize/results.md`](benches/ase_optimize/results.md)).
+
 ## Citation
 
 If you use rgmin in published work, cite it with [`CITATION.cff`](CITATION.cff) and add the version or commit you ran.

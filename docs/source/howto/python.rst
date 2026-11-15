@@ -20,7 +20,11 @@ imported when an optimizer is constructed.
    opt.attach(lambda: atoms.get_potential_energy())
    opt.run(fmax=0.05)
 
-``LBFGS(eon_cap=True)`` selects the Rust default. Without it the class
+``rgmin.optimize`` is a drop-in for ``ase.optimize``: ``BFGS``,
+``LBFGS``, ``LBFGSLineSearch``, ``FIRE`` and ``FIRE2`` take ASE's
+constructors, and the other session methods have ASE-style classes.
+:doc:`ase-migration` lists the classes, the differences from ASE and
+the benchmark. ``LBFGS(eon_cap=True)`` selects the Rust default. Without it the class
 matches ASE's length control. Stubs live in ``python/rgmin`` and
 ``py.typed`` marks the package.
 

@@ -89,6 +89,7 @@ It also covers the features of each route, the C library and a checkout.
    howto/lbfgs-box
    howto/c-abi
    howto/python
+   howto/ase-migration
    howto/ase-bench
    howto/doxygen
    howto/cite

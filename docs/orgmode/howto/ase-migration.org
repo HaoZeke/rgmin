@@ -1,0 +1,99 @@
+#+TITLE: Migrate from ase.optimize
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+
+* Migrate from ase.optimize
+
+~rgmin.optimize~ has the ~ase.optimize~ class names. Change the import and keep the rest of the script.
+
+#+begin_src python
+from ase.build import add_adsorbate, fcc111
+from ase.calculators.emt import EMT
+from ase.constraints import FixAtoms
+from rgmin.optimize import BFGS  # was: from ase.optimize import BFGS
+
+slab = fcc111("Cu", (3, 3, 4), vacuum=8.0)
+add_adsorbate(slab, "O", 1.2, "fcc")
+slab.set_constraint(FixAtoms(indices=[a.index for a in slab if a.tag >= 3]))
+slab.calc = EMT()
+opt = BFGS(slab, trajectory="relax.traj", logfile="relax.log")
+converged = opt.run(fmax=0.01, steps=200)
+#+end_src
+
+Every class is an ~ase.optimize.optimize.Optimizer~. ~run(fmax, steps)~ and its return value, ~irun~, ~converged()~, ~nsteps~, ~attach~, the log line, the trajectory frames and ~todict~ are ASE's own code. The classes read and move the system only through ~self.optimizable~. ~FrechetCellFilter~, ~UnitCellFilter~, ~ExpCellFilter~ and ~StrainFilter~ therefore work as with ASE, and so do ~FixAtoms~, ~FixedLine~, ~FixCartesian~ and ~FixedPlane~. Importing ~rgmin~ does not import ASE; the classes load on first use.
+
+** Classes
+
+| rgmin class | ASE class | against ASE on the same start |
+|---+---+---|
+| ~BFGS~ | ~BFGS~ | same iterates to rounding until a pair with ~s·y <= 1e-12~ |
+| ~LBFGS~ | ~LBFGS~ | same iterates to rounding at ~damping=1~ |
+| ~FIRE~ | ~FIRE~ | same iterates to rounding; ~downhill_check~ resets differ |
+| ~FIRE2~ | ~FIRE2~ | Guénolé 2020 FIRE 2.0; different iterates |
+| ~LBFGSLineSearch~ | ~LBFGSLineSearch~ | rgmin's strong Wolfe search; different iterates |
+| ~SR1~, ~SR2~, ~SteepestDescent~, ~BarzilaiBorwein~, ~Adam~ | none | rgmin only |
+| ~CG~, ~PolakRibiere~, ~FletcherReeves~, ~HestenesStiefel~, ~DaiYuan~, ~ConjugateDescent~, ~HagerZhang~, ~LiuStorey~, ~FRPR~, ~EonCG~ | none | rgmin only, no line search |
+| ~NewtonCG~, ~NewtonPCG~ | none | rgmin only, finite-difference Hessian products |
+
+"Same iterates" means the same positions to 1e-8, the same ~nsteps~, the same number of calculator calls, and the same log lines and trajectory frames. ~python/tests/test_ase_conformance.py~ checks this on a rattled Au8 cell, a Cu(111)+O slab under each constraint, and Cu vacancy cells in each cell filter.
+
+~BFGS~, ~LBFGS~, ~LBFGSLineSearch~, ~FIRE~ and ~FIRE2~ take ASE 3.29's constructor arguments, in ASE's positional order and with ASE's defaults: ~restart~, ~logfile~, ~trajectory~, ~append_trajectory~, ~maxstep~ (and ~FIRE~'s deprecated ~maxmove~), ~alpha~, ~memory~, ~damping~, ~use_line_search~, ~dt~, ~dtmax~, ~dtmin~, ~Nmin~, ~finc~, ~fdec~, ~astart~, ~fa~, ~a~, ~downhill_check~, ~position_reset_callback~, ~use_abc~, plus ~master~ and ASE's other keyword arguments. The rgmin-only classes take ~maxstep~ (longest atomic displacement, default 0.2), ~alpha~ (initial Hessian guess, default 70, so the first step is ~-g / alpha~) and ~accept~ (~"energy"~, ~"none"~ or ~"nonmonotone"~).
+
+ASE's ~ODE12r~, ~GPMin~, ~MDMin~, ~BFGSLineSearch~ (~QuasiNewton~), ~GoodOldQuasiNewton~, ~CellAwareBFGS~ and ~RFO~ have no rgmin class. rgmin has no ODE12r integrator and no Gaussian-process minimizer. Its RFO, Newton and dogleg steps need a dense Hessian, which an ASE calculator does not supply. Its scaled conjugate gradient is a whole-run function (~minimize_scg~), not a one-step session, so it cannot drive an ASE ~Optimizer~ either.
+
+** Differences
+
+Each difference has a test in ~python/tests/test_ase_conformance.py~ that shows where the two packages part.
+
+- ~BFGS~ skips a pair with ~s·y <= 1e-12~ in the scaled energy. ASE updates the Hessian anyway and steps along its absolute eigenvalues.
+- ~LBFGS~ multiplies ~maxstep~ by ~damping~. ASE multiplies the step after the cap, so with ~damping < 1~ ASE also damps a step shorter than ~maxstep~. ~LBFGS~ drops a pair with too little curvature and clears the memory after a direction that is not descent. ASE keeps both. ~use_line_search=True~ is rgmin's strong Wolfe search, not ASE's ~LineSearch~ with ~c1=0.23~ and ~c2=0.46~. ~eon_cap=True~ selects the rgmin default step instead of ASE's length control.
+- ~FIRE~ with ~downhill_check=True~ keeps the time step after a reset, where ASE halves it. The next kick uses the force at the restored point, where ASE reuses the force of the refused one. ~a~ other than ~astart~ warns.
+- ~FIRE2~ follows Guénolé et al. 2020. The time step floor is ~0.02 * dt~, so ~dtmin~ other than ASE's default ~2e-3~ at ~dt=0.1~ is a ~ValueError~. The first ~Nmin~ steps hold ~dt~, and 2000 consecutive uphill steps stop the session.
+- A ~restart~ file holds the evaluations rgmin made, not ASE's arrays. The same class on that file replays them through a fresh session without calling the calculator, so a run continues where it stopped. An ASE restart file, a file from another class, or a file that no longer matches the system raises ~ase.optimize.RestartError~.
+- On a ~StrainFilter~ cell the classes without curvature or a line search (~SteepestDescent~, ~EonCG~, ~HagerZhang~, ~LiuStorey~) reach the relaxed energy but approach ~fmax=0.01~ slowly. ~Adam~ takes every step by default (~accept="none"~) and walks off the strain coordinates there. Use ~accept="energy"~ with ~Adam~, or a quasi-Newton class.
+
+** Benchmark
+
+~python benches/ase_optimize.py~ runs both packages at their defaults on EMT Cu55 and Pt38 clusters, Cu(111)+O and Pt(111)+O slabs with the two bottom layers fixed, an LJ38 cluster, and a 107-atom Cu vacancy cell in a ~FrechetCellFilter~. Each row is five serial repeats with fmax 0.01 and a 2000-step budget. Steps and calculator calls were the same on every repeat. Wall time is the median of the whole ~run~, calculator included. EMT and ~LennardJones~ are Python, so most of the time is spent in the calculator. The full table, with energies and final forces, is ~benches/ase_optimize/results.md~.
+
+Run at commit 1f6d190 with rgmin 0.2.0, ASE 3.29.0, NumPy 2.5.4 and Python 3.12.3, on Linux 6.12 ~x86_64~ (Intel Xeon, 8 logical CPUs).
+
+| case | optimizer | ASE steps/calls | rgmin steps/calls | ASE ms | rgmin ms |
+|---+---+---+---+---+---|
+| Cu55 | BFGS | 28/29 | 28/29 | 130.9 | 96.8 |
+| Cu55 | LBFGS | 28/29 | 28/29 | 93.0 | 94.9 |
+| Cu55 | LBFGSLineSearch | 18/34 | 13/14 | 108.5 | 48.0 |
+| Cu55 | FIRE | 51/52 | 51/52 | 161.6 | 163.5 |
+| Cu55 | FIRE2 | 30/32 | 27/30 | 100.7 | 96.1 |
+| Cu55 | ODE12r | 18/19 | none | 60.7 | none |
+| Pt38 | BFGS | 26/27 | 26/27 | 81.1 | 66.5 |
+| Pt38 | LBFGS | 26/27 | 26/27 | 66.5 | 68.9 |
+| Pt38 | LBFGSLineSearch | 16/30 | 11/12 | 72.7 | 31.6 |
+| Pt38 | FIRE | 63/64 | 63/64 | 143.8 | 152.0 |
+| Pt38 | FIRE2 | 47/50 | 29/33 | 112.8 | 78.0 |
+| Pt38 | ODE12r | 20/21 | none | 46.8 | none |
+| Cu(111)+O | BFGS | 36/37 | 36/37 | 117.5 | 99.1 |
+| Cu(111)+O | LBFGS | 36/37 | 36/37 | 95.6 | 97.7 |
+| Cu(111)+O | LBFGSLineSearch | 22/41 | 13/14 | 106.6 | 40.6 |
+| Cu(111)+O | FIRE | 63/64 | 63/64 | 154.8 | 162.4 |
+| Cu(111)+O | FIRE2 | 34/36 | 30/33 | 91.8 | 86.6 |
+| Cu(111)+O | ODE12r | 21/22 | none | 56.7 | none |
+| Pt(111)+O | BFGS | 34/35 | 34/35 | 106.6 | 91.9 |
+| Pt(111)+O | LBFGS | 34/35 | 34/35 | 88.3 | 90.1 |
+| Pt(111)+O | LBFGSLineSearch | 20/37 | 13/14 | 94.1 | 39.3 |
+| Pt(111)+O | FIRE | 62/63 | 62/63 | 149.6 | 158.0 |
+| Pt(111)+O | FIRE2 | 50/53 | 25/28 | 129.0 | 72.5 |
+| Pt(111)+O | ODE12r | 24/25 | none | 62.1 | none |
+| LJ38 | BFGS | 93/94 | 93/94 | 164.7 | 111.0 |
+| LJ38 | LBFGS | 93/94 | 93/94 | 113.9 | 109.3 |
+| LJ38 | LBFGSLineSearch | 29/59 | 24/26 | 64.2 | 29.3 |
+| LJ38 | FIRE | 85/86 | 85/86 | 85.3 | 93.2 |
+| LJ38 | FIRE2 | 2000/2107 (not converged) | 51/71 | 2023.8 | 73.1 |
+| LJ38 | ODE12r | 34/39 | none | 37.7 | none |
+| Cu107-vac-cell | BFGS | 41/42 | 41/42 | 2787.2 | 952.1 |
+| Cu107-vac-cell | LBFGS | 41/42 | 41/42 | 863.7 | 937.0 |
+| Cu107-vac-cell | LBFGSLineSearch | 26/77 | 38/40 | 1398.4 | 883.8 |
+| Cu107-vac-cell | FIRE | 61/62 | 61/62 | 1263.8 | 1374.4 |
+| Cu107-vac-cell | FIRE2 | 48/50 | 54/57 | 1087.9 | 1254.3 |
+| Cu107-vac-cell | ODE12r | 71/73 | none | 1336.6 | none |
+
+~BFGS~, ~LBFGS~ and ~FIRE~ take the same steps and calculator calls as ASE on every case, and end at the same energies. The wall time of those rows is the calculator's plus each package's step. ASE's ~BFGS~ diagonalizes its dense Hessian every step and rgmin's inverse update does not, which is the gap on the 330-coordinate cell. ASE's ~FIRE2~ leaves the LJ38 basin and does not converge in 2000 steps. ASE ~ODE12r~ has no rgmin counterpart.

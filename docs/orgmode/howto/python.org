@@ -23,7 +23,7 @@ opt.run(fmax=0.05)
 FIRE(atoms, logfile=None).run(fmax=0.05, steps=20)
 #+end_src
 
-~LBFGS(eon_cap=True)~ selects the Rust default. Without it the class matches ASE's length control. Stubs live in ~python/rgmin/*.pyi~ and ~py.typed~ marks the package.
+~rgmin.optimize~ is a drop-in for ~ase.optimize~: ~BFGS~, ~LBFGS~, ~LBFGSLineSearch~, ~FIRE~ and ~FIRE2~ take ASE's constructors, and the other session methods have ASE-style classes. @@rst::doc:`ase-migration`@@ lists the classes, the differences from ASE and the benchmark. ~LBFGS(eon_cap=True)~ selects the Rust default. Without it the class matches ASE's length control. Stubs live in ~python/rgmin/*.pyi~ and ~py.typed~ marks the package.
 
 ~lowest_eigenpairs(hvp, x0_block)~ returns the k lowest pairs of a symmetric product as NumPy arrays. ~hvp(x, v)~ is ~H(x) v~. @@rst::doc:`tutorials/eigenpairs`@@ is the short example, and continuous integration runs it.
 
