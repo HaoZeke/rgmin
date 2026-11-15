@@ -2,6 +2,8 @@
 # Copyright 2026 Rohit Goswami
 """ASE-shaped optimizers over the rgmin session.
 
+``rgmin.optimize`` holds every optimizer class; ``BFGS``, ``LBFGS``,
+``LBFGSLineSearch``, ``FIRE`` and ``FIRE2`` are re-exported here.
 Importing this module does not import ASE. The optimizer classes do,
 on construction, because they are :class:`ase.optimize.optimize.Optimizer`
 subclasses: ``trajectory``, ``logfile``, ``attach`` and ``run(fmax, steps)``
@@ -17,7 +19,9 @@ from rgmin._core import LbfgsPairs, LineSearch, Session, lowest_eigenpairs as _l
 __all__ = [
     "BFGS",
     "FIRE",
+    "FIRE2",
     "LBFGS",
+    "LBFGSLineSearch",
     "LbfgsPairs",
     "LineSearch",
     "Session",
@@ -25,6 +29,32 @@ __all__ = [
     "lowest_eigenpairs",
 ]
 __version__ = version
+_OPTIMIZERS = frozenset(
+    {
+        "Adam",
+        "BFGS",
+        "BarzilaiBorwein",
+        "CG",
+        "ConjugateDescent",
+        "DaiYuan",
+        "EonCG",
+        "FIRE",
+        "FIRE2",
+        "FRPR",
+        "FletcherReeves",
+        "HagerZhang",
+        "HestenesStiefel",
+        "LBFGS",
+        "LBFGSLineSearch",
+        "LiuStorey",
+        "NewtonCG",
+        "NewtonPCG",
+        "PolakRibiere",
+        "SR1",
+        "SR2",
+        "SteepestDescent",
+    }
+)
 
 
 def lowest_eigenpairs(hvp, x0_block, *, x=None, tol=1e-8, max_iter=None):
@@ -61,7 +91,7 @@ def lowest_eigenpairs(hvp, x0_block, *, x=None, tol=1e-8, max_iter=None):
 
 
 def __getattr__(name: str):
-    if name in {"BFGS", "FIRE", "LBFGS"}:
+    if name in _OPTIMIZERS:
         from rgmin import optimize
 
         return getattr(optimize, name)
