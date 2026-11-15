@@ -7,6 +7,16 @@ Unreleased
 
 ~~~~~~~~~~
 
+``rgmin.optimize`` is a drop-in for ``ase.optimize``.
+``BFGS``, ``LBFGS``, ``LBFGSLineSearch``, ``FIRE`` and ``FIRE2`` take ASE 3.29's constructors and drive ``self.optimizable``, so ASE's cell filters and constraints work.
+On the same start ``BFGS``, ``LBFGS`` and ``FIRE`` reproduce ASE's steps, force calls, log lines and trajectory frames.
+Restart files replay the recorded evaluations without calling the calculator.
+``SR1``, ``SR2``, ``SteepestDescent``, ``BarzilaiBorwein``, ``Adam``, the nonlinear CG family, ``EonCG``, ``NewtonCG`` and ``NewtonPCG`` cover the other session methods.
+``howto/ase-migration`` lists the differences from ASE, each with a test, and ``benches/ase_optimize.py`` compares both packages on EMT clusters and slabs, LJ38 and a ``FrechetCellFilter`` vacancy cell.
+
+``rgmin.optimize.BFGS`` starts from ASE's ``alpha * I`` instead of the identity, ``LBFGS`` keeps ASE's fixed ``H0 = I / alpha`` instead of the Nocedal-Wright scale, and ``FIRE`` is ASE's Euler step with a Euclidean ``maxstep`` instead of a per-atom cap.
+``LBFGS(eon_cap=True)`` still selects the crate's default step.
+
 ``lowest_eigenpairs`` is block LOBPCG for the k lowest eigenpairs of a symmetric product (Knyazev 2001).
 The seed is an n-by-k block, and each pair reports its residual.
 ``k = 0``, ``k`` above the dimension, and non-finite input return an error.
