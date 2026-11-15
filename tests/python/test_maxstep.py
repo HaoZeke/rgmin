@@ -17,6 +17,9 @@ import rgmin
 N = 38
 CAP = 0.2
 BOUND_PAIR = 6.0
+# The TSan job runs each test at 4 threads x 5 iterations inside a 120 s
+# faulthandler budget, so the pair sums are NumPy rather than Python loops.
+_I, _J = np.triu_indices(N, k=1)
 
 
 def _compressed_lj38() -> np.ndarray:
@@ -51,48 +54,26 @@ def _compressed_lj38() -> np.ndarray:
 
 
 def _lj(x: np.ndarray) -> tuple[float, np.ndarray]:
-    energy = 0.0
-    grad = np.zeros(x.shape, dtype=np.float64)
-    for i in range(N):
-        for j in range(i + 1, N):
-            dx = float(x[3 * i] - x[3 * j])
-            dy = float(x[3 * i + 1] - x[3 * j + 1])
-            dz = float(x[3 * i + 2] - x[3 * j + 2])
-            r2 = dx * dx + dy * dy + dz * dz
-            r = r2**0.5
-            inv = 1.0 / r
-            sr6 = inv**6
-            sr12 = sr6 * sr6
-            energy += 4.0 * (sr12 - sr6)
-            scale = (24.0 * inv) * (sr6 - 2.0 * sr12) * inv
-            grad[3 * i] += scale * dx
-            grad[3 * i + 1] += scale * dy
-            grad[3 * i + 2] += scale * dz
-            grad[3 * j] -= scale * dx
-            grad[3 * j + 1] -= scale * dy
-            grad[3 * j + 2] -= scale * dz
-    return energy, grad
+    d = x.reshape(N, 3)[_I] - x.reshape(N, 3)[_J]
+    inv2 = 1.0 / np.sum(d * d, axis=1)
+    sr6 = inv2 * inv2 * inv2
+    sr12 = sr6 * sr6
+    energy = float(np.sum(4.0 * (sr12 - sr6)))
+    pair = (24.0 * inv2 * (sr6 - 2.0 * sr12))[:, None] * d
+    grad = np.zeros((N, 3), dtype=np.float64)
+    np.add.at(grad, _I, pair)
+    np.subtract.at(grad, _J, pair)
+    return energy, grad.reshape(-1)
 
 
 def _max_pair(x: np.ndarray) -> float:
-    best = 0.0
-    for i in range(N):
-        for j in range(i + 1, N):
-            dx = float(x[3 * i] - x[3 * j])
-            dy = float(x[3 * i + 1] - x[3 * j + 1])
-            dz = float(x[3 * i + 2] - x[3 * j + 2])
-            best = max(best, (dx * dx + dy * dy + dz * dz) ** 0.5)
-    return best
+    d = x.reshape(N, 3)[_I] - x.reshape(N, 3)[_J]
+    return float(np.sqrt(np.max(np.sum(d * d, axis=1))))
 
 
 def _max_atom_step(before: np.ndarray, after: np.ndarray) -> float:
-    best = 0.0
-    for i in range(before.size // 3):
-        dx = float(after[3 * i] - before[3 * i])
-        dy = float(after[3 * i + 1] - before[3 * i + 1])
-        dz = float(after[3 * i + 2] - before[3 * i + 2])
-        best = max(best, (dx * dx + dy * dy + dz * dz) ** 0.5)
-    return best
+    d = (after - before).reshape(-1, 3)
+    return float(np.max(np.sqrt(np.sum(d * d, axis=1))))
 
 
 def _first_step(method: str, **options: float) -> np.ndarray:
