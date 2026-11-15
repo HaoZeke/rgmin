@@ -18,12 +18,24 @@ class Session:
         alpha: float = 0.1,
         f_alpha: float = 0.99,
         downhill: bool = False,
+        h0: float | None = None,
+        maxmove: float | None = None,
+        preset: str | None = None,
+        abc: bool = False,
+        accept: str | None = None,
     ) -> None: ...
     def step(
         self,
         x: list[float],
         callback: Callable[[list[float]], tuple[float, list[float]]],
     ) -> tuple[list[float], float, float]: ...
+    def push_pair(self, s: list[float], y: list[float]) -> bool: ...
+    def pair_count(self) -> int: ...
+    @property
+    def steps(self) -> int: ...
+    @property
+    def gradient_calls(self) -> int: ...
+    def forget(self) -> None: ...
 
 class LineSearch:
     def __init__(
