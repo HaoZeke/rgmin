@@ -114,6 +114,7 @@ pub struct Neighbours {
 /// Defaults are the paper's generic choice: `A = 3`, `C_stab = 0.1`,
 /// `μ` and `r_nn` computed from the geometry, and no extra cutoff
 /// beyond the supplied list.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct ExpParams {
     /// Exponent `A` in `exp(-A (r / r_nn - 1))`.
@@ -133,6 +134,16 @@ pub struct ExpParams {
     /// component falls back to that span.
     pub lengths: Option<[f64; 3]>,
 }
+
+with_setters!(ExpParams {
+    with_a => a: val f64,
+    with_c_stab => c_stab: val f64,
+    with_mu => mu: opt f64,
+    with_r_nn => r_nn: opt f64,
+    with_r_cut => r_cut: opt f64,
+    with_recalc_mu => recalc_mu: val bool,
+    with_lengths => lengths: opt [f64; 3],
+});
 
 impl Default for ExpParams {
     fn default() -> Self {

@@ -35,13 +35,11 @@ fn gtol() -> f64 {
 /// ASE FIRE defaults: `dt` 0.1 and `maxstep` 0.2 on the step norm.
 /// `maxiter` caps the loop and fails the test when reached.
 fn control() -> Control {
-    Control {
-        maxiter: 4000,
-        gtol: gtol(),
-        istep: 0.1,
-        maxmove: Some(0.2),
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(4000)
+        .with_gtol(gtol())
+        .with_istep(0.1)
+        .with_maxmove(0.2)
 }
 
 /// Water: O at the origin, O-H 0.9572 Angstrom, H-O-H 104.52 degrees.
@@ -125,11 +123,11 @@ fn case(name: &str, method: Method, dim: usize, accept: Accept) -> Case {
 fn cases(dim: usize) -> Vec<Case> {
     let mut out = Vec::new();
     for (name, kind) in [("fire", FireKind::V1), ("fire2", FireKind::V2)] {
-        out.push(case(name, Method::Fire { kind }, dim, Accept::None));
+        out.push(case(name, Method::fire(kind), dim, Accept::None));
     }
     let mut guenole = case(
         "fire2 guenole2020",
-        Method::Fire { kind: FireKind::V2 },
+        Method::fire(FireKind::V2),
         dim,
         Accept::None,
     );
@@ -138,12 +136,7 @@ fn cases(dim: usize) -> Vec<Case> {
         .set_fire_preset(FirePreset::Guenole2020)
         .unwrap();
     out.push(guenole);
-    let mut abc = case(
-        "fire2 abc",
-        Method::Fire { kind: FireKind::V2 },
-        dim,
-        Accept::None,
-    );
+    let mut abc = case("fire2 abc", Method::fire(FireKind::V2), dim, Accept::None);
     abc.solver.set_fire_abc(true).unwrap();
     out.push(abc);
     for accept in [Accept::None, Accept::Energy, Accept::Nonmonotone] {
@@ -157,16 +150,8 @@ fn cases(dim: usize) -> Vec<Case> {
     }
     let searches = [
         LineSearch::default(),
-        LineSearch::Backtracking {
-            c: 1e-4,
-            beta: 0.5,
-            maxiter: 40,
-        },
-        LineSearch::Goldstein {
-            c: 0.25,
-            beta: 0.5,
-            maxiter: 40,
-        },
+        LineSearch::backtracking(1e-4, 0.5, 40),
+        LineSearch::goldstein(0.25, 0.5, 40),
     ];
     for search in searches {
         let mut c = case("lbfgs", Method::lbfgs(), dim, Accept::Energy);
@@ -182,20 +167,8 @@ fn cases(dim: usize) -> Vec<Case> {
     out.push(case("newton-cg", Method::NewtonCg, dim, Accept::None));
     out.push(case("newton-pcg", Method::NewtonPcg, dim, Accept::None));
     let hessian = [
-        (
-            "newton",
-            Method::Newton {
-                kind: NewtonKind::Shifted,
-            },
-            None,
-        ),
-        (
-            "rfo",
-            Method::Newton {
-                kind: NewtonKind::Rfo,
-            },
-            None,
-        ),
+        ("newton", Method::newton(NewtonKind::Shifted), None),
+        ("rfo", Method::newton(NewtonKind::Rfo), None),
         ("dogleg", Method::Dogleg, None),
         ("lbfgs qn newton", Method::lbfgs(), Some(QnStep::Newton)),
         ("lbfgs qn rfo", Method::lbfgs(), Some(QnStep::Rfo)),
@@ -472,11 +445,7 @@ fn a_steepest_step_is_mass_weighted() {
         |_| Array2::zeros((6, 6)),
     );
     let t = 1e-4;
-    let control = Control {
-        istep: t,
-        maxmove: None,
-        ..control()
-    };
+    let control = control().with_istep(t).with_maxmove(None);
     let mut solver = Solver::new(Method::Steepest, control, 6);
     solver.set_distance_constraints(set.clone()).unwrap();
     let mut y = x.clone();
@@ -527,13 +496,13 @@ fn a_periodic_cell_is_refused_either_way() {
     let x = water();
     let set = DistanceConstraints::at(vec![(0, 1), (0, 2)], x.view()).unwrap();
     let obj = HessianOracle::unbounded(9, lj, lj_hessian);
-    let mut before = Solver::new(Method::Fire { kind: FireKind::V2 }, control(), 9);
+    let mut before = Solver::new(Method::fire(FireKind::V2), control(), 9);
     before.set_periodic(true);
     assert!(matches!(
         before.set_distance_constraints(set.clone()),
         Err(Error::Constraint(ConstraintError::Unsupported { .. }))
     ));
-    let mut after = Solver::new(Method::Fire { kind: FireKind::V2 }, control(), 9);
+    let mut after = Solver::new(Method::fire(FireKind::V2), control(), 9);
     after.set_distance_constraints(set).unwrap();
     after.set_periodic(true);
     let mut y = x.clone();
@@ -562,11 +531,7 @@ fn the_exponential_preconditioner_is_refused_either_way() {
         j: vec![1, 2, 2],
         ..Neighbours::default()
     };
-    let params = ExpParams {
-        r_nn: Some(1.0),
-        mu: Some(1.0),
-        ..ExpParams::default()
-    };
+    let params = ExpParams::default().with_r_nn(1.0).with_mu(1.0);
     let mut before = Solver::new(Method::lbfgs(), control(), 9);
     before.set_exp(x.view(), &neighbours, &params).unwrap();
     assert!(matches!(
@@ -620,7 +585,7 @@ fn rigid_projection_commutes_with_the_set() {
         [0, 1, 2].map(|c| (0..4).map(|a| masses[a] * x[3 * a + c]).sum::<f64>() / total)
     };
     let c0 = com(&x);
-    for method in [Method::lbfgs(), Method::Fire { kind: FireKind::V2 }] {
+    for method in [Method::lbfgs(), Method::fire(FireKind::V2)] {
         let mut solver = Solver::new(method, control(), 12);
         solver.set_project_rigid(true);
         solver.set_distance_constraints(set.clone()).unwrap();
@@ -698,7 +663,7 @@ fn bounds_and_the_set_act_on_different_coordinates() {
     high[9] = 0.6;
     let free = bounded(9, 1.0, low.clone(), high.clone());
     for kind in [FireKind::V1, FireKind::V2] {
-        let mut solver = Solver::new(Method::Fire { kind }, control(), 12);
+        let mut solver = Solver::new(Method::fire(kind), control(), 12);
         solver.set_distance_constraints(set.clone()).unwrap();
         let mut x = start.clone();
         for _ in 0..100 {
@@ -747,7 +712,7 @@ fn rigid_projection_at_an_active_bound_is_refused() {
         pull,
         bounds: Bounds::new(Array1::from_elem(12, -10.0), high, 0.0),
     };
-    for method in [Method::lbfgs(), Method::Fire { kind: FireKind::V2 }] {
+    for method in [Method::lbfgs(), Method::fire(FireKind::V2)] {
         let mut solver = Solver::new(method, control(), 12);
         solver.set_project_rigid(true);
         solver.set_distance_constraints(set.clone()).unwrap();
@@ -768,7 +733,7 @@ fn a_start_off_the_set_is_returned_to_it() {
         ConstraintSolver::Lincs,
     ] {
         let set = set.clone().with_settle(false).with_solver(solver);
-        let mut s = Solver::new(Method::Fire { kind: FireKind::V2 }, control(), 9);
+        let mut s = Solver::new(Method::fire(FireKind::V2), control(), 9);
         s.set_distance_constraints(set.clone()).unwrap();
         let mut y = &x + &(kick() * 0.5);
         assert!(set.excess(y.view()) > 1.0);
@@ -839,11 +804,7 @@ fn a_step_the_anchor_bonds_cannot_close_is_a_typed_error() {
         move |p: ArrayView1<f64>| (-force.dot(&p), -force.clone()),
         |_| Array2::zeros((6, 6)),
     );
-    let control = Control {
-        istep: 1.0,
-        maxmove: None,
-        ..control()
-    };
+    let control = control().with_istep(1.0).with_maxmove(None);
     let mut solver = Solver::new(Method::Steepest, control, 6);
     // The default per-atom cap would shorten the sideways step enough
     // that the anchor correction can still close the bond.

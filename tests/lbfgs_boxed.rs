@@ -9,9 +9,7 @@ fn box_projection_keeps_free_components_near_a_wall() {
     use ndarray::array;
 
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        ..HighsStep::default()
-    });
+    opt.highs = Some(HighsStep::default());
     for distance in [1e-8, 1e-12] {
         let x = array![3.0, distance];
         let gradient = array![3.0, 1.0 + distance];
@@ -35,9 +33,7 @@ fn box_projection_restarts_a_non_descent_curvature_direction() {
 
     let mut opt = Lbfgs::default();
     opt.record(array![1.0, 2.0], array![1.0, 0.0]);
-    opt.highs = Some(HighsStep {
-        ..HighsStep::default()
-    });
+    opt.highs = Some(HighsStep::default());
     let x = array![0.0, 0.0];
     let gradient = array![1.0, -1.0];
     let step = opt
@@ -51,12 +47,12 @@ fn box_projection_restarts_a_non_descent_curvature_direction() {
 #[test]
 fn per_coordinate_box_is_independent() {
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        trust: None,
-        equalities: Vec::new(),
-        center_axes: None,
-        ..Default::default()
-    });
+    opt.highs = Some(
+        HighsStep::default()
+            .with_trust(None)
+            .with_equalities(Vec::new())
+            .with_center_axes(None),
+    );
     let x = Array1::from(vec![0.0, 0.0]);
     let g = Array1::from(vec![10.0, 10.0]);
     let d = opt
@@ -72,12 +68,12 @@ fn per_coordinate_box_is_independent() {
 #[test]
 fn per_coord_box_is_not_uniform() {
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        trust: None,
-        equalities: Vec::new(),
-        center_axes: None,
-        ..Default::default()
-    });
+    opt.highs = Some(
+        HighsStep::default()
+            .with_trust(None)
+            .with_equalities(Vec::new())
+            .with_center_axes(None),
+    );
     let x = Array1::from(vec![0.0, 0.0]);
     let g = Array1::from(vec![1.0, 100.0]);
     let d = opt
@@ -108,12 +104,12 @@ fn per_coord_box_is_not_uniform() {
 #[test]
 fn null_side_is_unbounded_on_that_side() {
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        trust: None,
-        equalities: Vec::new(),
-        center_axes: None,
-        ..Default::default()
-    });
+    opt.highs = Some(
+        HighsStep::default()
+            .with_trust(None)
+            .with_equalities(Vec::new())
+            .with_center_axes(None),
+    );
     let x = Array1::from(vec![0.5, 0.5]);
     let g = Array1::from(vec![-10.0, -1.0]);
     let d = opt
@@ -133,13 +129,14 @@ fn null_side_is_unbounded_on_that_side() {
 #[test]
 fn boxed_step_intersects_uniform_bounds_and_preserves_equalities() {
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        trust: Some(0.8),
-        lo: Some(-1.0),
-        hi: Some(1.0),
-        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.4)],
-        center_axes: None,
-    });
+    opt.highs = Some(
+        HighsStep::default()
+            .with_trust(0.8)
+            .with_lo(-1.0)
+            .with_hi(1.0)
+            .with_equalities(vec![(vec![(0, 1.0), (1, 1.0)], 0.4)])
+            .with_center_axes(None),
+    );
     let x = array![0.0, 0.0];
     let step = opt
         .highs_step_boxed(

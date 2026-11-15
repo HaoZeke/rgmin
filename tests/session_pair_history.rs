@@ -4,16 +4,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn seeded_session(maxmove: Option<f64>) -> Solver {
     let mut solver = Solver::new(
-        Method::Lbfgs { memory: 1 },
-        Control {
-            maxiter: 10,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Method::lbfgs_with_memory(1),
+        Control::default()
+            .with_maxiter(10)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(maxmove)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         1,
     );
     solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
@@ -86,15 +85,8 @@ fn a_standalone_step_records_its_accepted_pair() {
         &mut value,
         &mut gradient,
         &mut istep,
-        LineSearch::Wolfe {
-            c1: 1e-4,
-            c2: 0.9,
-            maxiter: 20,
-        },
-        &Control {
-            maxmove: None,
-            ..Control::default()
-        },
+        LineSearch::wolfe(1e-4, 0.9, 20),
+        &Control::default().with_maxmove(None),
         None,
     );
     assert_eq!(x, array![0.5]);

@@ -49,15 +49,14 @@ fn spd_session_step_is_riemannian_and_stays_on_the_set() {
     let mut x = x0.clone();
     let mut solver = Solver::new(
         Method::Bb,
-        Control {
-            maxiter: 20,
-            gtol: 1e-12,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-12)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         4,
     );
     solver.set_manifold(ManifoldKind::Spd);
@@ -161,15 +160,14 @@ fn lbfgs_first_step_is_the_riemannian_retract() {
 
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter: 20,
-            gtol: 1e-14,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-14)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         8,
     );
     solver.set_manifold(ManifoldKind::Grassmann);
@@ -271,15 +269,14 @@ fn set_factor_shape_drops_stale_lbfgs_pairs() {
     let mut x = array![s2, s2, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter: 20,
-            gtol: 1e-14,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-14)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         8,
     );
     solver.set_manifold(ManifoldKind::Grassmann);
@@ -328,15 +325,14 @@ fn direct_spd_steps_retract_once_and_evaluate_the_accepted_point_once() {
         let mut x = array![initial, 0.0, 0.0, initial];
         let mut solver = Solver::new(
             method.clone(),
-            Control {
-                maxiter: 20,
-                gtol: 1e-12,
-                istep: 0.1,
-                maxmove: None,
-                stop_norm: rgmin::StopNorm::Two,
-                ftol_rel: None,
-                noise_floor: None,
-            },
+            Control::default()
+                .with_maxiter(20)
+                .with_gtol(1e-12)
+                .with_istep(0.1)
+                .with_maxmove(None)
+                .with_stop_norm(rgmin::StopNorm::Two)
+                .with_ftol_rel(None)
+                .with_noise_floor(None),
             4,
         );
         solver.set_manifold(ManifoldKind::Spd);

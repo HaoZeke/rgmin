@@ -32,11 +32,16 @@ impl EigenExaAlgo {
 }
 
 /// Typed EigenExa extras. Ignored unless the backend is EigenExa.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EigenExaParams {
     /// `eigen_s` versus `eigen_sx`.
     pub algo: EigenExaAlgo,
 }
+
+with_setters!(EigenExaParams {
+    with_algo => algo: val EigenExaAlgo,
+});
 
 impl Default for EigenExaParams {
     fn default() -> Self {

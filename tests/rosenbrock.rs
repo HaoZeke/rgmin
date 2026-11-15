@@ -7,20 +7,15 @@ use ndarray::array;
 use rgmin::{Conjugacy, Control, LineSearch, Restart, minimize};
 
 fn control() -> Control {
-    Control {
-        maxiter: 200,
-        gtol: 1e-8,
-        istep: 0.1,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(200)
+        .with_gtol(1e-8)
+        .with_istep(0.1)
+        .with_maxmove(None)
 }
 
 fn brent() -> LineSearch {
-    LineSearch::Brent {
-        maxiter: 40,
-        tol: 1e-12,
-    }
+    LineSearch::brent(40, 1e-12)
 }
 
 #[test]
@@ -106,11 +101,7 @@ fn armijo_backtracking_descends() {
         &control(),
         Conjugacy::PolakRibiere,
         Restart::Never,
-        LineSearch::Backtracking {
-            c: 1e-4,
-            beta: 0.5,
-            maxiter: 40,
-        },
+        LineSearch::backtracking(1e-4, 0.5, 40),
     )
     .unwrap();
     assert!(report.value < f0, "Armijo {} -> {}", f0, report.value);

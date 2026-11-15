@@ -19,15 +19,13 @@ fn shifted_newton_kills_a_quadratic() {
     let report = minimize_newton(
         &obj,
         array![3.0, -4.0],
-        &Control {
-            maxiter: 10,
-            gtol: 1e-10,
-            istep: 1.0,
+        &Control::default()
+            .with_maxiter(10)
+            .with_gtol(1e-10)
+            .with_istep(1.0)
             // The Newton step has length 5. A Euclidean cap above it
             // turns the default per-atom cap off and leaves the step alone.
-            maxmove: Some(20.0),
-            ..Default::default()
-        },
+            .with_maxmove(20.0),
         NewtonKind::Shifted,
     )
     .unwrap();
@@ -43,15 +41,13 @@ fn rfo_kills_a_quadratic() {
     let report = minimize_newton(
         &obj,
         array![3.0, -4.0],
-        &Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 1.0,
+        &Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(1.0)
             // Same step as the shifted Newton test: length 5, above the
             // default per-atom cap.
-            maxmove: Some(20.0),
-            ..Default::default()
-        },
+            .with_maxmove(20.0),
         NewtonKind::Rfo,
     )
     .unwrap();

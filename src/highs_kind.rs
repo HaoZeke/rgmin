@@ -143,6 +143,7 @@ impl HighsCallback {
 }
 
 /// Engine and callback policies, independent of the feasible-set record.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct HighsOptions {
     /// Automatic selection or an explicit HiGHS engine.
@@ -152,6 +153,12 @@ pub struct HighsOptions {
     /// Optional host callback. Its context is borrowed from the host.
     pub callback: Option<HighsCallback>,
 }
+
+with_setters!(HighsOptions {
+    with_solver => solver: val HighsSolverKind,
+    with_crossover => crossover: val HighsCrossover,
+    with_callback => callback: opt HighsCallback,
+});
 
 impl Default for HighsOptions {
     fn default() -> Self {

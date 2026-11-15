@@ -39,6 +39,7 @@ pub trait DirectionalCurvature: DifferentiableObjective<f64> {
 /// Damping schedule and convergence tolerances for [`minimize_scg`].
 ///
 /// Defaults follow Netlab `scg.m` and the gpr_optim production values.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct ScgParams {
     /// Base finite-difference curvature probe step (Møller `sigma_0`).
@@ -57,6 +58,14 @@ pub struct ScgParams {
     /// of accepted values, independently of an additive objective constant.
     pub tol_func: f64,
 }
+
+with_setters!(ScgParams {
+    with_sigma0 => sigma0: val f64,
+    with_lambda => lambda: val f64,
+    with_lambda_limit => lambda_limit: val f64,
+    with_tol_sol => tol_sol: val f64,
+    with_tol_func => tol_func: val f64,
+});
 
 impl Default for ScgParams {
     fn default() -> Self {
@@ -81,11 +90,16 @@ pub enum ScgStepTolerance {
 }
 
 /// Optional SCG policies. The default preserves [`minimize_scg`] semantics.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ScgOptions {
     /// Accepted-step convergence rule, combined with the objective-change test.
     pub step_tolerance: ScgStepTolerance,
 }
+
+with_setters!(ScgOptions {
+    with_step_tolerance => step_tolerance: val ScgStepTolerance,
+});
 
 const LAMBDA_MIN: f64 = 1.0e-15;
 const LAMBDA_MAX: f64 = 1.0e100;

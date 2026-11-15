@@ -38,6 +38,7 @@ fn serialise_openmp_once() {
 }
 
 /// Bounds and equalities on one L-BFGS model step.
+#[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub struct HighsStep {
     /// L_inf trust radius on the step. `None` is unbounded.
@@ -52,6 +53,14 @@ pub struct HighsStep {
     /// This is a mean subtract, not a QP.
     pub center_axes: Option<(usize, usize)>,
 }
+
+with_setters!(HighsStep {
+    with_trust => trust: opt f64,
+    with_lo => lo: opt f64,
+    with_hi => hi: opt f64,
+    with_equalities => equalities: val Vec<(Vec<(usize, f64)>, f64)>,
+    with_center_axes => center_axes: opt (usize, usize),
+});
 
 impl HighsStep {
     fn has_box(&self) -> bool {

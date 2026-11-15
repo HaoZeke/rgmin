@@ -106,6 +106,7 @@ pub struct FfTerms<'a> {
 }
 
 /// Parameters of the FF preconditioner.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct FfParams {
     /// Diagonal shift. Must be positive. Default `0.1`.
@@ -119,6 +120,14 @@ pub struct FfParams {
     /// Reestimate `μ` whenever the matrix is rebuilt.
     pub recalc_mu: bool,
 }
+
+with_setters!(FfParams {
+    with_c_stab => c_stab: val f64,
+    with_r_cut => r_cut: opt f64,
+    with_lengths => lengths: opt [f64; 3],
+    with_mu => mu: opt f64,
+    with_recalc_mu => recalc_mu: val bool,
+});
 
 impl Default for FfParams {
     fn default() -> Self {

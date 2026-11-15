@@ -24,14 +24,12 @@ fn relax(step: LbfgsStep) -> (f64, f64, usize) {
     let n = 10;
     let x0 = Array1::from_iter((0..n).map(|i| if i % 2 == 0 { -1.2 } else { 1.0 }));
     let obj = Oracle::unbounded(n, rosenbrock);
-    let control = Control {
-        maxiter: 20_000,
-        gtol: 1e-5,
-        istep: 1.0,
-        stop_norm: StopNorm::Inf,
-        ..Control::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: 8 }, control, n);
+    let control = Control::default()
+        .with_maxiter(20_000)
+        .with_gtol(1e-5)
+        .with_istep(1.0)
+        .with_stop_norm(StopNorm::Inf);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(8), control, n);
     solver.set_lbfgs_step(step).unwrap();
     if matches!(step, LbfgsStep::Wolfe) {
         solver.set_atom_maxmove(0.0);
@@ -50,12 +48,12 @@ fn relax(step: LbfgsStep) -> (f64, f64, usize) {
 /// step rule, not the tolerance.
 #[test]
 fn the_eon_cap_leaves_the_rosenbrock10_well_that_traps_the_scaled_step() {
-    let (scaled, g_scaled, _) = relax(LbfgsStep::Scaled { max_atom: 0.2 });
+    let (scaled, g_scaled, _) = relax(LbfgsStep::scaled(0.2));
     assert!(
         scaled > 1.0 && g_scaled < 1e-4,
         "scaled should stop in the well, f {scaled} g {g_scaled}"
     );
-    let (capped, g_capped, steps) = relax(LbfgsStep::Capped { max_atom: 0.2 });
+    let (capped, g_capped, steps) = relax(LbfgsStep::capped(0.2));
     assert!(
         capped < 1e-8 && g_capped < 1e-4,
         "eOn cap f {capped} g {g_capped} steps {steps}"

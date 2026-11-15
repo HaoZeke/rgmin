@@ -12,6 +12,7 @@ use ndarray::ArrayView1;
 /// `c * sqrt(n_free) * eps_g`. `eps_f` is the energy noise on the same
 /// stencil. A line search that finds no trial whose decrease clears
 /// `c * eps_f` is the same stop.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NoiseFloor {
     /// Noise of one projected component, `eps_g`.
@@ -33,14 +34,24 @@ impl NoiseFloor {
     }
 
     /// Replace the factor `c`.
+    #[must_use]
     pub fn with_c(mut self, c: f64) -> Self {
         self.c = c;
         self
     }
 
-    /// Record the energy noise from the same stencil as `eps_g`.
-    pub fn with_eps_f(mut self, eps_f: f64) -> Self {
-        self.eps_f = Some(eps_f);
+    /// Replace the per-component noise `eps_g`.
+    #[must_use]
+    pub fn with_eps_g(mut self, eps_g: f64) -> Self {
+        self.eps_g = eps_g;
+        self
+    }
+
+    /// Record the energy noise from the same stencil as `eps_g`. A bare
+    /// value is `Some`; `None` leaves the decrease test off.
+    #[must_use]
+    pub fn with_eps_f(mut self, eps_f: impl Into<Option<f64>>) -> Self {
+        self.eps_f = eps_f.into();
         self
     }
 
@@ -59,6 +70,18 @@ impl NoiseFloor {
 }
 
 /// Outer-loop controls for [`crate::minimize`].
+///
+/// Non-exhaustive: start from [`Control::default`] and chain the
+/// `with_*` setters, so a knob added later does not break callers.
+///
+/// ```
+/// let control = rgmin::Control::default()
+///     .with_maxiter(500)
+///     .with_gtol(1e-6)
+///     .with_maxmove(0.1);
+/// assert_eq!(control.maxmove, Some(0.1));
+/// ```
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Control {
     /// Maximum CG iterations.
@@ -106,6 +129,15 @@ pub struct Control {
     /// Gradient noise floor. `None` leaves the test off.
     pub noise_floor: Option<NoiseFloor>,
 }
+
+with_setters!(Control {
+    with_maxiter => maxiter: val usize,
+    with_gtol => gtol: val f64,
+    with_istep => istep: val f64,
+    with_maxmove => maxmove: opt f64,
+    with_stop_norm => stop_norm: val StopNorm,
+    with_ftol_rel => ftol_rel: opt f64,
+});
 
 impl Default for Control {
     fn default() -> Self {
@@ -179,9 +211,11 @@ impl Control {
     /// `c * sqrt(n_free) * eps_g` and still at or above [`Self::gtol`].
     /// `n_free` is the number of coordinates that measure runs over.
     /// [`crate::Status::NoiseFloor`] is that stop.
-    /// [`crate::Status::Tolerance`] remains the `gtol` stop.
-    pub fn with_noise_floor(mut self, floor: NoiseFloor) -> Self {
-        self.noise_floor = Some(floor);
+    /// [`crate::Status::Tolerance`] remains the `gtol` stop. `None`
+    /// turns it off again.
+    #[must_use]
+    pub fn with_noise_floor(mut self, floor: impl Into<Option<NoiseFloor>>) -> Self {
+        self.noise_floor = floor.into();
         self
     }
 

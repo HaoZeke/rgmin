@@ -49,15 +49,14 @@ fn accept_step_clips_an_uphill_step() {
     let mut x = array![0.0, 0.0, 0.0];
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter: 1,
-            gtol: 0.0,
-            istep: 1.0,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(1)
+            .with_gtol(0.0)
+            .with_istep(1.0)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         3,
     );
     solver.set_accept(Accept::Step);

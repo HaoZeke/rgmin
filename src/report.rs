@@ -33,6 +33,11 @@ pub enum Status {
 }
 
 /// Final point, value, and iteration count.
+///
+/// Non-exhaustive, so a field added later is additive for callers that
+/// read it. A host that writes its own report (a checkpoint, a replay)
+/// starts from [`Report::new`] and chains the `with_*` setters.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Report {
     /// `f(x)` at [`Report::coords`].
@@ -56,3 +61,29 @@ pub struct Report {
     /// Which stop produced this report.
     pub status: Status,
 }
+
+impl Report {
+    /// A report at `coords` with value `value`: zero steps and gradient
+    /// norm, [`StopNorm::Two`], no gradient, [`Status::Iterating`].
+    pub fn new(value: f64, coords: Array1<f64>) -> Self {
+        Self {
+            value,
+            coords,
+            steps: 0,
+            grad_norm: 0.0,
+            stop_norm: StopNorm::Two,
+            grad: None,
+            status: Status::Iterating,
+        }
+    }
+}
+
+with_setters!(Report {
+    with_value => value: val f64,
+    with_coords => coords: val Array1<f64>,
+    with_steps => steps: val usize,
+    with_grad_norm => grad_norm: val f64,
+    with_stop_norm => stop_norm: val StopNorm,
+    with_grad => grad: opt Array1<f64>,
+    with_status => status: val Status,
+});

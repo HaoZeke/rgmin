@@ -19,6 +19,7 @@ pub enum LineSearch {
     /// Brent (1973) on a golden-section bracket. Derivative-free in α.
     ///
     /// Brent, *Algorithms for Minimization without Derivatives* (1973).
+    #[non_exhaustive]
     Brent {
         /// Bracket / refine iterations.
         maxiter: usize,
@@ -29,6 +30,7 @@ pub enum LineSearch {
     ///
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    #[non_exhaustive]
     Backtracking {
         /// Armijo `c` (default 1e-4).
         c: f64,
@@ -45,6 +47,7 @@ pub enum LineSearch {
     ///
     /// Goldstein, *Multiplier and gradient methods*,
     /// <https://doi.org/10.1007/BF00927673>.
+    #[non_exhaustive]
     Goldstein {
         /// Goldstein / Armijo `c`.
         c: f64,
@@ -59,6 +62,7 @@ pub enum LineSearch {
     /// <https://doi.org/10.1137/1011036>.
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    #[non_exhaustive]
     Wolfe {
         /// Armijo `c1` (default 1e-4).
         c1: f64,
@@ -117,6 +121,28 @@ impl Default for LineSearch {
             maxiter: 40,
             tol: 1e-10,
         }
+    }
+}
+
+impl LineSearch {
+    /// Brent minimization along the direction.
+    pub const fn brent(maxiter: usize, tol: f64) -> Self {
+        Self::Brent { maxiter, tol }
+    }
+
+    /// Armijo backtracking with sufficient-decrease `c` and shrink `beta`.
+    pub const fn backtracking(c: f64, beta: f64, maxiter: usize) -> Self {
+        Self::Backtracking { c, beta, maxiter }
+    }
+
+    /// Goldstein backtracking with parameter `c` and shrink `beta`.
+    pub const fn goldstein(c: f64, beta: f64, maxiter: usize) -> Self {
+        Self::Goldstein { c, beta, maxiter }
+    }
+
+    /// Strong Wolfe bracketing and zoom with constants `c1 < c2`.
+    pub const fn wolfe(c1: f64, c2: f64, maxiter: usize) -> Self {
+        Self::Wolfe { c1, c2, maxiter }
     }
 }
 

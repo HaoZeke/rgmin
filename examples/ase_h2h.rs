@@ -165,19 +165,17 @@ where
         calls.fetch_add(1, Ordering::Relaxed);
         fg(x)
     });
-    let control = Control {
-        maxiter: BUDGET,
-        gtol: FMAX,
-        istep: match arm {
+    let control = Control::default()
+        .with_maxiter(BUDGET)
+        .with_gtol(FMAX)
+        .with_istep(match arm {
             Arm::Fire2 => FIRE_DT,
             _ => 1.0,
-        },
-        stop_norm: StopNorm::MaxAtom,
-        ..Control::default()
-    };
+        })
+        .with_stop_norm(StopNorm::MaxAtom);
     let method = match arm {
-        Arm::Fire2 => Method::Fire { kind: FireKind::V2 },
-        _ => Method::Lbfgs { memory: 8 },
+        Arm::Fire2 => Method::fire(FireKind::V2),
+        _ => Method::lbfgs_with_memory(8),
     };
     let mut solver = Solver::new(method, control, x0.len());
     match arm {
@@ -186,7 +184,7 @@ where
             solver.set_accept(Accept::Energy);
         }
         Arm::Capped => solver
-            .set_lbfgs_step(LbfgsStep::Capped { max_atom: MAXSTEP })
+            .set_lbfgs_step(LbfgsStep::capped(MAXSTEP))
             .expect("capped step"),
         Arm::Geometry => {
             solver.set_lbfgs_step(LbfgsStep::Wolfe).expect("wolfe");

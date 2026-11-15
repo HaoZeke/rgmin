@@ -16,11 +16,7 @@ fn main() {
     let report = minimize_newton(
         &obj,
         array![0.0, 0.0],
-        &Control {
-            maxiter: 40,
-            gtol: 1e-12,
-            ..Control::default()
-        },
+        &Control::default().with_maxiter(40).with_gtol(1e-12),
         NewtonKind::Shifted,
     )
     .unwrap();

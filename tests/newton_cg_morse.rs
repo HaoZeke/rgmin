@@ -307,13 +307,11 @@ struct Run {
 }
 
 fn control(gtol: f64, maxiter: usize) -> Control {
-    Control {
-        maxiter,
-        gtol,
-        istep: 0.1,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(maxiter)
+        .with_gtol(gtol)
+        .with_istep(0.1)
+        .with_maxmove(None)
 }
 
 fn run_dense(
@@ -804,9 +802,7 @@ fn benchmark_morse_newton_cg_campaign() {
                             ("dogleg", Method::Dogleg),
                             (
                                 "newton",
-                                Method::Newton {
-                                    kind: NewtonKind::Shifted,
-                                },
+                                Method::newton(NewtonKind::Shifted),
                             ),
                         ] {
                             let run = run_dense(method, coords, cap, gtol, 60, fg, hs);
@@ -906,20 +902,17 @@ fn benchmark_lj38_newton_cg_campaign() {
     let gtol = 1e-2;
     let workers = worker_count(starts.len());
     let chunk = starts.len().div_ceil(workers);
-    let parts: Vec<Vec<(bool, usize, usize, usize)>> =
-        std::thread::scope(|scope| {
-            let mut handles = Vec::new();
-            for group in starts.chunks(chunk) {
-                handles.push(scope.spawn(move || {
+    let parts: Vec<Vec<(bool, usize, usize, usize)>> = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for group in starts.chunks(chunk) {
+            handles.push(scope.spawn(move || {
                 let mut rows = Vec::new();
                 for (name, coords, _) in group {
                     let dim = coords.len();
                     let mut three = Vec::new();
                     for (method_name, method) in [
                         ("dogleg", Method::Dogleg),
-                        ("newton", Method::Newton {
-                            kind: NewtonKind::Shifted,
-                        }),
+                        ("newton", Method::newton(NewtonKind::Shifted)),
                     ] {
                         let run = run_dense(
                             method,
@@ -962,12 +955,12 @@ fn benchmark_lj38_newton_cg_campaign() {
                 }
                 rows
             }));
-            }
-            handles
-                .into_iter()
-                .flat_map(|handle| handle.join().expect("lj worker"))
-                .collect()
-        });
+        }
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("lj worker"))
+            .collect()
+    });
     let mut summaries = Vec::new();
     for (index, label) in [
         "lj38 dogleg cap 0.2",

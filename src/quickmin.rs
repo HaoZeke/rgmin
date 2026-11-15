@@ -285,6 +285,13 @@ pub struct QuickMinOptions {
     pub curvature_cap: Option<f64>,
 }
 
+with_setters!(QuickMinOptions {
+    with_adapt_dt => adapt_dt: val bool,
+    with_rescale_on_clamp => rescale_on_clamp: val bool,
+    with_per_atom => per_atom: val bool,
+    with_curvature_cap => curvature_cap: opt f64,
+});
+
 impl QuickMinOptions {
     /// The session default: FIRE time-step control, the capped-step
     /// velocity rescale, one projection over the atoms.

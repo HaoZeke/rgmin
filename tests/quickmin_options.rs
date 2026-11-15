@@ -54,12 +54,10 @@ impl DifferentiableObjective<f64> for Quad {
 }
 
 fn session(options: QuickMinOptions, istep: f64, dim: usize) -> Solver {
-    let control = Control {
-        maxiter: 1,
-        gtol: 0.0,
-        istep,
-        ..Control::default()
-    };
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(0.0)
+        .with_istep(istep);
     let mut solver = Solver::new(Method::QuickMin, control, dim);
     solver.set_quickmin_options(options);
     solver

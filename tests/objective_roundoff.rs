@@ -52,11 +52,7 @@ impl DifferentiableObjective<f64> for NoisyBowl {
     }
 }
 fn wolfe() -> LineSearch {
-    LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 20,
-    }
+    LineSearch::wolfe(1e-4, 0.9, 20)
 }
 fn options() -> LineSearchOptions {
     LineSearchOptions::with_objective_roundoff(1e-8).unwrap()
@@ -64,11 +60,7 @@ fn options() -> LineSearchOptions {
 fn solver(slack: Option<f64>) -> Solver {
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            gtol: 1e-10,
-            ftol_rel: slack,
-            ..Control::default()
-        },
+        Control::default().with_gtol(1e-10).with_ftol_rel(slack),
         1,
     );
     // The window belongs to the strong Wolfe search. The default step is

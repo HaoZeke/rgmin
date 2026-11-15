@@ -210,18 +210,14 @@ fn time_session(x0: &Array1<f64>, capped: bool, tol: f64, fg: &Force) -> Row {
             calls.fetch_add(1, Ordering::Relaxed);
             fg(x)
         });
-        let control = Control {
-            maxiter: BUDGET,
-            gtol: tol,
-            istep: CAP,
-            stop_norm: StopNorm::MaxAtom,
-            ..Control::default()
-        };
-        let mut solver = Solver::new(Method::Lbfgs { memory: 20 }, control, x0.len());
+        let control = Control::default()
+            .with_maxiter(BUDGET)
+            .with_gtol(tol)
+            .with_istep(CAP)
+            .with_stop_norm(StopNorm::MaxAtom);
+        let mut solver = Solver::new(Method::lbfgs_with_memory(20), control, x0.len());
         if capped {
-            solver
-                .set_lbfgs_step(LbfgsStep::Capped { max_atom: CAP })
-                .unwrap();
+            solver.set_lbfgs_step(LbfgsStep::capped(CAP)).unwrap();
         } else {
             solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
             solver.set_atom_maxmove(CAP);

@@ -26,13 +26,11 @@ fn well_h(x: ArrayView1<f64>) -> Array2<f64> {
 }
 
 fn control(gtol: f64) -> Control {
-    Control {
-        maxiter: 80,
-        gtol,
-        istep: 0.2,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(80)
+        .with_gtol(gtol)
+        .with_istep(0.2)
+        .with_maxmove(None)
 }
 
 #[test]
@@ -78,12 +76,7 @@ fn dogleg_and_newton_leave_a_saddle() {
     let gtol = 1e-8;
     let methods = [
         ("dogleg", Method::Dogleg),
-        (
-            "newton",
-            Method::Newton {
-                kind: NewtonKind::Shifted,
-            },
-        ),
+        ("newton", Method::newton(NewtonKind::Shifted)),
     ];
     for (name, method) in methods {
         let mut solver = Solver::new(method, control(gtol), 2);

@@ -3,15 +3,14 @@ use ndarray::{Array1, array};
 use rgmin::{Control, Method, Solver};
 
 fn control() -> Control {
-    Control {
-        maxiter: 80,
-        gtol: 1e-8,
-        istep: 0.1,
-        maxmove: None,
-        stop_norm: rgmin::StopNorm::Two,
-        ftol_rel: None,
-        noise_floor: None,
-    }
+    Control::default()
+        .with_maxiter(80)
+        .with_gtol(1e-8)
+        .with_istep(0.1)
+        .with_maxmove(None)
+        .with_stop_norm(rgmin::StopNorm::Two)
+        .with_ftol_rel(None)
+        .with_noise_floor(None)
 }
 
 #[test]
@@ -115,15 +114,14 @@ fn oblique_session_stays_on_product_of_spheres() {
     let mut x = array![s, s, 0.0, 0.0, s, s];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 30,
-            gtol: 1e-8,
-            istep: 0.2,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(30)
+            .with_gtol(1e-8)
+            .with_istep(0.2)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         6,
     );
     solver.set_manifold(ManifoldKind::oblique(3, 2));
@@ -175,15 +173,14 @@ fn multinomial_session_stays_on_the_simplex() {
     let mut x = array![0.2, 0.3, 0.5];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         3,
     );
     solver.set_manifold(ManifoldKind::Multinomial);
@@ -251,15 +248,14 @@ fn multinomial_ds_session_stays_doubly_stochastic() {
     let mut x = array![0.5, 0.5, 0.5, 0.5];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         4,
     );
     solver.set_multinomial_ds(2);
@@ -333,15 +329,14 @@ fn multinomial_sym_session_stays_symmetric_doubly_stochastic() {
     let mut x = array![0.5, 0.5, 0.5, 0.5];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         4,
     );
     solver.set_multinomial_sym(2);
@@ -416,15 +411,14 @@ fn sphere_complex_session_stays_on_the_set() {
     let mut x = array![1.0, 0.0, 0.0, 0.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         4,
     );
     solver.set_sphere_complex(2);
@@ -476,15 +470,14 @@ fn positive_session_stays_on_the_set() {
     let mut x = array![2.0, 0.5, 4.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         3,
     );
     solver.set_positive(3);
@@ -547,15 +540,14 @@ fn centered_matrix_session_stays_on_the_set() {
     let mut x = array![1.0, -1.0, 2.0, -2.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         4,
     );
     solver.set_centered_matrix(2, 2, false);
@@ -664,15 +656,14 @@ fn complex_circle_session_stays_on_the_set() {
     let mut x = array![0.0, 1.0, -1.0, 0.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.2,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.2)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         4,
     );
     solver.set_manifold(ManifoldKind::complex_circle(2));
@@ -745,15 +736,14 @@ fn symmetric_session_stays_on_the_set() {
     let mut x = array![2.0, 0.4, -0.1, -1.5];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         4,
     );
     solver.set_manifold(ManifoldKind::Symmetric);
@@ -825,15 +815,14 @@ fn skewsymmetric_session_stays_on_the_set() {
     let mut x = array![0.2, 0.4, -0.1, 0.3];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         4,
     );
     solver.set_manifold(ManifoldKind::SkewSymmetric);
@@ -888,15 +877,14 @@ fn euclidean_complex_session_stays_on_the_set() {
     let mut x = array![2.0, 1.0, -1.0, 3.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         4,
     );
     solver.set_manifold(ManifoldKind::euclidean_complex(2));
@@ -975,15 +963,14 @@ fn constant_session_stays_on_the_set() {
     let mut x = start.clone();
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.1,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.1)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         3,
     );
     solver.set_manifold(ManifoldKind::constant(3));
@@ -1080,15 +1067,14 @@ fn grassmann_session_stays_on_gr_4_2() {
     let mut x = array![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 25,
-            gtol: 1e-10,
-            istep: 0.15,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(25)
+            .with_gtol(1e-10)
+            .with_istep(0.15)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         8,
     );
     solver.set_manifold(ManifoldKind::Grassmann);
@@ -1171,15 +1157,14 @@ fn hyperbolic_session_stays_on_the_hyperboloid() {
     let mut x = pack_h((2.0_f64).sqrt(), array![1.0, 0.0].view());
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 40,
-            gtol: 1e-8,
-            istep: 0.2,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(40)
+            .with_gtol(1e-8)
+            .with_istep(0.2)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         3,
     );
     solver.set_manifold(ManifoldKind::Hyperbolic);
@@ -1233,15 +1218,14 @@ fn poincare_session_stays_inside_the_open_ball() {
     let mut x = array![0.1, 0.0, 0.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 40,
-            gtol: 1e-12,
-            istep: 0.4,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(40)
+            .with_gtol(1e-12)
+            .with_istep(0.4)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         3,
     );
     solver.set_manifold(ManifoldKind::PoincareBall);
@@ -1299,15 +1283,14 @@ fn unitary_session_stays_on_the_set() {
     let mut x = array![s, 0.0, s, 0.0, 0.0, s, 0.0, -s];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.2,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.2)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         8,
     );
     solver.set_manifold(ManifoldKind::unitary(2));

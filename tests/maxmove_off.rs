@@ -95,24 +95,14 @@ fn methods() -> Vec<(Method, Oracle)> {
         (Method::Sr2, Oracle::Gradient),
         (Method::adam(), Oracle::Gradient),
         (Method::Steepest, Oracle::Gradient),
-        (Method::Fire { kind: FireKind::V1 }, Oracle::Gradient),
-        (Method::Fire { kind: FireKind::V2 }, Oracle::Gradient),
+        (Method::fire(FireKind::V1), Oracle::Gradient),
+        (Method::fire(FireKind::V2), Oracle::Gradient),
         (Method::Bb, Oracle::Gradient),
         (Method::QuickMin, Oracle::Gradient),
         (Method::Ode12r, Oracle::Gradient),
         (Method::diis(), Oracle::Gradient),
-        (
-            Method::Newton {
-                kind: NewtonKind::Shifted,
-            },
-            Oracle::Hessian,
-        ),
-        (
-            Method::Newton {
-                kind: NewtonKind::Rfo,
-            },
-            Oracle::Hessian,
-        ),
+        (Method::newton(NewtonKind::Shifted), Oracle::Hessian),
+        (Method::newton(NewtonKind::Rfo), Oracle::Hessian),
         (Method::Dogleg, Oracle::Hessian),
         (Method::NewtonCg, Oracle::Product),
         (Method::NewtonPcg, Oracle::Product),
@@ -120,12 +110,10 @@ fn methods() -> Vec<(Method, Oracle)> {
 }
 
 fn control(maxmove: Option<f64>) -> Control {
-    Control {
-        maxiter: 6,
-        gtol: 1e-14,
-        maxmove,
-        ..Control::default()
-    }
+    Control::default()
+        .with_maxiter(6)
+        .with_gtol(1e-14)
+        .with_maxmove(maxmove)
 }
 
 type Setup<'a> = &'a dyn Fn(&mut Solver);
@@ -173,10 +161,7 @@ fn assert_uncapped(
     start: &Array1<f64>,
     setup: Setup,
 ) {
-    let with = |maxmove| Control {
-        maxmove,
-        ..base.clone()
-    };
+    let with = |maxmove| base.clone().with_maxmove(maxmove);
     for (caps, atom_off) in [(KEEPS_DEFAULTS, false), (ALL_OFF, true)] {
         let free = trajectory(method, oracle, with(None), start, setup, atom_off);
         for cap in caps {
@@ -246,7 +231,7 @@ fn a_session_runs_uncapped_under_a_non_binding_maxmove() {
 fn the_session_variants_run_uncapped_under_a_non_binding_maxmove() {
     let x0 = start();
     let plain = control(None);
-    let fire2 = Method::Fire { kind: FireKind::V2 };
+    let fire2 = Method::fire(FireKind::V2);
     assert_uncapped("abc", &fire2, Oracle::Gradient, &plain, &x0, &|s| {
         s.set_fire_abc(true).unwrap()
     });
@@ -255,11 +240,7 @@ fn the_session_variants_run_uncapped_under_a_non_binding_maxmove() {
     assert_uncapped("wolfe", &lbfgs, Oracle::Gradient, &plain, &x0, &|s| {
         s.set_lbfgs_step(LbfgsStep::Wolfe).unwrap()
     });
-    let wolfe = LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 20,
-    };
+    let wolfe = LineSearch::wolfe(1e-4, 0.9, 20);
     for method in [
         Method::lbfgs(),
         Method::Steepest,
@@ -275,11 +256,10 @@ fn the_session_variants_run_uncapped_under_a_non_binding_maxmove() {
             &|s| s.set_linesearch(wolfe),
         );
     }
-    let noisy = Control {
-        noise_floor: Some(NoiseFloor::new(1e-3)),
-        ftol_rel: Some(1e-6),
-        ..plain.clone()
-    };
+    let noisy = plain
+        .clone()
+        .with_noise_floor(NoiseFloor::new(1e-3))
+        .with_ftol_rel(1e-6);
     for (method, oracle) in methods() {
         assert_uncapped("noise floor", &method, oracle, &noisy, &x0, &|_| {});
     }
@@ -292,7 +272,7 @@ fn a_manifold_session_runs_uncapped_under_a_non_binding_maxmove() {
         Method::lbfgs(),
         Method::Steepest,
         Method::polak_ribiere_plus(),
-        Method::Fire { kind: FireKind::V1 },
+        Method::fire(FireKind::V1),
         Method::Bfgs,
     ] {
         for accept in [Accept::None, Accept::Energy, Accept::Step] {
@@ -318,8 +298,8 @@ fn a_filled_run_is_uncapped_under_a_non_binding_maxmove() {
         Bowl.eval(x)
     };
     let methods = [
-        Method::Fire { kind: FireKind::V1 },
-        Method::Fire { kind: FireKind::V2 },
+        Method::fire(FireKind::V1),
+        Method::fire(FireKind::V2),
         Method::lbfgs(),
         Method::QuickMin,
         Method::Steepest,
@@ -419,12 +399,10 @@ fn eon_cg_runs_uncapped_under_a_non_binding_max_move() {
     };
     let run = |max_move| {
         let mut x = start().to_vec();
-        let opts = EonCg {
-            max_move,
-            max_iter: 6,
-            gtol: 1e-14,
-            ..EonCg::default()
-        };
+        let opts = EonCg::default()
+            .with_max_move(max_move)
+            .with_max_iter(6)
+            .with_gtol(1e-14);
         let report = minimize_eon_cg(&mut x, fill, &opts);
         format!("{x:?} {:?} {}", report.energy, report.evals)
     };
@@ -435,11 +413,7 @@ fn eon_cg_runs_uncapped_under_a_non_binding_max_move() {
     let near = start() * 0.05;
     let mut x = near.to_vec();
     let f0 = Bowl.eval(near.view());
-    let opts = EonCg {
-        max_move: -1.0,
-        max_iter: 1,
-        ..EonCg::default()
-    };
+    let opts = EonCg::default().with_max_move(-1.0).with_max_iter(1);
     let report = minimize_eon_cg(&mut x, fill, &opts);
     assert!(
         report.energy < f0,
@@ -480,7 +454,7 @@ fn a_constrained_session_runs_uncapped_under_a_non_binding_maxmove() {
     );
     for (method, oracle) in [
         (Method::Steepest, Oracle::Gradient),
-        (Method::Fire { kind: FireKind::V1 }, Oracle::Gradient),
+        (Method::fire(FireKind::V1), Oracle::Gradient),
         (Method::QuickMin, Oracle::Gradient),
         (Method::Bfgs, Oracle::Gradient),
         (Method::lbfgs(), Oracle::Gradient),

@@ -26,15 +26,10 @@ fn quad(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
 #[test]
 fn ipm_equality_projection_holds() {
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.0)],
-        ..HighsStep::default()
-    });
-    opt.highs_options = rgmin::HighsOptions {
-        solver: rgmin::HighsSolverKind::Ipm,
-        crossover: rgmin::HighsCrossover::Off,
-        ..rgmin::HighsOptions::default()
-    };
+    opt.highs = Some(HighsStep::default().with_equalities(vec![(vec![(0, 1.0), (1, 1.0)], 0.0)]));
+    opt.highs_options = rgmin::HighsOptions::default()
+        .with_solver(rgmin::HighsSolverKind::Ipm)
+        .with_crossover(rgmin::HighsCrossover::Off);
     let x0 = Array1::from(vec![1.0, -0.5, 0.25, 0.0]);
     let g0 = quad(x0.view()).1;
     let p = opt.highs_step(x0.view(), g0.view()).unwrap();
@@ -139,15 +134,10 @@ fn dest_ipm_matches_scipy_trust_constr() {
     let x0 = Array1::from(vec![1.0, -0.5, 0.25, 0.0]);
     let g0 = quad(x0.view()).1;
     let mut dest = Lbfgs::default();
-    dest.highs = Some(HighsStep {
-        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.0)],
-        ..HighsStep::default()
-    });
-    dest.highs_options = rgmin::HighsOptions {
-        solver: rgmin::HighsSolverKind::Ipm,
-        crossover: rgmin::HighsCrossover::Off,
-        ..rgmin::HighsOptions::default()
-    };
+    dest.highs = Some(HighsStep::default().with_equalities(vec![(vec![(0, 1.0), (1, 1.0)], 0.0)]));
+    dest.highs_options = rgmin::HighsOptions::default()
+        .with_solver(rgmin::HighsSolverKind::Ipm)
+        .with_crossover(rgmin::HighsCrossover::Off);
     let p_dest = dest.highs_step(x0.view(), g0.view()).unwrap();
     let d = dest.two_loop(g0.view());
     let payload = format!(
@@ -171,17 +161,15 @@ fn dest_ipm_box_equality_matches_scipy() {
     let x = Array1::from(vec![0.0, 0.0, 0.0]);
     let g = Array1::from(vec![2.0, -1.0, 0.5]);
     let mut dest = Lbfgs::default();
-    dest.highs = Some(HighsStep {
-        lo: Some(-0.2),
-        hi: Some(0.2),
-        equalities: vec![(vec![(0, 1.0), (1, 1.0), (2, 1.0)], 0.0)],
-        ..HighsStep::default()
-    });
-    dest.highs_options = rgmin::HighsOptions {
-        solver: rgmin::HighsSolverKind::Ipm,
-        crossover: rgmin::HighsCrossover::Off,
-        ..rgmin::HighsOptions::default()
-    };
+    dest.highs = Some(
+        HighsStep::default()
+            .with_lo(-0.2)
+            .with_hi(0.2)
+            .with_equalities(vec![(vec![(0, 1.0), (1, 1.0), (2, 1.0)], 0.0)]),
+    );
+    dest.highs_options = rgmin::HighsOptions::default()
+        .with_solver(rgmin::HighsSolverKind::Ipm)
+        .with_crossover(rgmin::HighsCrossover::Off);
     let p_dest = rgmin::lbfgs_qp::highs_projected_step(
         &dest.two_loop(g.view()),
         x.view(),
@@ -231,19 +219,15 @@ fn highs_callback_fires_on_ipm_equality() {
         n: std::sync::atomic::AtomicU32::new(0),
     };
     let mut dest = Lbfgs::default();
-    dest.highs = Some(HighsStep {
-        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.0)],
-        ..HighsStep::default()
-    });
+    dest.highs = Some(HighsStep::default().with_equalities(vec![(vec![(0, 1.0), (1, 1.0)], 0.0)]));
     let x0 = Array1::from(vec![1.0, -0.5, 0.25, 0.0]);
     let g0 = quad(x0.view()).1;
-    dest.highs_options = rgmin::HighsOptions {
-        solver: rgmin::HighsSolverKind::Ipm,
-        crossover: rgmin::HighsCrossover::Off,
-        callback: Some(unsafe {
+    dest.highs_options = rgmin::HighsOptions::default()
+        .with_solver(rgmin::HighsSolverKind::Ipm)
+        .with_crossover(rgmin::HighsCrossover::Off)
+        .with_callback(unsafe {
             rgmin::HighsCallback::new(count_highs_cb, (&hits as *const CbHits).cast_mut().cast())
-        }),
-    };
+        });
     let p = dest.highs_step(x0.view(), g0.view()).unwrap();
     assert!(p.iter().all(|v| v.is_finite()));
     assert!(
@@ -344,10 +328,7 @@ fn exact_projection_respects_packed_center_and_zero_radius() {
     let d = array![1.0, 3.0];
     let x = array![0.0, 0.0];
     let options = rgmin::HighsOptions::default();
-    let mut constraints = HighsStep {
-        center_axes: Some((2, 1)),
-        ..HighsStep::default()
-    };
+    let mut constraints = HighsStep::default().with_center_axes((2, 1));
     let p = rgmin::lbfgs_qp::highs_projected_step(&d, x.view(), &constraints, &options).unwrap();
     assert!(
         (p[0] + 1.0).abs() < 1e-7 && (p[1] - 1.0).abs() < 1e-7,

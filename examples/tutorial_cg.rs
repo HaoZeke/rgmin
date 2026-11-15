@@ -6,11 +6,7 @@ use rgmin::{EonCg, minimize_eon_cg};
 
 fn main() {
     let mut x = vec![1.0, -2.0, 0.5];
-    let opts = EonCg {
-        gtol: 1e-8,
-        max_iter: 200,
-        ..EonCg::default()
-    };
+    let opts = EonCg::default().with_gtol(1e-8).with_max_iter(200);
     let report = minimize_eon_cg(
         &mut x,
         |xs, gs| {

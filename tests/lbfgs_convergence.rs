@@ -42,13 +42,11 @@ impl DifferentiableObjective<f64> for OffsetBowl {
 fn lbfgs_energy_acceptance_converges_below_energy_resolution() {
     let obj = OffsetBowl;
     for mut x in [array![3.0, -4.0], array![8e-9, 1.0 - 6e-9]] {
-        let ctrl = Control {
-            maxiter: 200,
-            gtol: 1e-12,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        };
+        let ctrl = Control::default()
+            .with_maxiter(200)
+            .with_gtol(1e-12)
+            .with_istep(1.0)
+            .with_maxmove(None);
         let mut solver = Solver::new(Method::lbfgs(), ctrl, 2);
         solver.set_accept(Accept::Energy);
         let mut report = solver.step(&obj, &mut x).unwrap();
@@ -84,11 +82,7 @@ fn stateful_step_discards_curvature_when_its_line_search_cannot_move() {
         &mut value,
         &mut gradient,
         &mut step,
-        LineSearch::Backtracking {
-            c: 1e-4,
-            beta: 0.5,
-            maxiter: 20,
-        },
+        LineSearch::backtracking(1e-4, 0.5, 20),
         &Control::default(),
         None,
     );

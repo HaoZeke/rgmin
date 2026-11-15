@@ -115,6 +115,7 @@ pub struct Ghost {
 /// `c_stab` defaults to `0.1` eV/Å². `r_cut` `None` keeps a pair whose
 /// Lindh weight is at least `1e-3`. `angles` defaults on. `dihedrals`
 /// defaults off.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct LindhParams {
     /// Diagonal shift, eV/Å². Must be positive.
@@ -133,6 +134,16 @@ pub struct LindhParams {
     /// Reestimate `μ` whenever the matrix is rebuilt.
     pub recalc_mu: bool,
 }
+
+with_setters!(LindhParams {
+    with_c_stab => c_stab: val f64,
+    with_r_cut => r_cut: opt f64,
+    with_angles => angles: val bool,
+    with_dihedrals => dihedrals: val bool,
+    with_lengths => lengths: opt [f64; 3],
+    with_mu => mu: opt f64,
+    with_recalc_mu => recalc_mu: val bool,
+});
 
 impl Default for LindhParams {
     fn default() -> Self {

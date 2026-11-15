@@ -15,11 +15,7 @@ fn main() {
     let report = minimize_scg(
         &obj,
         array![0.0, 0.0],
-        &Control {
-            maxiter: 40,
-            gtol: 1e-8,
-            ..Control::default()
-        },
+        &Control::default().with_maxiter(40).with_gtol(1e-8),
         &ScgParams::default(),
         Conjugacy::PolakRibiere,
         Restart::Never,

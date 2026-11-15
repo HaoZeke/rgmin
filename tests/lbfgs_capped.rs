@@ -15,17 +15,13 @@ fn quadratic(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
 }
 
 fn session(scaled: bool) -> Solver {
-    let control = Control {
-        maxiter: 20,
-        gtol: 1e-12,
-        istep: 1.0,
-        ..Control::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: 8 }, control, 3);
+    let control = Control::default()
+        .with_maxiter(20)
+        .with_gtol(1e-12)
+        .with_istep(1.0);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(8), control, 3);
     if scaled {
-        solver
-            .set_lbfgs_step(LbfgsStep::Scaled { max_atom: 0.2 })
-            .unwrap();
+        solver.set_lbfgs_step(LbfgsStep::scaled(0.2)).unwrap();
     } else {
         solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
         solver.set_atom_maxmove(0.2);
@@ -86,19 +82,15 @@ fn a_scaled_session_step_costs_one_evaluation() {
 
 #[test]
 fn the_capped_step_is_refused_off_an_lbfgs_session() {
-    let mut solver = Solver::new(Method::Fire { kind: FireKind::V1 }, Control::default(), 2);
-    let err = solver
-        .set_lbfgs_step(LbfgsStep::Capped { max_atom: 0.2 })
-        .unwrap_err();
+    let mut solver = Solver::new(Method::fire(FireKind::V1), Control::default(), 2);
+    let err = solver.set_lbfgs_step(LbfgsStep::capped(0.2)).unwrap_err();
     assert!(err.to_string().contains("L-BFGS"), "{err}");
 }
 
 #[test]
 fn a_non_positive_cap_restores_the_eon_default() {
     let mut solver = session(true);
-    solver
-        .set_lbfgs_step(LbfgsStep::Capped { max_atom: 0.0 })
-        .unwrap();
+    solver.set_lbfgs_step(LbfgsStep::capped(0.0)).unwrap();
     assert_eq!(solver.lbfgs_step(), LbfgsStep::default());
 }
 
@@ -112,11 +104,8 @@ fn the_default_session_probes_then_moves_by_the_eon_cap() {
         calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         quadratic(x)
     });
-    let control = Control {
-        gtol: 1e-12,
-        ..Control::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: 8 }, control, 3);
+    let control = Control::default().with_gtol(1e-12);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(8), control, 3);
     assert_eq!(solver.lbfgs_step(), LbfgsStep::default());
     let mut x = array![1.0, 0.0, 0.0];
     solver.step(&obj, &mut x).unwrap();
@@ -138,17 +127,13 @@ fn the_default_session_probes_then_moves_by_the_eon_cap() {
 fn run_fill_matches_the_eon_rosenbrock2_count() {
     let mut calls = 0usize;
     let mut x = array![-1.2, 1.0];
-    let control = Control {
-        maxiter: 20_000,
-        gtol: 1e-5,
-        istep: 1.0,
-        stop_norm: rgmin::StopNorm::Inf,
-        ..Control::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: 20 }, control, 2);
-    solver
-        .set_lbfgs_step(LbfgsStep::Capped { max_atom: 0.2 })
-        .unwrap();
+    let control = Control::default()
+        .with_maxiter(20_000)
+        .with_gtol(1e-5)
+        .with_istep(1.0)
+        .with_stop_norm(rgmin::StopNorm::Inf);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(20), control, 2);
+    solver.set_lbfgs_step(LbfgsStep::capped(0.2)).unwrap();
     let rep = solver
         .run_fill(&mut x, |x, g| {
             calls += 1;

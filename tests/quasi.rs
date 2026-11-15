@@ -7,20 +7,15 @@ use ndarray::array;
 use rgmin::{Control, LineSearch, Method, minimize_method};
 
 fn control() -> Control {
-    Control {
-        maxiter: 200,
-        gtol: 1e-8,
-        istep: 0.1,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(200)
+        .with_gtol(1e-8)
+        .with_istep(0.1)
+        .with_maxmove(None)
 }
 
 fn brent() -> LineSearch {
-    LineSearch::Brent {
-        maxiter: 40,
-        tol: 1e-12,
-    }
+    LineSearch::brent(40, 1e-12)
 }
 
 fn f0() -> f64 {
@@ -101,11 +96,7 @@ fn adam_and_steepest_descend() {
 }
 
 fn backtracking() -> LineSearch {
-    LineSearch::Backtracking {
-        c: 1e-4,
-        beta: 0.5,
-        maxiter: 40,
-    }
+    LineSearch::backtracking(1e-4, 0.5, 40)
 }
 
 /// A line search that only shrinks must not shrink the opening step of a
@@ -121,7 +112,7 @@ fn lbfgs_under_backtracking_opens_every_search_at_istep() {
         &obj,
         array![-1.2, 1.0],
         &c,
-        Method::Lbfgs { memory: 10 },
+        Method::lbfgs_with_memory(10),
         backtracking(),
     )
     .unwrap();

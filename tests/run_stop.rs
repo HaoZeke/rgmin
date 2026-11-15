@@ -29,17 +29,13 @@ fn a_spent_budget_is_budget_not_iterating() {
         Method::Sr1,
         Method::Steepest,
         Method::adam(),
-        Method::Fire { kind: FireKind::V1 },
+        Method::fire(FireKind::V1),
         Method::Bb,
         Method::QuickMin,
         Method::diis(),
         Method::NewtonCg,
     ] {
-        let control = Control {
-            maxiter: 3,
-            gtol: 1e-10,
-            ..Control::default()
-        };
+        let control = Control::default().with_maxiter(3).with_gtol(1e-10);
         let mut solver = Solver::new(method.clone(), control, 2);
         let mut x = array![-1.2, 1.0];
         let report = solver.run(&rosenbrock(), &mut x).unwrap();
@@ -62,12 +58,10 @@ fn a_run_stops_on_the_energy_noise_floor_a_step_reports() {
         Method::adam(),
         Method::diis(),
     ] {
-        let control = Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            noise_floor: Some(NoiseFloor::new(0.0).with_eps_f(1.0)),
-            ..Control::default()
-        };
+        let control = Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_noise_floor(NoiseFloor::new(0.0).with_eps_f(1.0));
         let mut probe = Solver::new(method.clone(), control.clone(), 1);
         let mut x = array![0.5];
         assert_eq!(
@@ -89,12 +83,10 @@ fn a_run_stops_on_the_energy_noise_floor_a_step_reports() {
 #[test]
 fn a_session_one_shot_stops_on_the_energy_noise_floor() {
     let quad = Oracle::unbounded(1, |x: ArrayView1<f64>| (0.5 * x[0] * x[0], array![x[0]]));
-    let control = Control {
-        maxiter: 20,
-        gtol: 1e-8,
-        noise_floor: Some(NoiseFloor::new(0.0).with_eps_f(1.0)),
-        ..Control::default()
-    };
+    let control = Control::default()
+        .with_maxiter(20)
+        .with_gtol(1e-8)
+        .with_noise_floor(NoiseFloor::new(0.0).with_eps_f(1.0));
     let report = minimize_method(
         &quad,
         array![0.5],

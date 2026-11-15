@@ -81,6 +81,7 @@ impl NoiseFlag {
 }
 
 /// Noise level, the per-order estimates, and the flag.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct NoiseEstimate {
     /// Accepted `σ_k`, the declared value, or 0 when the flag is a refusal.
@@ -332,6 +333,7 @@ where
 }
 
 /// [`ecnoise`] on the energy and on one projection, from one stencil.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValueGradientNoise {
     /// Noise of `f` along the stencil.

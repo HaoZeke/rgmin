@@ -25,14 +25,12 @@ struct Session {
 }
 
 fn control(dt: f64) -> Control {
-    Control {
-        maxiter: 1_000_000,
-        gtol: 1e-12,
-        istep: if dt.is_finite() && dt > 0.0 { dt } else { 1.0 },
-        maxmove: None,
-        stop_norm: StopNorm::MaxAtom,
-        ..Control::default()
-    }
+    Control::default()
+        .with_maxiter(1_000_000)
+        .with_gtol(1e-12)
+        .with_istep(if dt.is_finite() && dt > 0.0 { dt } else { 1.0 })
+        .with_maxmove(None)
+        .with_stop_norm(StopNorm::MaxAtom)
 }
 
 #[pymethods]
@@ -76,12 +74,10 @@ impl Session {
             return Err(PyValueError::new_err("dimension must be positive"));
         }
         let method = match kind {
-            "lbfgs" => Method::Lbfgs {
-                memory: memory.max(1),
-            },
+            "lbfgs" => Method::lbfgs_with_memory(memory.max(1)),
             "bfgs" => Method::Bfgs,
-            "fire" => Method::Fire { kind: FireKind::V1 },
-            "fire2" => Method::Fire { kind: FireKind::V2 },
+            "fire" => Method::fire(FireKind::V1),
+            "fire2" => Method::fire(FireKind::V2),
             "cg" => Method::polak_ribiere_plus(),
             other => {
                 return Err(PyValueError::new_err(format!("unknown method {other}")));
@@ -94,9 +90,9 @@ impl Session {
                 let step = if wolfe {
                     LbfgsStep::Wolfe
                 } else if eon_cap {
-                    LbfgsStep::Capped { max_atom }
+                    LbfgsStep::capped(max_atom)
                 } else {
-                    LbfgsStep::Scaled { max_atom }
+                    LbfgsStep::scaled(max_atom)
                 };
                 solver
                     .set_lbfgs_step(step)
@@ -118,11 +114,7 @@ impl Session {
                     solver.set_accept(Accept::Energy);
                 }
             }
-            "cg" => solver.set_linesearch(LineSearch::Wolfe {
-                c1: 1e-4,
-                c2: 0.1,
-                maxiter: 20,
-            }),
+            "cg" => solver.set_linesearch(LineSearch::wolfe(1e-4, 0.1, 20)),
             _ => {}
         }
         if max_atom.is_finite() && max_atom > 0.0 {
@@ -207,18 +199,10 @@ impl LineSearchPy {
             ));
         }
         let rule = match kind {
-            "brent" => LineSearch::Brent { maxiter, tol },
-            "backtracking" => LineSearch::Backtracking {
-                c: c1,
-                beta,
-                maxiter,
-            },
-            "goldstein" => LineSearch::Goldstein {
-                c: c1,
-                beta,
-                maxiter,
-            },
-            "wolfe" => LineSearch::Wolfe { c1, c2, maxiter },
+            "brent" => LineSearch::brent(maxiter, tol),
+            "backtracking" => LineSearch::backtracking(c1, beta, maxiter),
+            "goldstein" => LineSearch::goldstein(c1, beta, maxiter),
+            "wolfe" => LineSearch::wolfe(c1, c2, maxiter),
             _ => return Err(PyValueError::new_err(format!("unknown line search {kind}"))),
         };
         Ok(Self {

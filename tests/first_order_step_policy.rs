@@ -64,15 +64,14 @@ fn methods() -> Vec<Method> {
 fn solver(method: Method) -> Solver {
     let mut solver = Solver::new(
         method,
-        Control {
-            maxiter: 8,
-            gtol: 1e-12,
-            istep: 0.1,
-            maxmove: Some(0.05),
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(8)
+            .with_gtol(1e-12)
+            .with_istep(0.1)
+            .with_maxmove(0.05)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         2,
     );
     solver.set_accept(Accept::Step);

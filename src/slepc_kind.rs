@@ -74,6 +74,7 @@ impl SlepcPmat {
 }
 
 /// Typed SLEPc extras. Ignored unless the backend is SLEPc.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlepcParams {
     /// `STSetType` token.
@@ -82,6 +83,11 @@ pub struct SlepcParams {
     /// on the Hessian MatShell alone.
     pub pmat: Option<SlepcPmat>,
 }
+
+with_setters!(SlepcParams {
+    with_st => st: val SlepcStKind,
+    with_pmat => pmat: opt SlepcPmat,
+});
 
 impl Default for SlepcParams {
     fn default() -> Self {

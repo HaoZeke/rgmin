@@ -77,12 +77,13 @@ fn main() {
     println!("# boxed quadratic n=8, lo=0 hi=0.5 (true min is 0, outside the box)");
     run("two-loop (no box)", searched(), q0.view(), quad);
     let mut h = searched();
-    h.highs = Some(HighsStep {
-        trust: None,
-        lo: Some(0.0),
-        hi: Some(0.5),
-        equalities: Vec::new(),
-        center_axes: None,
-    });
+    h.highs = Some(
+        HighsStep::default()
+            .with_trust(None)
+            .with_lo(0.0)
+            .with_hi(0.5)
+            .with_equalities(Vec::new())
+            .with_center_axes(None),
+    );
     run("highs-qp box[0,0.5]", h, q0.view(), quad);
 }

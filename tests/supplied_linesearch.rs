@@ -108,11 +108,7 @@ fn same(
 #[test]
 fn wolfe_matches_on_the_quadratic() {
     same(
-        LineSearch::Wolfe {
-            c1: 1e-4,
-            c2: 0.9,
-            maxiter: 20,
-        },
+        LineSearch::wolfe(1e-4, 0.9, 20),
         array![0.0],
         array![1.0],
         0.25,
@@ -123,11 +119,7 @@ fn wolfe_matches_on_the_quadratic() {
 #[test]
 fn backtracking_matches_when_the_first_trial_is_too_long() {
     same(
-        LineSearch::Backtracking {
-            c: 1e-4,
-            beta: 0.5,
-            maxiter: 20,
-        },
+        LineSearch::backtracking(1e-4, 0.5, 20),
         array![0.0],
         array![1.0],
         8.0,
@@ -138,11 +130,7 @@ fn backtracking_matches_when_the_first_trial_is_too_long() {
 #[test]
 fn goldstein_matches_on_the_quadratic() {
     same(
-        LineSearch::Goldstein {
-            c: 0.1,
-            beta: 0.5,
-            maxiter: 20,
-        },
+        LineSearch::goldstein(0.1, 0.5, 20),
         array![0.0],
         array![1.0],
         4.0,
@@ -153,10 +141,7 @@ fn goldstein_matches_on_the_quadratic() {
 #[test]
 fn brent_matches_on_the_quadratic() {
     same(
-        LineSearch::Brent {
-            maxiter: 30,
-            tol: 1e-8,
-        },
+        LineSearch::brent(30, 1e-8),
         array![0.0],
         array![1.0],
         0.2,
@@ -169,17 +154,7 @@ fn wolfe_matches_rosenbrock_along_the_gradient() {
     let x0 = array![-1.2, 1.0];
     let (_, g) = rosen(x0.view());
     let dir = -g;
-    same(
-        LineSearch::Wolfe {
-            c1: 1e-4,
-            c2: 0.9,
-            maxiter: 16,
-        },
-        x0,
-        dir,
-        1.0,
-        rosen,
-    );
+    same(LineSearch::wolfe(1e-4, 0.9, 16), x0, dir, 1.0, rosen);
 }
 
 #[test]
@@ -199,10 +174,6 @@ fn a_short_gradient_does_not_panic() {
 
 #[test]
 fn an_uphill_direction_stays_put() {
-    let kind = LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 8,
-    };
+    let kind = LineSearch::wolfe(1e-4, 0.9, 8);
     same(kind, array![0.0], array![-1.0], 1.0, quad);
 }

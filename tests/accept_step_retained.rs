@@ -2,15 +2,14 @@ use ndarray::{Array1, array};
 use rgmin::{Control, Method, Solver};
 
 fn control() -> Control {
-    Control {
-        maxiter: 80,
-        gtol: 1e-8,
-        istep: 0.1,
-        maxmove: None,
-        stop_norm: rgmin::StopNorm::Two,
-        ftol_rel: None,
-        noise_floor: None,
-    }
+    Control::default()
+        .with_maxiter(80)
+        .with_gtol(1e-8)
+        .with_istep(0.1)
+        .with_maxmove(None)
+        .with_stop_norm(rgmin::StopNorm::Two)
+        .with_ftol_rel(None)
+        .with_noise_floor(None)
 }
 
 #[test]

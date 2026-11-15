@@ -54,15 +54,12 @@ fn coords() -> Array1<f64> {
 }
 
 fn host_report() -> Report {
-    Report {
-        value: ENERGY,
-        coords: coords(),
-        steps: 0,
-        grad_norm: 0.0,
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: Status::Iterating,
-    }
+    Report::new(ENERGY, coords())
+        .with_steps(0)
+        .with_grad_norm(0.0)
+        .with_stop_norm(StopNorm::Two)
+        .with_grad(None)
+        .with_status(Status::Iterating)
 }
 
 fn fixture() -> PathBuf {
@@ -342,23 +339,18 @@ impl DifferentiableObjective<f64> for Bowl {
 }
 
 fn control() -> Control {
-    Control {
-        maxiter: 80,
-        gtol: 1e-12,
-        istep: 1.0,
-        maxmove: None,
-        stop_norm: rgmin::StopNorm::Two,
-        ftol_rel: None,
-        noise_floor: None,
-    }
+    Control::default()
+        .with_maxiter(80)
+        .with_gtol(1e-12)
+        .with_istep(1.0)
+        .with_maxmove(None)
+        .with_stop_norm(rgmin::StopNorm::Two)
+        .with_ftol_rel(None)
+        .with_noise_floor(None)
 }
 
 fn wolfe() -> LineSearch {
-    LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 20,
-    }
+    LineSearch::wolfe(1e-4, 0.9, 20)
 }
 
 fn assert_same_report(uninterrupted: &Report, resumed: &Report) {
@@ -382,7 +374,7 @@ fn resumed_minimization_matches_uninterrupted() {
     assert_eq!(energy.unwrap().to_bits(), ENERGY.to_bits());
     assert_bits(from_file.as_slice().unwrap(), coords().as_slice().unwrap());
 
-    for method in [Method::Lbfgs { memory: 5 }, Method::Steepest] {
+    for method in [Method::lbfgs_with_memory(5), Method::Steepest] {
         let expect_tolerance = matches!(method, Method::Lbfgs { .. });
         let uninterrupted =
             minimize_method(&obj, coords(), &control(), method.clone(), wolfe()).unwrap();
@@ -399,20 +391,17 @@ fn resumed_minimization_matches_uninterrupted() {
 fn checkpoint_of_an_accepted_point_matches_the_in_memory_vector() {
     let obj = Bowl::new(coords().len());
     let mut live = coords();
-    let mut solver = Solver::new(Method::Lbfgs { memory: 5 }, control(), live.len());
+    let mut solver = Solver::new(Method::lbfgs_with_memory(5), control(), live.len());
     for _ in 0..3 {
         solver.step(&obj, &mut live).unwrap();
     }
     let value = obj.value_and_gradient(live.view()).0;
-    let report = Report {
-        value,
-        coords: live.clone(),
-        steps: 3,
-        grad_norm: 0.0,
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: Status::Iterating,
-    };
+    let report = Report::new(value, live.clone())
+        .with_steps(3)
+        .with_grad_norm(0.0)
+        .with_stop_norm(StopNorm::Two)
+        .with_grad(None)
+        .with_status(Status::Iterating);
     let path = scratch("accepted");
     write_checkpoint(
         &path,
@@ -428,13 +417,19 @@ fn checkpoint_of_an_accepted_point_matches_the_in_memory_vector() {
     assert_eq!(energy.unwrap().to_bits(), value.to_bits());
     assert_bits(from_file.as_slice().unwrap(), live.as_slice().unwrap());
 
-    let uninterrupted =
-        minimize_method(&obj, live, &control(), Method::Lbfgs { memory: 5 }, wolfe()).unwrap();
+    let uninterrupted = minimize_method(
+        &obj,
+        live,
+        &control(),
+        Method::lbfgs_with_memory(5),
+        wolfe(),
+    )
+    .unwrap();
     let resumed = minimize_method(
         &obj,
         from_file,
         &control(),
-        Method::Lbfgs { memory: 5 },
+        Method::lbfgs_with_memory(5),
         wolfe(),
     )
     .unwrap();

@@ -40,15 +40,16 @@ fn bowl(x: ArrayView1<f64>, value: f64, grad: Option<f64>) -> (f64, Array1<f64>)
     }
 }
 
-const CONTROL: Control = Control {
-    maxiter: 40,
-    gtol: 1e-8,
-    istep: 1.0,
-    maxmove: None,
-    stop_norm: StopNorm::Two,
-    ftol_rel: None,
-    noise_floor: None,
-};
+fn control() -> Control {
+    Control::default()
+        .with_maxiter(40)
+        .with_gtol(1e-8)
+        .with_istep(1.0)
+        .with_maxmove(None)
+        .with_stop_norm(StopNorm::Two)
+        .with_ftol_rel(None)
+        .with_noise_floor(None)
+}
 
 /// Every method under every line search, then as a session under every
 /// acceptance, each outcome handed to `check` with its probes.
@@ -60,9 +61,9 @@ where
     let (c, beta, maxiter, c1, c2) = (0.25, 0.5, 30, 1e-4, 0.9);
     let searches = [
         LineSearch::default(),
-        LineSearch::Backtracking { c, beta, maxiter },
-        LineSearch::Goldstein { c, beta, maxiter },
-        LineSearch::Wolfe { c1, c2, maxiter },
+        LineSearch::backtracking(c, beta, maxiter),
+        LineSearch::goldstein(c, beta, maxiter),
+        LineSearch::wolfe(c1, c2, maxiter),
     ];
     let probes = Probes::default();
     let seen = |v: ArrayView1<f64>| {
@@ -75,15 +76,15 @@ where
     ] {
         let method = Method::from_name(token).unwrap();
         for ls in searches {
-            let out = rgmin::minimize_method(&obj, x0.clone(), &CONTROL, method.clone(), ls);
+            let out = rgmin::minimize_method(&obj, x0.clone(), &control(), method.clone(), ls);
             check(format!("{token} {ls:?}"), out, probes.take());
         }
         for accept in [Accept::None, Accept::Energy, Accept::Nonmonotone] {
-            let mut solver = Solver::new(method.clone(), CONTROL, 2);
+            let mut solver = Solver::new(method.clone(), control(), 2);
             solver.set_accept(accept);
             let mut x = x0.clone();
             let out =
-                (0..CONTROL.maxiter).try_fold(None, |_, _| solver.step(&obj, &mut x).map(Some));
+                (0..control().maxiter).try_fold(None, |_, _| solver.step(&obj, &mut x).map(Some));
             let out = out.map(Option::unwrap);
             check(format!("{token} session {accept:?}"), out, probes.take());
         }
@@ -194,7 +195,7 @@ fn a_refused_step_leaves_the_session_as_it_was() {
     let obj = Oracle::unbounded(3, &fg);
     for (token, cap) in [("fire", None), ("fire2", None), ("lbfgs", Some(0.1))] {
         let run = |refuse: bool| {
-            let mut solver = Solver::new(Method::from_name(token).unwrap(), CONTROL, 3);
+            let mut solver = Solver::new(Method::from_name(token).unwrap(), control(), 3);
             if let Some(cap) = cap {
                 solver.set_atom_maxmove(cap);
             }
@@ -245,7 +246,7 @@ fn a_refused_first_step_leaves_the_session_new() {
     let obj = Oracle::unbounded(3, &fg);
     for (token, cap) in [("fire", None), ("fire2", None), ("lbfgs", Some(0.1))] {
         let run = |refuse: bool| {
-            let mut solver = Solver::new(Method::from_name(token).unwrap(), CONTROL, 3);
+            let mut solver = Solver::new(Method::from_name(token).unwrap(), control(), 3);
             if let Some(cap) = cap {
                 solver.set_atom_maxmove(cap);
             }
@@ -290,7 +291,7 @@ fn a_refused_trial_does_not_count_toward_the_fire2_stall() {
     };
     let obj = Oracle::unbounded(1, &fg);
     let run = |refuse: bool| {
-        let mut solver = Solver::new(Method::from_name("fire2").unwrap(), CONTROL, 1);
+        let mut solver = Solver::new(Method::from_name("fire2").unwrap(), control(), 1);
         let mut x = array![1e10];
         let mut steps = 0;
         let stop = loop {
@@ -329,7 +330,7 @@ fn a_refused_trial_after_a_move_records_the_move_once() {
     };
     let obj = Oracle::unbounded(3, &fg);
     let run = |refuse: bool| {
-        let mut solver = Solver::new(Method::lbfgs(), CONTROL, 3);
+        let mut solver = Solver::new(Method::lbfgs(), control(), 3);
         let mut x = Array1::zeros(3);
         solver.step(&obj, &mut x).unwrap();
         let pairs = solver.pair_count();

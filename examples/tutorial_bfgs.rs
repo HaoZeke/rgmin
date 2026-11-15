@@ -15,12 +15,10 @@ fn himmelblau(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
 }
 
 fn main() {
-    let control = Control {
-        maxiter: 80,
-        gtol: 1e-8,
-        stop_norm: StopNorm::Inf,
-        ..Control::default()
-    };
+    let control = Control::default()
+        .with_maxiter(80)
+        .with_gtol(1e-8)
+        .with_stop_norm(StopNorm::Inf);
     let mut solver = Solver::new(Method::Bfgs, control, 2);
     let obj = Oracle::unbounded(2, himmelblau);
     let mut x = array![0.0, 0.0];

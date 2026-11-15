@@ -52,18 +52,10 @@ impl DirectionalCurvature for ShiftedBowl {
     }
 }
 fn control() -> Control {
-    Control {
-        maxiter: 2,
-        gtol: 0.0,
-        ..Control::default()
-    }
+    Control::default().with_maxiter(2).with_gtol(0.0)
 }
 fn params(tol: f64) -> ScgParams {
-    ScgParams {
-        tol_sol: tol,
-        tol_func: 1.0,
-        ..ScgParams::default()
-    }
+    ScgParams::default().with_tol_sol(tol).with_tol_func(1.0)
 }
 fn run(center: f64, tol: f64, exact: bool, options: Option<ScgOptions>) -> (Report, Vec<Vec<f64>>) {
     let objective = ShiftedBowl::new(center);
@@ -108,9 +100,7 @@ fn run(center: f64, tol: f64, exact: bool, options: Option<ScgOptions>) -> (Repo
     (report, objective.visits.into_inner().unwrap())
 }
 fn relative() -> ScgOptions {
-    ScgOptions {
-        step_tolerance: ScgStepTolerance::RelativeEuclidean,
-    }
+    ScgOptions::default().with_step_tolerance(ScgStepTolerance::RelativeEuclidean)
 }
 
 #[test]

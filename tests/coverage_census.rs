@@ -354,13 +354,10 @@ fn scg_exact_reaches_the_bowl_floor_on_supplied_curvature() {
     let rep = minimize_scg_exact(
         &CurvedBowl,
         array![1.0, -2.0, 3.0, -4.0],
-        &Control {
-            maxiter: 200,
-            ..Control::default()
-        },
+        &Control::default().with_maxiter(200),
         &ScgParams::default(),
         Conjugacy::PolakRibiere,
-        Restart::Njws { threshold: 0.1 },
+        Restart::njws_at(0.1),
     )
     .expect("scg exact runs");
     assert!(

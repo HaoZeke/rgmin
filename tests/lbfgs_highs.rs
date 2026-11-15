@@ -173,12 +173,8 @@ fn check_fire_session_box(kind: rgmin::FireKind) {
         let gradient = array![x[0], x[1] + 1.0];
         (0.5 * gradient.dot(&gradient), gradient)
     });
-    let control = Control {
-        istep: 0.1,
-        gtol: 1e-8,
-        ..Control::default()
-    };
-    let mut solver = Solver::new(Method::Fire { kind }, control, 2);
+    let control = Control::default().with_istep(0.1).with_gtol(1e-8);
+    let mut solver = Solver::new(Method::fire(kind), control, 2);
     solver.set_highs(true);
     assert!(solver.set_box(Some(vec![f64::NEG_INFINITY, 0.0]), None));
     let mut x = array![3.0, 1e-8];
@@ -254,13 +250,14 @@ fn unconstrained_qp_matches_two_loop() {
 #[test]
 fn box_keeps_the_trial_inside() {
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        trust: Some(0.25),
-        lo: Some(-0.3),
-        hi: Some(0.3),
-        equalities: Vec::new(),
-        center_axes: None,
-    });
+    opt.highs = Some(
+        HighsStep::default()
+            .with_trust(0.25)
+            .with_lo(-0.3)
+            .with_hi(0.3)
+            .with_equalities(Vec::new())
+            .with_center_axes(None),
+    );
     let x = Array1::from(vec![0.2, -0.2]);
     let g = Array1::from(vec![10.0, -10.0]);
     let d = opt.highs_step(x.view(), g.view()).unwrap();
@@ -284,10 +281,7 @@ fn highs_lbfgs_converges_on_the_quadratic() {
 #[test]
 fn equality_projection_scales_to_thirty_two_variables() {
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.0)],
-        ..HighsStep::default()
-    });
+    opt.highs = Some(HighsStep::default().with_equalities(vec![(vec![(0, 1.0), (1, 1.0)], 0.0)]));
     let x0 = Array1::from_elem(32, 1.0);
     let g0 = quad(x0.view()).1;
     let p = opt.highs_step(x0.view(), g0.view()).unwrap();
@@ -307,13 +301,14 @@ fn trust_scale_keeps_the_two_loop_direction() {
     let g = Array1::from(vec![10.0, 1.0]);
     let mut opt = Lbfgs::default();
     let raw = opt.two_loop(g.view());
-    opt.highs = Some(HighsStep {
-        trust: Some(0.25),
-        lo: None,
-        hi: None,
-        equalities: Vec::new(),
-        center_axes: None,
-    });
+    opt.highs = Some(
+        HighsStep::default()
+            .with_trust(0.25)
+            .with_lo(None)
+            .with_hi(None)
+            .with_equalities(Vec::new())
+            .with_center_axes(None),
+    );
     let p = opt.highs_step(x.view(), g.view()).unwrap();
     let n2 = raw.dot(&raw).sqrt();
     let np = p.dot(&p).sqrt();
@@ -327,13 +322,14 @@ fn trust_scale_keeps_the_two_loop_direction() {
 #[test]
 fn center_axes_kills_the_mean() {
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        trust: Some(0.5),
-        lo: None,
-        hi: None,
-        equalities: Vec::new(),
-        center_axes: Some((4, 2)),
-    });
+    opt.highs = Some(
+        HighsStep::default()
+            .with_trust(0.5)
+            .with_lo(None)
+            .with_hi(None)
+            .with_equalities(Vec::new())
+            .with_center_axes((4, 2)),
+    );
     let x = Array1::zeros(8);
     let g = Array1::from(vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
     let p = opt.highs_step(x.view(), g.view()).unwrap();
@@ -393,13 +389,11 @@ fn highs_newton_qp_on_a_quadratic_respects_a_box() {
     let mut x = array![2.0, -3.0];
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter: 8,
-            gtol: 1e-10,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(8)
+            .with_gtol(1e-10)
+            .with_istep(1.0)
+            .with_maxmove(None),
         2,
     );
     solver.set_qn_step(QnStep::Newton);
@@ -507,13 +501,11 @@ fn session_set_box_holds_a_per_coordinate_wall() {
     let mut x = array![2.0, -3.0];
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter: 8,
-            gtol: 1e-10,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(8)
+            .with_gtol(1e-10)
+            .with_istep(1.0)
+            .with_maxmove(None),
         2,
     );
     solver.set_qn_step(QnStep::Newton);
@@ -613,13 +605,14 @@ fn c_abi_set_box_keeps_the_trial_inside() {
 #[test]
 fn null_side_is_unbounded_on_that_side() {
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        trust: None,
-        lo: Some(0.0),
-        hi: None,
-        equalities: Vec::new(),
-        center_axes: None,
-    });
+    opt.highs = Some(
+        HighsStep::default()
+            .with_trust(None)
+            .with_lo(0.0)
+            .with_hi(None)
+            .with_equalities(Vec::new())
+            .with_center_axes(None),
+    );
     let x = Array1::from(vec![0.5, 0.5]);
     let g = Array1::from(vec![-10.0, -1.0]);
     let d = opt.highs_step(x.view(), g.view()).unwrap();
@@ -677,13 +670,11 @@ fn session_set_box_survives_set_highs_and_clips_newton() {
     let mut x = array![2.0, -3.0];
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter: 8,
-            gtol: 1e-10,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(8)
+            .with_gtol(1e-10)
+            .with_istep(1.0)
+            .with_maxmove(None),
         2,
     );
     solver.set_qn_step(QnStep::Newton);
@@ -739,13 +730,11 @@ fn newton_qp_applies_session_equalities() {
     let mut x = x0.clone();
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter: 1,
-            gtol: 1e-12,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(1)
+            .with_gtol(1e-12)
+            .with_istep(1.0)
+            .with_maxmove(None),
         2,
     );
     solver.set_qn_step(QnStep::Newton);
@@ -777,10 +766,7 @@ fn default_highs_options_choose_the_engine() {
 #[test]
 fn ipm_equality_projection_holds() {
     let mut opt = Lbfgs::default();
-    opt.highs = Some(HighsStep {
-        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.0)],
-        ..HighsStep::default()
-    });
+    opt.highs = Some(HighsStep::default().with_equalities(vec![(vec![(0, 1.0), (1, 1.0)], 0.0)]));
     opt.highs_options.solver = rgmin::HighsSolverKind::Ipm;
     opt.highs_options.crossover = rgmin::HighsCrossover::Off;
     let x0 = Array1::from(vec![1.0, -0.5, 0.25, 0.0]);
@@ -887,10 +873,7 @@ fn dest_ipm_matches_scipy_trust_constr() {
     let x0 = Array1::from(vec![1.0, -0.5, 0.25, 0.0]);
     let g0 = quad(x0.view()).1;
     let mut dest = Lbfgs::default();
-    dest.highs = Some(HighsStep {
-        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.0)],
-        ..HighsStep::default()
-    });
+    dest.highs = Some(HighsStep::default().with_equalities(vec![(vec![(0, 1.0), (1, 1.0)], 0.0)]));
     dest.highs_options.solver = rgmin::HighsSolverKind::Ipm;
     dest.highs_options.crossover = rgmin::HighsCrossover::Off;
     let p_dest = dest.highs_step(x0.view(), g0.view()).unwrap();
@@ -916,12 +899,12 @@ fn dest_ipm_box_equality_stays_inside_after_scaling() {
     let x = Array1::from(vec![0.0, 0.0, 0.0]);
     let g = Array1::from(vec![2.0, -1.0, 0.5]);
     let mut dest = Lbfgs::default();
-    dest.highs = Some(HighsStep {
-        lo: Some(-0.2),
-        hi: Some(0.2),
-        equalities: vec![(vec![(0, 1.0), (1, 1.0), (2, 1.0)], 0.0)],
-        ..HighsStep::default()
-    });
+    dest.highs = Some(
+        HighsStep::default()
+            .with_lo(-0.2)
+            .with_hi(0.2)
+            .with_equalities(vec![(vec![(0, 1.0), (1, 1.0), (2, 1.0)], 0.0)]),
+    );
     dest.highs_options.solver = rgmin::HighsSolverKind::Ipm;
     dest.highs_options.crossover = rgmin::HighsCrossover::Off;
     // Uniform bounds scale the two-loop step before the equality projection.
@@ -960,10 +943,7 @@ fn highs_callback_fires_on_ipm_equality() {
         n: std::sync::atomic::AtomicU32::new(0),
     };
     let mut dest = Lbfgs::default();
-    dest.highs = Some(HighsStep {
-        equalities: vec![(vec![(0, 1.0), (1, 1.0)], 0.0)],
-        ..HighsStep::default()
-    });
+    dest.highs = Some(HighsStep::default().with_equalities(vec![(vec![(0, 1.0), (1, 1.0)], 0.0)]));
     dest.highs_options.solver = rgmin::HighsSolverKind::Ipm;
     dest.highs_options.crossover = rgmin::HighsCrossover::Off;
     dest.highs_options.callback = Some(unsafe {

@@ -59,11 +59,7 @@ const BUDGET: usize = 2000;
 /// Strong Wolfe constants of the L-BFGS search, the `Solver::new` default.
 const C1: f64 = 1e-4;
 const C2: f64 = 0.9;
-const WOLFE: LineSearch = LineSearch::Wolfe {
-    c1: C1,
-    c2: C2,
-    maxiter: 40,
-};
+const WOLFE: LineSearch = LineSearch::wolfe(C1, C2, 40);
 
 /// Half-lattice offsets of the 12 FCC nearest neighbours.
 const NN: [[i64; 3]; 12] = [
@@ -204,18 +200,17 @@ fn replays(
 fn relax(sys: &System, name: &str, audit: bool) -> Run {
     let n = sys.x0.len();
     let (method, istep) = match name {
-        "lbfgs" => (Method::Lbfgs { memory: 10 }, 0.2),
-        _ => (Method::Fire { kind: FireKind::V2 }, 0.1),
+        "lbfgs" => (Method::lbfgs_with_memory(10), 0.2),
+        _ => (Method::fire(FireKind::V2), 0.1),
     };
-    let control = Control {
-        maxiter: BUDGET,
-        gtol: FMAX,
-        istep,
-        maxmove: None,
-        stop_norm: StopNorm::MaxAtom,
-        ftol_rel: None,
-        noise_floor: None,
-    };
+    let control = Control::default()
+        .with_maxiter(BUDGET)
+        .with_gtol(FMAX)
+        .with_istep(istep)
+        .with_maxmove(None)
+        .with_stop_norm(StopNorm::MaxAtom)
+        .with_ftol_rel(None)
+        .with_noise_floor(None);
     let calls = AtomicUsize::new(0);
     let trials: Mutex<Vec<(Array1<f64>, Answer)>> = Mutex::new(Vec::new());
     let obj = Oracle::unbounded(n, |x: ArrayView1<f64>| {

@@ -133,12 +133,8 @@ fn check_fire_session_box(kind: rgmin::FireKind) {
         let gradient = array![x[0], x[1] + 1.0];
         (0.5 * gradient.dot(&gradient), gradient)
     });
-    let control = Control {
-        istep: 0.1,
-        gtol: 1e-8,
-        ..Control::default()
-    };
-    let mut solver = Solver::new(Method::Fire { kind }, control, 2);
+    let control = Control::default().with_istep(0.1).with_gtol(1e-8);
+    let mut solver = Solver::new(Method::fire(kind), control, 2);
     solver.set_highs(true);
     assert!(solver.set_box(Some(vec![f64::NEG_INFINITY, 0.0]), None));
     let mut x = array![3.0, 1e-8];
@@ -210,15 +206,14 @@ fn session_set_box_holds_a_per_coordinate_wall() {
     let mut x = array![2.0, -3.0];
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter: 8,
-            gtol: 1e-10,
-            istep: 1.0,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(8)
+            .with_gtol(1e-10)
+            .with_istep(1.0)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         2,
     );
     solver.set_qn_step(QnStep::Newton);
@@ -358,15 +353,14 @@ fn session_set_box_survives_set_highs_and_clips_newton() {
     let mut x = array![2.0, -3.0];
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter: 8,
-            gtol: 1e-10,
-            istep: 1.0,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(8)
+            .with_gtol(1e-10)
+            .with_istep(1.0)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         2,
     );
     solver.set_qn_step(QnStep::Newton);
@@ -422,15 +416,14 @@ fn newton_qp_applies_session_equalities() {
     let mut x = x0.clone();
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter: 1,
-            gtol: 1e-12,
-            istep: 1.0,
-            maxmove: None,
-            stop_norm: rgmin::StopNorm::Two,
-            ftol_rel: None,
-            noise_floor: None,
-        },
+        Control::default()
+            .with_maxiter(1)
+            .with_gtol(1e-12)
+            .with_istep(1.0)
+            .with_maxmove(None)
+            .with_stop_norm(rgmin::StopNorm::Two)
+            .with_ftol_rel(None)
+            .with_noise_floor(None),
         2,
     );
     solver.set_qn_step(QnStep::Newton);
@@ -489,11 +482,7 @@ fn a_rounded_wall_does_not_halve_the_free_step() {
             });
             let mut solver = Solver::new(
                 Method::lbfgs(),
-                Control {
-                    istep: 1.0,
-                    gtol: 1e-12,
-                    ..Control::default()
-                },
+                Control::default().with_istep(1.0).with_gtol(1e-12),
                 2,
             );
             solver.set_highs(true);

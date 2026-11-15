@@ -6,13 +6,11 @@ use ndarray::array;
 use rgmin::{Control, LineSearch, Method, minimize_method};
 
 fn control() -> Control {
-    Control {
-        maxiter: 200,
-        gtol: 1e-8,
-        istep: 0.1,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(200)
+        .with_gtol(1e-8)
+        .with_istep(0.1)
+        .with_maxmove(None)
 }
 
 #[test]

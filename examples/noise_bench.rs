@@ -334,28 +334,23 @@ fn fmax(g: &Array1<f64>) -> f64 {
 }
 
 fn linesearch() -> LineSearch {
-    LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 12,
-    }
+    LineSearch::wolfe(1e-4, 0.9, 12)
 }
 
 fn relax(cluster: &Cluster, x: Array1<f64>) -> (Array1<f64>, f64) {
-    let control = Control {
-        maxiter: 500,
-        gtol: 1e-8,
-        istep: 1.0,
-        maxmove: None,
-        stop_norm: rgmin::StopNorm::Two,
-        ftol_rel: None,
-        noise_floor: None,
-    };
+    let control = Control::default()
+        .with_maxiter(500)
+        .with_gtol(1e-8)
+        .with_istep(1.0)
+        .with_maxmove(None)
+        .with_stop_norm(rgmin::StopNorm::Two)
+        .with_ftol_rel(None)
+        .with_noise_floor(None);
     let report = minimize_method(
         cluster,
         x,
         &control,
-        Method::Lbfgs { memory: 8 },
+        Method::lbfgs_with_memory(8),
         linesearch(),
     )
     .expect("clean relaxation");
@@ -515,15 +510,14 @@ fn run_case(case: Case<'_>) -> Row {
     } else {
         (0.0, None, 0)
     };
-    let mut control = Control {
-        maxiter: MAXITER,
-        gtol: BASE_GTOL,
-        istep: 1.0,
-        maxmove: None,
-        stop_norm: rgmin::StopNorm::Two,
-        ftol_rel: None,
-        noise_floor: None,
-    };
+    let mut control = Control::default()
+        .with_maxiter(MAXITER)
+        .with_gtol(BASE_GTOL)
+        .with_istep(1.0)
+        .with_maxmove(None)
+        .with_stop_norm(rgmin::StopNorm::Two)
+        .with_ftol_rel(None)
+        .with_noise_floor(None);
     let variant_name = match variant {
         Variant::Baseline => "baseline",
         Variant::Floor => {
@@ -554,7 +548,7 @@ fn run_case(case: Case<'_>) -> Row {
         &obj,
         start.clone(),
         &control,
-        Method::Lbfgs { memory: 8 },
+        Method::lbfgs_with_memory(8),
         linesearch(),
     );
     let wall_s = t0.elapsed().as_secs_f64();

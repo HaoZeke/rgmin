@@ -23,6 +23,9 @@
 // small dense algebra indexes by position on purpose.
 #![allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 
+#[macro_use]
+mod config;
+
 /// Line-search strategies (Brent, Armijo, Goldstein, Wolfe/zoom).
 pub mod linesearch;
 /// Method selector (NLCG, BFGS family, Adam, steepest descent, PSO).

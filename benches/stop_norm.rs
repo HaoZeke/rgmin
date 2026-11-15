@@ -182,13 +182,11 @@ where
         inner: Oracle::unbounded(x0.len(), f),
         calls: AtomicUsize::new(0),
     };
-    let control = Control {
-        maxiter: BUDGET,
-        gtol: tol,
-        istep: arm.istep,
-        maxmove: None,
-        ..Default::default()
-    };
+    let control = Control::default()
+        .with_maxiter(BUDGET)
+        .with_gtol(tol)
+        .with_istep(arm.istep)
+        .with_maxmove(None);
     let mut solver = Solver::new((arm.method)(), control, x0.len());
     solver.set_atom_maxmove(0.2);
     if let Some(norm) = arm.stop {
@@ -274,9 +272,9 @@ where
 }
 
 fn main() {
-    let lbfgs = || Method::Lbfgs { memory: 20 };
-    let fire = || Method::Fire { kind: FireKind::V1 };
-    let fire2 = || Method::Fire { kind: FireKind::V2 };
+    let lbfgs = || Method::lbfgs_with_memory(20);
+    let fire = || Method::fire(FireKind::V1);
+    let fire2 = || Method::fire(FireKind::V2);
     let guenole = Some((FirePreset::Guenole2020, false));
     let abc = Some((FirePreset::Guenole2020, true));
     let mut arms = Vec::new();

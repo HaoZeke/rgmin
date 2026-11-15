@@ -76,6 +76,7 @@ const ABC_ALPHA_FLOOR: f64 = 1e-10;
 /// `astart = 0.1`, `fa = 0.99`. [`FireState::new`] uses a tighter
 /// `dt_max` of `2.5 dt`, which is the eOn / Bitzek session default,
 /// not ASE's.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FireConfig {
     /// Time step.
@@ -93,6 +94,16 @@ pub struct FireConfig {
     /// `alpha` decay.
     pub f_alpha: f64,
 }
+
+with_setters!(FireConfig {
+    with_dt => dt: val f64,
+    with_dt_max => dt_max: val f64,
+    with_n_min => n_min: val usize,
+    with_f_inc => f_inc: val f64,
+    with_f_dec => f_dec: val f64,
+    with_alpha => alpha: val f64,
+    with_f_alpha => f_alpha: val f64,
+});
 
 impl FireConfig {
     /// ASE `FIRE` defaults. `dt_max` is 1, ten times `dt`.

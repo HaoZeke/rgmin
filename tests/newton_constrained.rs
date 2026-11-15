@@ -16,16 +16,12 @@ fn constrained_newton_preserves_cross_curvature() {
         |_x: ArrayView1<f64>| array![[4.0, -3.0], [-3.0, 4.0]],
     );
     let mut solver = Solver::new(
-        Method::Newton {
-            kind: NewtonKind::Shifted,
-        },
-        Control {
-            maxiter: 1,
-            gtol: 1e-12,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Method::newton(NewtonKind::Shifted),
+        Control::default()
+            .with_maxiter(1)
+            .with_gtol(1e-12)
+            .with_istep(1.0)
+            .with_maxmove(None),
         2,
     );
     solver.set_highs(true);

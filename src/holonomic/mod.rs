@@ -185,6 +185,7 @@ pub enum ConstraintError {
 }
 
 /// What one return to the set did.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ConstraintReport {
     /// Blocks solved by SHAKE.

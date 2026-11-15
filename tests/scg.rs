@@ -12,13 +12,11 @@ use rgmin::{
 };
 
 fn control() -> Control {
-    Control {
-        maxiter: 500,
-        gtol: 1e-8,
-        istep: 1.0,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(500)
+        .with_gtol(1e-8)
+        .with_istep(1.0)
+        .with_maxmove(None)
 }
 
 fn free_bounds(dim: usize) -> &'static Bounds<f64> {
@@ -125,17 +123,11 @@ impl DifferentiableObjective<f64> for OffsetBowl {
 
 #[test]
 fn function_convergence_ignores_objective_offset() {
-    let ctrl = Control {
-        maxiter: 0,
-        gtol: 0.0,
-        ..control()
-    };
-    let params = ScgParams {
-        lambda: 100.0,
-        tol_sol: 1e-2,
-        tol_func: 1e-8,
-        ..ScgParams::default()
-    };
+    let ctrl = control().with_maxiter(0).with_gtol(0.0);
+    let params = ScgParams::default()
+        .with_lambda(100.0)
+        .with_tol_sol(1e-2)
+        .with_tol_func(1e-8);
     for offset in [0.0, 65536.0, -65536.0] {
         let report = minimize_scg(
             &OffsetBowl(offset),
@@ -233,10 +225,7 @@ fn scg_path<O: DifferentiableObjective<f64>>(
 ) -> Vec<Array1<f64>> {
     let mut path = vec![init.clone()];
     for k in 1..=iters {
-        let limited = Control {
-            maxiter: k,
-            ..ctrl.clone()
-        };
+        let limited = ctrl.clone().with_maxiter(k);
         let report = minimize_scg(
             obj,
             init.clone(),
@@ -272,16 +261,13 @@ fn positive_maxmove_bounds_every_step() {
         "unbounded first step {first} must exceed the cap"
     );
 
-    let ctrl = Control {
-        maxmove: Some(cap),
-        ..control()
-    };
+    let ctrl = control().with_maxmove(cap);
     assert_steps_within(&scg_path(&Bowl, &start, &ctrl, 40), cap);
 
     let report = minimize_scg(
         &Bowl,
         start,
-        &Control { maxiter: 0, ..ctrl },
+        &ctrl.with_maxiter(0),
         &ScgParams::default(),
         Conjugacy::PolakRibiere,
         Restart::Never,
@@ -297,10 +283,7 @@ fn maxmove_that_is_not_positive_and_finite_leaves_scg_unbounded() {
         minimize_scg(
             &obj,
             array![-1.2, 1.0],
-            &Control {
-                maxmove,
-                ..control()
-            },
+            &control().with_maxmove(maxmove),
             &ScgParams::default(),
             Conjugacy::PolakRibiere,
             Restart::njws(),
@@ -356,10 +339,7 @@ fn nonfinite_retry_stays_within_maxmove() {
     // shorten back to 1; the second retry steps 0.588 to a finite point.
     let start = array![10.0];
     let cap = 1.0;
-    let ctrl = Control {
-        maxmove: Some(cap),
-        ..control()
-    };
+    let ctrl = control().with_maxmove(cap);
     let path = scg_path(&Holed, &start, &ctrl, 30);
     assert_steps_within(&path, cap);
     assert!(
@@ -418,11 +398,7 @@ fn flat_objective_with_no_iteration_limit_returns() {
         &problem,
         array![0.0, 0.0],
         &ctrl,
-        &ScgParams {
-            tol_sol: 1e-2,
-            tol_func: 1e-2,
-            ..ScgParams::default()
-        },
+        &ScgParams::default().with_tol_sol(1e-2).with_tol_func(1e-2),
         Conjugacy::PolakRibiere,
         Restart::Never,
     )
@@ -490,16 +466,10 @@ fn rounding_flat(maxiter: usize, lambda_limit: f64) -> rgmin::Result<Report> {
     minimize_scg(
         &problem,
         array![0.0, 0.0],
-        &Control {
-            maxiter,
-            gtol: 0.0,
-            ..control()
-        },
-        &ScgParams {
-            tol_sol: 0.0,
-            lambda_limit,
-            ..ScgParams::default()
-        },
+        &control().with_maxiter(maxiter).with_gtol(0.0),
+        &ScgParams::default()
+            .with_tol_sol(0.0)
+            .with_lambda_limit(lambda_limit),
         Conjugacy::PolakRibiere,
         Restart::Never,
     )
@@ -573,19 +543,12 @@ impl DirectionalCurvature for PseudoHuber {
 
 #[test]
 fn one_flat_step_does_not_stop_an_unlimited_fit() {
-    let params = ScgParams {
-        lambda: 1e-9,
-        ..ScgParams::default()
-    };
+    let params = ScgParams::default().with_lambda(1e-9);
     let run = |maxiter| {
         minimize_scg_exact(
             &PseudoHuber,
             array![1.0],
-            &Control {
-                maxiter,
-                gtol: 1e-10,
-                ..control()
-            },
+            &control().with_maxiter(maxiter).with_gtol(1e-10),
             &params,
             Conjugacy::PolakRibiere,
             Restart::Never,

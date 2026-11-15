@@ -5,7 +5,10 @@ use crate::nlcg::{Conjugacy, Restart};
 /// Local first-order, quasi-Newton, or swarm method over an eindir objective.
 ///
 /// Non-exhaustive: a match outside this crate needs a wildcard arm, so a
-/// later method is an additive change.
+/// later method is an additive change. Each variant with fields is
+/// non-exhaustive too: build it with a constructor such as
+/// [`Method::lbfgs_with_memory`] or [`Method::fire`], and match it with
+/// `..`, so a parameter added to a method later is additive as well.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Method {
@@ -13,6 +16,7 @@ pub enum Method {
     ///
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    #[non_exhaustive]
     Nlcg {
         /// β formula.
         conjugacy: Conjugacy,
@@ -37,6 +41,7 @@ pub enum Method {
     /// <https://doi.org/10.1090/s0025-5718-1980-0572855-7>.
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    #[non_exhaustive]
     Lbfgs {
         /// Correction pairs kept (`m`). Typical 5 to 20.
         memory: usize,
@@ -60,6 +65,7 @@ pub enum Method {
     ///
     /// Kingma and Ba, *Adam: A Method for Stochastic Optimization*,
     /// <https://doi.org/10.48550/arXiv.1412.6980>.
+    #[non_exhaustive]
     Adam {
         /// First-moment decay.
         beta1: f64,
@@ -79,6 +85,7 @@ pub enum Method {
     /// <https://doi.org/10.1021/j100247a015>.
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    #[non_exhaustive]
     Newton {
         /// Shifted Newton or Banerjee RFO.
         kind: crate::newton::NewtonKind,
@@ -87,6 +94,7 @@ pub enum Method {
     ///
     /// Kennedy and Eberhart, *Particle swarm optimization*,
     /// <https://doi.org/10.1109/ICNN.1995.488968>.
+    #[non_exhaustive]
     Pso {
         /// Swarm size. Typical 10 to 40.
         n_particles: usize,
@@ -103,6 +111,7 @@ pub enum Method {
     /// <https://doi.org/10.1103/PhysRevLett.97.170201>.
     /// Guénolé, Nöhring, Vaid, Houllé, Xie, Prakash, Bitzek,
     /// <https://doi.org/10.1016/j.commatsci.2020.109584>.
+    #[non_exhaustive]
     Fire {
         /// FIRE 1.0 or FIRE 2.0.
         kind: crate::fire::FireKind,
@@ -140,6 +149,7 @@ pub enum Method {
     /// an uphill image, or a step that does not lower the force drops
     /// the history and takes one steepest step. The line search chooses
     /// the length.
+    #[non_exhaustive]
     Diis {
         /// Stored gradient and position pairs. At least 2.
         memory: usize,
@@ -224,6 +234,46 @@ impl Method {
             c1: 1.5,
             c2: 1.5,
         }
+    }
+
+    /// NLCG with the given conjugacy and restart rule.
+    pub const fn nlcg_with_restart(conjugacy: Conjugacy, restart: Restart) -> Self {
+        Self::Nlcg { conjugacy, restart }
+    }
+
+    /// L-BFGS with `memory` correction pairs.
+    pub const fn lbfgs_with_memory(memory: usize) -> Self {
+        Self::Lbfgs { memory }
+    }
+
+    /// GDIIS with `memory` stored pairs.
+    pub const fn diis_with_memory(memory: usize) -> Self {
+        Self::Diis { memory }
+    }
+
+    /// Adam with the given moment decays and denominator floor.
+    pub const fn adam_with(beta1: f64, beta2: f64, eps: f64) -> Self {
+        Self::Adam { beta1, beta2, eps }
+    }
+
+    /// PSO with `n_particles`, inertia `w`, and coefficients `c1`, `c2`.
+    pub const fn pso_with(n_particles: usize, inertia: f64, c1: f64, c2: f64) -> Self {
+        Self::Pso {
+            n_particles,
+            inertia,
+            c1,
+            c2,
+        }
+    }
+
+    /// FIRE 1.0 or FIRE 2.0.
+    pub const fn fire(kind: crate::fire::FireKind) -> Self {
+        Self::Fire { kind }
+    }
+
+    /// Shifted Newton or Banerjee RFO on a caller-supplied Hessian.
+    pub const fn newton(kind: crate::newton::NewtonKind) -> Self {
+        Self::Newton { kind }
     }
 
     /// NLCG with the given conjugacy and no restart.

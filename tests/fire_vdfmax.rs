@@ -36,13 +36,11 @@ impl DifferentiableObjective<f64> for Bowl {
 
 fn published() -> Solver {
     let mut solver = Solver::new(
-        Method::Fire { kind: FireKind::V2 },
-        Control {
-            maxiter: 5,
-            gtol: 1e-12,
-            istep: 0.1,
-            ..Control::default()
-        },
+        Method::fire(FireKind::V2),
+        Control::default()
+            .with_maxiter(5)
+            .with_gtol(1e-12)
+            .with_istep(0.1),
         1,
     );
     solver.set_fire_variant(FireVariant::Guenole2020);

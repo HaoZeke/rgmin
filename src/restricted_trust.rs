@@ -12,6 +12,7 @@ const CONS_FLOOR: f64 = 1e-12;
 /// Distinct from IRCTrustRegion, which constrains
 /// `||(s + d1) * sqrt(m)||`. This type never mass-weights the step
 /// and never shifts it by an IRC tangent.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct TrustRegion {
     /// Trust radius. The accepted step satisfies `||s|| <= delta`.
@@ -25,10 +26,17 @@ pub struct TrustRegion {
     pub maxiter: usize,
 }
 
+with_setters!(TrustRegion {
+    with_delta => delta: val f64,
+    with_tol => tol: val f64,
+    with_maxiter => maxiter: val usize,
+});
+
 /// Accepted restricted step.
 ///
 /// `cons` is `||s||` when the unconstrained QN step is inside the
 /// region, and `delta` when the solver sat on the bound.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct RestrictedStep {
     /// Displacement `s`.

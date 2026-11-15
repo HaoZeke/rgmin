@@ -3,8 +3,13 @@
 
 /// Typed DLA-Future extras. `begin` is the first eigenpair index.
 /// The waist only accepts `begin == 0` (`il = 1` in 1-based PDSYEVR).
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DlaFutureParams {
     /// First index of the requested window. Must be 0.
     pub begin: usize,
 }
+
+with_setters!(DlaFutureParams {
+    with_begin => begin: val usize,
+});

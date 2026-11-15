@@ -136,6 +136,7 @@ impl EigensolverKind {
 }
 
 /// Typed parameters for [`lowest_mode`]. No string fields.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EigenParams {
     /// Which backend.
@@ -153,6 +154,16 @@ pub struct EigenParams {
     /// ChASE search-space extra (`nex`). 0 selects `max(8, ceil(0.2 * nev))`.
     pub extra: usize,
 }
+
+with_setters!(EigenParams {
+    with_kind => kind: val EigensolverKind,
+    with_nev => nev: val usize,
+    with_krylov => krylov: val usize,
+    with_max_iter => max_iter: val usize,
+    with_tol => tol: val f64,
+    with_degree => degree: val usize,
+    with_extra => extra: val usize,
+});
 
 impl Default for EigenParams {
     fn default() -> Self {
@@ -346,6 +357,7 @@ impl<T: HessianVector + ?Sized> ApplyHessian for T {
 }
 
 /// Result of [`lowest_eigenpair`] / [`lowest_mode`].
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct LowestMode {
     /// Approximate eigenvector, Euclidean-normalized.
@@ -869,6 +881,7 @@ fn reorthogonalize(w: &mut Array1<f64>, q: &[Array1<f64>]) {
 ///
 /// Vectors from one solve are orthonormal. `converged` is the final
 /// residual test `||Hv − θv|| ≤ tol (1 + |θ|)`.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Eigenpair {
     /// Euclidean-normalized Ritz vector.
@@ -882,6 +895,7 @@ pub struct Eigenpair {
 }
 
 /// The k lowest pairs of a symmetric product, lowest value first.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Eigenpairs {
     /// Length `k`, values ascending.

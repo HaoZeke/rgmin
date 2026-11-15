@@ -56,14 +56,12 @@ fn solve(retain: bool) -> (f64, f64, usize, f64) {
     let objective = Rayleigh::new();
     let n = objective.diagonal.len();
     let mut solver = Solver::new(
-        Method::Lbfgs { memory: n },
-        Control {
-            maxiter: n * n,
-            gtol: 1e-8,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Method::lbfgs_with_memory(n),
+        Control::default()
+            .with_maxiter(n * n)
+            .with_gtol(1e-8)
+            .with_istep(1.0)
+            .with_maxmove(None),
         n,
     );
     solver.set_manifold(ManifoldKind::Sphere);
@@ -114,14 +112,12 @@ fn sphere_lbfgs_initial_path_is_invariant_to_energy_units() {
         objective.diagonal *= scale;
         let n = objective.diagonal.len();
         let mut solver = Solver::new(
-            Method::Lbfgs { memory: n },
-            Control {
-                maxiter: n,
-                gtol: 0.0,
-                istep: 1.0,
-                maxmove: None,
-                ..Default::default()
-            },
+            Method::lbfgs_with_memory(n),
+            Control::default()
+                .with_maxiter(n)
+                .with_gtol(0.0)
+                .with_istep(1.0)
+                .with_maxmove(None),
             n,
         );
         solver.set_manifold(ManifoldKind::Sphere);
@@ -165,14 +161,12 @@ fn sphere_lbfgs_resolves_a_stiff_ritz_initializer() {
     displacement -= &(displacement.dot(&direction) * &direction);
     let change = gradient - &old_gradient + direction.dot(&old_gradient) * &direction;
     let mut solver = Solver::new(
-        Method::Lbfgs { memory: n },
-        Control {
-            maxiter: n * n,
-            gtol: 0.0,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Method::lbfgs_with_memory(n),
+        Control::default()
+            .with_maxiter(n * n)
+            .with_gtol(0.0)
+            .with_istep(1.0)
+            .with_maxmove(None),
         n,
     );
     solver.set_manifold(ManifoldKind::Sphere);
@@ -199,12 +193,8 @@ fn sphere_disabled_caps_preserve_the_unbounded_path() {
         let objective = Rayleigh::new();
         let n = objective.diagonal.len();
         let mut solver = Solver::new(
-            Method::Lbfgs { memory: n },
-            Control {
-                gtol: 0.0,
-                maxmove: cap,
-                ..Control::default()
-            },
+            Method::lbfgs_with_memory(n),
+            Control::default().with_gtol(0.0).with_maxmove(cap),
             n,
         );
         solver.set_manifold(ManifoldKind::Sphere);
@@ -245,11 +235,7 @@ fn sphere_atom_cap_controls_every_oracle_trial_and_takes_precedence() {
     });
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            gtol: 0.0,
-            maxmove: Some(0.001),
-            ..Control::default()
-        },
+        Control::default().with_gtol(0.0).with_maxmove(0.001),
         6,
     );
     solver.set_manifold(ManifoldKind::Sphere);

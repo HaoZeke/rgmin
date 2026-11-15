@@ -11,11 +11,7 @@ fn bounded_linear(x: ArrayView1<'_, f64>) -> (f64, Array1<f64>) {
 
 #[test]
 fn wolfe_domain_boundary_keeps_a_measured_descent() {
-    let search = LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 6,
-    };
+    let search = LineSearch::wolfe(1e-4, 0.9, 6);
     let (point, value, alpha) =
         search.search(bounded_linear, array![0.0].view(), array![-1.0].view(), 1.0);
     assert_eq!(point[0], -3.0 / 32.0);

@@ -14,6 +14,7 @@
 //! The buffers live for the whole solve. A step does not allocate.
 
 /// Controls for [`minimize_eon_cg`].
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct EonCg {
     /// Longest per-atom displacement, eOn `max_move`. A non-positive or
@@ -43,6 +44,14 @@ pub struct EonCg {
     pub atom_only: bool,
 }
 
+with_setters!(EonCg {
+    with_max_move => max_move: val f64,
+    with_gtol => gtol: val f64,
+    with_max_iter => max_iter: val usize,
+    with_cluster => cluster: val bool,
+    with_atom_only => atom_only: val bool,
+});
+
 impl Default for EonCg {
     fn default() -> Self {
         Self {
@@ -56,6 +65,7 @@ impl Default for EonCg {
 }
 
 /// Result of [`minimize_eon_cg`].
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct EonCgReport {
     /// Energy at the returned point.

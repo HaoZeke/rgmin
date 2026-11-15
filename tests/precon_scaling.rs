@@ -206,12 +206,10 @@ fn once_lindh(threads: usize, crystal: &Crystal, rhs: &Array1<f64>) -> Sample {
         .build()
         .unwrap();
     pool.install(|| {
-        let params = LindhParams {
-            mu: Some(1.0),
-            r_cut: Some(CUTOFF),
-            lengths: Some(crystal.lengths),
-            ..LindhParams::default()
-        };
+        let params = LindhParams::default()
+            .with_mu(1.0)
+            .with_r_cut(CUTOFF)
+            .with_lengths(crystal.lengths);
         let t0 = Instant::now();
         let metric = Lindh::assemble(crystal.pos.view(), &crystal.z, &[], &params).unwrap();
         let assemble = t0.elapsed().as_secs_f64();
@@ -242,13 +240,11 @@ fn once_exp(threads: usize, crystal: &Crystal, rhs: &Array1<f64>) -> Sample {
         .build()
         .unwrap();
     pool.install(|| {
-        let params = ExpParams {
-            mu: Some(1.0),
-            r_cut: Some(CUTOFF),
-            r_nn: Some(2.35),
-            lengths: Some(crystal.lengths),
-            ..ExpParams::default()
-        };
+        let params = ExpParams::default()
+            .with_mu(1.0)
+            .with_r_cut(CUTOFF)
+            .with_r_nn(2.35)
+            .with_lengths(crystal.lengths);
         let t0 = Instant::now();
         let metric = Exp::assemble(crystal.pos.view(), &crystal.neigh, &params, 1.0, 2.35).unwrap();
         let assemble = t0.elapsed().as_secs_f64();
@@ -394,12 +390,10 @@ fn strong_scaling_table() {
         eprintln!("building {name} ({natoms} atoms)");
         let crystal = diamond(nx, ny, nz);
         let rhs = Array1::from_iter((0..crystal.pos.len()).map(|i| ((i % 7) as f64 - 3.0) * 0.05));
-        let lp = LindhParams {
-            mu: Some(1.0),
-            r_cut: Some(CUTOFF),
-            lengths: Some(crystal.lengths),
-            ..LindhParams::default()
-        };
+        let lp = LindhParams::default()
+            .with_mu(1.0)
+            .with_r_cut(CUTOFF)
+            .with_lengths(crystal.lengths);
         let lindh_m = Lindh::assemble(crystal.pos.view(), &crystal.z, &[], &lp).unwrap();
         let lindh_it = lindh_m.solve_iterations(rhs.view()).unwrap_or(0);
         eprintln!(
@@ -408,13 +402,11 @@ fn strong_scaling_table() {
             vm_kib("VmHWM:")
         );
         drop(lindh_m);
-        let ep = ExpParams {
-            mu: Some(1.0),
-            r_cut: Some(CUTOFF),
-            r_nn: Some(2.35),
-            lengths: Some(crystal.lengths),
-            ..ExpParams::default()
-        };
+        let ep = ExpParams::default()
+            .with_mu(1.0)
+            .with_r_cut(CUTOFF)
+            .with_r_nn(2.35)
+            .with_lengths(crystal.lengths);
         let exp_m = Exp::assemble(crystal.pos.view(), &crystal.neigh, &ep, 1.0, 2.35).unwrap();
         let exp_it = exp_m.solve_iterations(rhs.view()).unwrap_or(0);
         eprintln!(

@@ -9,15 +9,14 @@ use ndarray::{Array1, ArrayView1, array};
 use rgmin::{Accept, Control, LineSearch, Method, Solver};
 
 fn control(istep: f64) -> Control {
-    Control {
-        maxiter: 200,
-        gtol: 1e-10,
-        istep,
-        maxmove: None,
-        stop_norm: rgmin::StopNorm::Two,
-        ftol_rel: None,
-        noise_floor: None,
-    }
+    Control::default()
+        .with_maxiter(200)
+        .with_gtol(1e-10)
+        .with_istep(istep)
+        .with_maxmove(None)
+        .with_stop_norm(rgmin::StopNorm::Two)
+        .with_ftol_rel(None)
+        .with_noise_floor(None)
 }
 
 /// `f(x) = x . x / 2 + exp(-100 x0 + 93)`: an exponential wall at
@@ -100,24 +99,20 @@ fn walled(a: f64) -> (f64, Array1<f64>) {
 #[test]
 fn a_non_finite_trial_bisects_and_the_search_accepts_a_finite_point() {
     let mut alphas = Vec::new();
-    let out = LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 40,
-    }
-    .search_from(
-        |x: ArrayView1<f64>| {
-            alphas.push(x[0]);
-            walled(x[0])
-        },
-        array![0.0].view(),
-        0.0,
-        array![-1.0].view(),
-        array![1.0].view(),
-        1.0,
-        f64::INFINITY,
-    )
-    .expect("a step");
+    let out = LineSearch::wolfe(1e-4, 0.9, 40)
+        .search_from(
+            |x: ArrayView1<f64>| {
+                alphas.push(x[0]);
+                walled(x[0])
+            },
+            array![0.0].view(),
+            0.0,
+            array![-1.0].view(),
+            array![1.0].view(),
+            1.0,
+            f64::INFINITY,
+        )
+        .expect("a step");
     assert_eq!(alphas[..3], [1.0, 0.5, 0.25]);
     assert!(out.f.is_finite() && out.f < 0.0);
 }

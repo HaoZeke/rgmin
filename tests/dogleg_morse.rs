@@ -280,13 +280,11 @@ struct Run {
 }
 
 fn control(gtol: f64, maxiter: usize) -> Control {
-    Control {
-        maxiter,
-        gtol,
-        istep: 0.1,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(maxiter)
+        .with_gtol(gtol)
+        .with_istep(0.1)
+        .with_maxmove(None)
 }
 
 fn run_method(
@@ -432,9 +430,7 @@ fn morse_pos_0000_dogleg_clears_the_force_stop_with_the_cap() {
     let uncapped = run_method(Method::Dogleg, &start, None, gtol, 40, fg, hs);
     let capped = run_method(Method::Dogleg, &start, Some(0.2), gtol, 40, fg, hs);
     let newton = run_method(
-        Method::Newton {
-            kind: NewtonKind::Shifted,
-        },
+        Method::newton(NewtonKind::Shifted),
         &start,
         Some(0.2),
         gtol,
@@ -642,9 +638,7 @@ fn benchmark_morse_bulk_dogleg_campaign() {
                         ("dogleg-capped", Method::Dogleg, Some(0.2)),
                         (
                             "newton-capped",
-                            Method::Newton {
-                                kind: NewtonKind::Shifted,
-                            },
+                            Method::newton(NewtonKind::Shifted),
                             Some(0.2),
                         ),
                     ] {

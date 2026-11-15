@@ -64,6 +64,7 @@ pub struct Ode12rState {
 }
 
 /// What one trial decided.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ode12rVerdict {
     /// The trial geometry is kept.

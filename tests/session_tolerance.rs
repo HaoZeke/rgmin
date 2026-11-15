@@ -7,15 +7,14 @@ fn tightening_the_tolerance_reaches_the_requested_gradient() {
     for method in [Method::lbfgs(), Method::Bfgs, Method::Steepest] {
         let mut solver = Solver::new(
             method,
-            Control {
-                maxiter: 10,
-                gtol: 1e-3,
-                istep: 0.5,
-                maxmove: None,
-                stop_norm: rgmin::StopNorm::Two,
-                ftol_rel: None,
-                noise_floor: None,
-            },
+            Control::default()
+                .with_maxiter(10)
+                .with_gtol(1e-3)
+                .with_istep(0.5)
+                .with_maxmove(None)
+                .with_stop_norm(rgmin::StopNorm::Two)
+                .with_ftol_rel(None)
+                .with_noise_floor(None),
             1,
         )
         .with_gtol(1e-10);
@@ -33,15 +32,14 @@ fn loosening_the_tolerance_leaves_a_stationary_point_in_place() {
     for method in [Method::lbfgs(), Method::Bfgs, Method::Steepest] {
         let mut solver = Solver::new(
             method,
-            Control {
-                maxiter: 10,
-                gtol: 1e-12,
-                istep: 0.5,
-                maxmove: None,
-                stop_norm: rgmin::StopNorm::Two,
-                ftol_rel: None,
-                noise_floor: None,
-            },
+            Control::default()
+                .with_maxiter(10)
+                .with_gtol(1e-12)
+                .with_istep(0.5)
+                .with_maxmove(None)
+                .with_stop_norm(rgmin::StopNorm::Two)
+                .with_ftol_rel(None)
+                .with_noise_floor(None),
             1,
         )
         .with_gtol(1e-3);

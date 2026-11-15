@@ -71,11 +71,7 @@ fn stationary() -> Array1<f64> {
 }
 
 fn zero_budget() -> Control {
-    Control {
-        maxiter: 0,
-        gtol: GTOL,
-        ..Control::default()
-    }
+    Control::default().with_maxiter(0).with_gtol(GTOL)
 }
 
 /// Every first-order method a session or `minimize_method` runs.
@@ -89,8 +85,8 @@ fn first_order() -> Vec<Method> {
         Method::adam(),
         Method::Steepest,
         Method::pso(),
-        Method::Fire { kind: FireKind::V1 },
-        Method::Fire { kind: FireKind::V2 },
+        Method::fire(FireKind::V1),
+        Method::fire(FireKind::V2),
         Method::Bb,
         Method::QuickMin,
         Method::Ode12r,
@@ -153,12 +149,8 @@ fn zero_budget_one_shots_judge_the_evaluated_start() {
             assert_judged_at_start(&format!("minimize_method {method:?}"), &x0, &report);
         }
         let second_order = [
-            Method::Newton {
-                kind: NewtonKind::Shifted,
-            },
-            Method::Newton {
-                kind: NewtonKind::Rfo,
-            },
+            Method::newton(NewtonKind::Shifted),
+            Method::newton(NewtonKind::Rfo),
             Method::Dogleg,
         ];
         for method in first_order().into_iter().chain(second_order) {

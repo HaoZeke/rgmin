@@ -14,13 +14,11 @@ const CAP: f64 = 0.1;
 const CAP_ROUNDING: f64 = 8.0 * f64::EPSILON;
 
 fn control() -> Control {
-    Control {
-        maxiter: STEPS,
-        gtol: 1e-12,
-        istep: 1.0,
-        maxmove: Some(CAP),
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(STEPS)
+        .with_gtol(1e-12)
+        .with_istep(1.0)
+        .with_maxmove(CAP)
 }
 
 fn distance(a: &Array1<f64>, b: &Array1<f64>) -> f64 {
@@ -168,14 +166,14 @@ fn steepest_with_one_trial_stays_on_the_sphere() {
 
 #[test]
 fn fire_v1_stays_on_the_sphere() {
-    let walk = walk(Method::Fire { kind: FireKind::V1 }, Accept::None, 0.0);
+    let walk = walk(Method::fire(FireKind::V1), Accept::None, 0.0);
     assert_on_sphere(&walk);
     assert!(walk.energies <= STEPS + 1, "{} energies", walk.energies);
 }
 
 #[test]
 fn fire_v2_stays_on_the_sphere() {
-    let walk = walk(Method::Fire { kind: FireKind::V2 }, Accept::None, 0.0);
+    let walk = walk(Method::fire(FireKind::V2), Accept::None, 0.0);
     assert_on_sphere(&walk);
 }
 
@@ -341,7 +339,7 @@ fn flat_walks_keep_their_digests() {
     let cases = [
         (Method::NewtonCg, 0xf760_362d_9a91_9afa_u64),
         (Method::NewtonPcg, 0x988d_159b_1dc5_d42e),
-        (Method::Fire { kind: FireKind::V2 }, 0x552b_a4b9_b0eb_63a9),
+        (Method::fire(FireKind::V2), 0x552b_a4b9_b0eb_63a9),
         (Method::lbfgs(), 0x9753_1d14_9209_f75e),
     ];
     for (method, recorded) in cases {

@@ -65,23 +65,18 @@ fn hash_report(mut hash: u64, value: f64, coords: &Array1<f64>, grad_norm: f64) 
 }
 
 fn control(steps: usize) -> Control {
-    Control {
-        maxiter: steps,
-        gtol: 0.0,
-        istep: 0.1,
-        maxmove: None,
-        stop_norm: rgmin::StopNorm::Two,
-        ftol_rel: None,
-        noise_floor: None,
-    }
+    Control::default()
+        .with_maxiter(steps)
+        .with_gtol(0.0)
+        .with_istep(0.1)
+        .with_maxmove(None)
+        .with_stop_norm(rgmin::StopNorm::Two)
+        .with_ftol_rel(None)
+        .with_noise_floor(None)
 }
 
 fn wolfe() -> LineSearch {
-    LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 20,
-    }
+    LineSearch::wolfe(1e-4, 0.9, 20)
 }
 
 fn hash_oneshot(method: Method, linesearch: LineSearch, natoms: usize, steps: usize) -> u64 {
@@ -138,14 +133,8 @@ fn morse_chain_iterates_stay_bit_identical() {
             hash_oneshot(Method::adam(), LineSearch::default(), N, STEPS),
         ),
         ("lbfgs-session", hash_session(Method::lbfgs(), N, STEPS)),
-        (
-            "fire1",
-            hash_session(Method::Fire { kind: FireKind::V1 }, N, STEPS),
-        ),
-        (
-            "fire2",
-            hash_session(Method::Fire { kind: FireKind::V2 }, N, STEPS),
-        ),
+        ("fire1", hash_session(Method::fire(FireKind::V1), N, STEPS)),
+        ("fire2", hash_session(Method::fire(FireKind::V2), N, STEPS)),
     ];
     for (name, hash) in got {
         let want = match name {

@@ -13,11 +13,7 @@ fn quad(x: f64) -> (f64, f64) {
 }
 
 fn main() {
-    let kind = LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 20,
-    };
+    let kind = LineSearch::wolfe(1e-4, 0.9, 20);
     let start = array![0.0];
     let dir = array![1.0];
     let (from_library, _, alpha_library) = kind.search(

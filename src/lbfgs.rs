@@ -78,6 +78,7 @@ pub enum LbfgsStep {
     /// eOn `LBFGS::getStep` with the client's default switches:
     /// `auto_scale`, `distance_reset`, `angle_reset`, curvature `reset`.
     /// No line search. See the module docs.
+    #[non_exhaustive]
     Capped {
         /// Longest displacement of one atom, in the coordinate length.
         max_atom: f64,
@@ -87,6 +88,7 @@ pub enum LbfgsStep {
     /// and keep the pairs. An empty memory follows the force and the
     /// step has that length. A direction that is not descent clears the
     /// memory. This is not the eOn step and not the default.
+    #[non_exhaustive]
     Scaled {
         /// Longest displacement of one atom, in the coordinate length.
         max_atom: f64,
@@ -226,6 +228,16 @@ impl LbfgsBuilder {
 }
 
 impl LbfgsStep {
+    /// The eOn step: no line search, capped at `max_atom` per atom.
+    pub const fn capped(max_atom: f64) -> Self {
+        Self::Capped { max_atom }
+    }
+
+    /// No line search, the whole step scaled to `max_atom` per atom.
+    pub const fn scaled(max_atom: f64) -> Self {
+        Self::Scaled { max_atom }
+    }
+
     /// Positive finite cap of a line-search-free rule.
     #[must_use]
     pub fn capped_limit(self) -> Option<f64> {

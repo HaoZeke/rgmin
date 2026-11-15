@@ -221,26 +221,20 @@ impl DifferentiableObjective<f64> for WolfePlane {
 fn session(dim: usize, maxiter: usize, wolfe: bool) -> Solver {
     let mut solver = Solver::new(
         Method::lbfgs(),
-        Control {
-            maxiter,
-            gtol: 1e-2,
-            istep: 1.0,
+        Control::default()
+            .with_maxiter(maxiter)
+            .with_gtol(1e-2)
+            .with_istep(1.0)
             // A negative cap is the hyperparameter session: no Euclidean
             // limit. The default step stays the capped eOn move unless
             // this test opts into Wolfe.
-            maxmove: Some(-1.0),
-            ..Control::default()
-        },
+            .with_maxmove(-1.0),
         dim,
     );
     if wolfe {
         solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
         solver.set_atom_maxmove(0.0);
-        solver.set_linesearch(LineSearch::Wolfe {
-            c1: 1e-4,
-            c2: 0.9,
-            maxiter: 80,
-        });
+        solver.set_linesearch(LineSearch::wolfe(1e-4, 0.9, 80));
     } else {
         solver.set_lbfgs_capped(1e-10).unwrap();
         solver.set_atom_maxmove(1e-10);
@@ -333,17 +327,10 @@ fn drive_wolfe_on(objective: WolfePlane) -> (Status, usize) {
 
 #[test]
 fn the_default_step_stays_the_capped_eon_move() {
-    assert_eq!(
-        Lbfgs::default().step,
-        LbfgsStep::Capped {
-            max_atom: EON_MAX_MOVE
-        }
-    );
+    assert_eq!(Lbfgs::default().step, LbfgsStep::capped(EON_MAX_MOVE));
     assert_eq!(
         Solver::new(Method::lbfgs(), Control::default(), 2).lbfgs_step(),
-        LbfgsStep::Capped {
-            max_atom: EON_MAX_MOVE
-        }
+        LbfgsStep::capped(EON_MAX_MOVE)
     );
 }
 
@@ -432,11 +419,7 @@ impl DifferentiableObjective<f64> for Bowl {
 /// the plateau stop is for a caller's own step loop, not a new budget.
 #[test]
 fn a_zero_budget_one_shot_still_takes_no_step() {
-    let control = Control {
-        maxiter: 0,
-        gtol: 1e-8,
-        ..Control::default()
-    };
+    let control = Control::default().with_maxiter(0).with_gtol(1e-8);
     let x0 = array![1.0, -1.0, 0.5];
     let report = rgmin::minimize_lbfgs(
         &Bowl::new(3),
@@ -558,20 +541,12 @@ fn unlimited_fits_on_a_flat_valley_or_an_ill_conditioned_bowl_still_converge() {
                 let objective = Smooth::new(x0.len(), f);
                 let mut solver = Solver::new(
                     Method::lbfgs(),
-                    Control {
-                        maxiter: 0,
-                        gtol,
-                        ..Control::default()
-                    },
+                    Control::default().with_maxiter(0).with_gtol(gtol),
                     x0.len(),
                 );
                 if wolfe {
                     solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
-                    solver.set_linesearch(LineSearch::Wolfe {
-                        c1: 1e-4,
-                        c2: 0.9,
-                        maxiter: 80,
-                    });
+                    solver.set_linesearch(LineSearch::wolfe(1e-4, 0.9, 80));
                 }
                 if let Some(relative) = window {
                     assert!(solver.set_objective_roundoff(relative));

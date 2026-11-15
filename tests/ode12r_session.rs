@@ -56,12 +56,10 @@ impl DifferentiableObjective<f64> for Quad {
 }
 
 fn session(istep: f64, dim: usize) -> Solver {
-    let control = Control {
-        maxiter: 1,
-        gtol: 0.0,
-        istep,
-        ..Control::default()
-    };
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(0.0)
+        .with_istep(istep);
     Solver::new(Method::Ode12r, control, dim)
 }
 
@@ -195,11 +193,7 @@ fn chain(n: usize) -> (Array1<f64>, Neighbours, ExpParams) {
             neigh.r.push(1.0);
         }
     }
-    let params = ExpParams {
-        r_nn: Some(1.0),
-        mu: Some(1.0),
-        ..ExpParams::default()
-    };
+    let params = ExpParams::default().with_r_nn(1.0).with_mu(1.0);
     (pos, neigh, params)
 }
 
@@ -219,15 +213,14 @@ fn chain_steps(precon: bool) -> usize {
     let mut x = geom.clone();
     x[1] = 0.2;
     x[4] = -0.15;
-    let control = Control {
-        maxiter: 1,
-        gtol: 1e-8,
-        istep: 0.1,
-        maxmove: None,
-        stop_norm: rgmin::StopNorm::Two,
-        ftol_rel: None,
-        noise_floor: None,
-    };
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(1e-8)
+        .with_istep(0.1)
+        .with_maxmove(None)
+        .with_stop_norm(rgmin::StopNorm::Two)
+        .with_ftol_rel(None)
+        .with_noise_floor(None);
     let mut solver = Solver::new(Method::Ode12r, control, x.len());
     if precon {
         solver.set_exp(geom.view(), &neigh, &params).unwrap();

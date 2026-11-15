@@ -56,11 +56,7 @@ impl DifferentiableObjective<f64> for Bowl {
     }
 }
 fn wolfe() -> LineSearch {
-    LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 20,
-    }
+    LineSearch::wolfe(1e-4, 0.9, 20)
 }
 
 #[test]
@@ -96,11 +92,7 @@ fn lbfgs_retains_the_stationary_trial_and_honors_explicit_zero_slack() {
         let mut point = array![2e-8];
         let mut solver = Solver::new(
             Method::lbfgs(),
-            Control {
-                gtol: 1e-12,
-                ftol_rel: slack,
-                ..Control::default()
-            },
+            Control::default().with_gtol(1e-12).with_ftol_rel(slack),
             1,
         );
         solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
@@ -127,14 +119,7 @@ fn a_box_modified_trial_must_satisfy_its_own_curvature_check() {
         calls: AtomicUsize::new(0),
     };
     let mut point = array![0.0];
-    let mut solver = Solver::new(
-        Method::lbfgs(),
-        Control {
-            gtol: 1e-12,
-            ..Control::default()
-        },
-        1,
-    );
+    let mut solver = Solver::new(Method::lbfgs(), Control::default().with_gtol(1e-12), 1);
     solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     let report = solver.step(&objective, &mut point).unwrap();
     assert_eq!(point, array![0.0]);

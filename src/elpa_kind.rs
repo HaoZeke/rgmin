@@ -48,11 +48,16 @@ impl ElpaStage {
 }
 
 /// Typed ELPA extras. `nblk == 0` selects 16.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ElpaParams {
     /// ScaLAPACK block size. 0 selects 16.
     pub nblk: u32,
 }
+
+with_setters!(ElpaParams {
+    with_nblk => nblk: val u32,
+});
 
 impl ElpaParams {
     /// Block size after the 0 -> 16 default.
@@ -71,6 +76,7 @@ pub fn elpa_config(kind: EigensolverKind, elpa: &ElpaParams) -> Option<(i32, u32
 ///
 /// `il` is 1. `iu` is `nev`, not `n`, unless the caller asked for
 /// the full spectrum (`nev == n`). The gathered `Z` is `n x iu`.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ElpaSpectrum {
     /// 1-based first index. Always 1.

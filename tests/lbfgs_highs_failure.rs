@@ -7,10 +7,9 @@ use std::cell::Cell;
 fn contradictory() -> Lbfgs {
     let mut opt = Lbfgs::default();
     opt.record(array![1.0, 0.0], array![2.0, 0.0]);
-    opt.highs = Some(HighsStep {
-        equalities: vec![(vec![(0, 1.0)], 0.0), (vec![(0, 1.0)], 1.0)],
-        ..HighsStep::default()
-    });
+    opt.highs = Some(
+        HighsStep::default().with_equalities(vec![(vec![(0, 1.0)], 0.0), (vec![(0, 1.0)], 1.0)]),
+    );
     opt
 }
 

@@ -43,17 +43,11 @@ fn tiny_liu_storey_direction_restarts_until_the_gradient_is_small() {
     let objective = Bowl {
         bounds: Bounds::new(array![-10.0, -10.0], array![10.0, 10.0], 0.0),
     };
-    let control = Control {
-        maxiter: 20,
-        gtol: 1e-8,
-        ..Control::default()
-    };
-    let params = ScgParams {
-        lambda: 1e-5,
-        tol_sol: 0.0,
-        tol_func: 0.0,
-        ..ScgParams::default()
-    };
+    let control = Control::default().with_maxiter(20).with_gtol(1e-8);
+    let params = ScgParams::default()
+        .with_lambda(1e-5)
+        .with_tol_sol(0.0)
+        .with_tol_func(0.0);
     for exact in [false, true] {
         let report = if exact {
             minimize_scg_exact(

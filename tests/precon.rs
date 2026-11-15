@@ -49,11 +49,7 @@ fn chain(n: usize) -> (Array1<f64>, Neighbours, ExpParams) {
             neigh.r.push(1.0);
         }
     }
-    let params = ExpParams {
-        r_nn: Some(1.0),
-        mu: Some(1.0),
-        ..ExpParams::default()
-    };
+    let params = ExpParams::default().with_r_nn(1.0).with_mu(1.0);
     (pos, neigh, params)
 }
 
@@ -72,14 +68,12 @@ fn steps_until(precon: bool, estimate: bool) -> (usize, Option<f64>) {
     let mut x = geom.clone();
     x[1] = 0.2;
     x[4] = -0.15;
-    let control = Control {
-        maxiter: 1,
-        gtol: 1e-8,
-        istep: 1.0,
-        maxmove: None,
-        ..Default::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: 5 }, control, x.len());
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(1e-8)
+        .with_istep(1.0)
+        .with_maxmove(None);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(5), control, x.len());
     // The metric's Newton step is longer than the default per-atom cap.
     // The comparison is the strong Wolfe search. The default step is the eOn cap.
     solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
@@ -137,13 +131,11 @@ fn steps_of(method: Method, precon: bool, limit: usize, istep: f64) -> (usize, f
     let mut x = geom.clone();
     x[0] = 0.4;
     x[7] = -0.25;
-    let control = Control {
-        maxiter: 1,
-        gtol: 1e-8,
-        istep,
-        maxmove: None,
-        ..Default::default()
-    };
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(1e-8)
+        .with_istep(istep)
+        .with_maxmove(None);
     let mut solver = Solver::new(method, control, x.len());
     // Iteration counts here are the metric's, not the default cap's.
     solver.set_atom_maxmove(0.0);
@@ -166,9 +158,7 @@ fn steps_of(method: Method, precon: bool, limit: usize, istep: f64) -> (usize, f
 
 #[test]
 fn preconditioned_fire_and_nlcg_take_fewer_iterations_on_a_chain() {
-    let fire = Method::Fire {
-        kind: rgmin::FireKind::V1,
-    };
+    let fire = Method::fire(rgmin::FireKind::V1);
     let cg = Method::nlcg(rgmin::Conjugacy::PolakRibiere);
     let fire_with = steps_of(fire.clone(), true, 250, 0.2);
     let fire_without = steps_of(fire, false, 250, 0.2);
@@ -202,17 +192,13 @@ fn fire_and_nlcg_move_in_the_metric() {
             0.0,
         ),
     };
-    let control = Control {
-        maxiter: 1,
-        gtol: 1e-10,
-        istep: 0.05,
-        maxmove: None,
-        ..Default::default()
-    };
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(1e-10)
+        .with_istep(0.05)
+        .with_maxmove(None);
     for method in [
-        Method::Fire {
-            kind: rgmin::FireKind::V1,
-        },
+        Method::fire(rgmin::FireKind::V1),
         Method::nlcg(rgmin::Conjugacy::PolakRibiere),
     ] {
         let mut plain = geom.clone();
@@ -339,25 +325,20 @@ fn lindh_and_ff_shorten_lbfgs_on_a_molecule() {
 
     let geom = water();
     let z = [8, 1, 1];
-    let lindh_params = LindhParams {
-        mu: Some(1.0),
-        ..LindhParams::default()
-    };
+    let lindh_params = LindhParams::default().with_mu(1.0);
     let model = Lindh::assemble(geom.view(), &z, &[], &lindh_params).unwrap();
     let obj = ModelQuad {
         apply: |x: ArrayView1<f64>| model.apply(x),
         dim: geom.len(),
         bounds: Bounds::new(Array1::from_elem(9, -1e6), Array1::from_elem(9, 1e6), 0.0),
     };
-    let control = Control {
-        maxiter: 1,
-        gtol: 1e-8,
-        istep: 1.0,
-        maxmove: None,
-        ..Default::default()
-    };
-    let mut plain = Solver::new(Method::Lbfgs { memory: 5 }, control.clone(), geom.len());
-    let mut with = Solver::new(Method::Lbfgs { memory: 5 }, control, geom.len());
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(1e-8)
+        .with_istep(1.0)
+        .with_maxmove(None);
+    let mut plain = Solver::new(Method::lbfgs_with_memory(5), control.clone(), geom.len());
+    let mut with = Solver::new(Method::lbfgs_with_memory(5), control, geom.len());
     plain.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     with.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     with.set_lindh(geom.view(), &z, &[], &lindh_params).unwrap();
@@ -370,10 +351,7 @@ fn lindh_and_ff_shorten_lbfgs_on_a_molecule() {
         BondTerm { i: 0, j: 1, k: 1.0 },
         BondTerm { i: 0, j: 2, k: 1.0 },
     ];
-    let ff_params = FfParams {
-        mu: Some(1.0),
-        ..FfParams::default()
-    };
+    let ff_params = FfParams::default().with_mu(1.0);
     let terms = FfTerms {
         bonds: &bonds,
         ..FfTerms::default()
@@ -384,15 +362,13 @@ fn lindh_and_ff_shorten_lbfgs_on_a_molecule() {
         dim: geom.len(),
         bounds: Bounds::new(Array1::from_elem(9, -1e6), Array1::from_elem(9, 1e6), 0.0),
     };
-    let control = Control {
-        maxiter: 1,
-        gtol: 1e-8,
-        istep: 1.0,
-        maxmove: None,
-        ..Default::default()
-    };
-    let mut plain = Solver::new(Method::Lbfgs { memory: 5 }, control.clone(), geom.len());
-    let mut with = Solver::new(Method::Lbfgs { memory: 5 }, control, geom.len());
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(1e-8)
+        .with_istep(1.0)
+        .with_maxmove(None);
+    let mut plain = Solver::new(Method::lbfgs_with_memory(5), control.clone(), geom.len());
+    let mut with = Solver::new(Method::lbfgs_with_memory(5), control, geom.len());
     plain.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     with.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     with.set_ff(geom.view(), terms, &ff_params).unwrap();
@@ -426,10 +402,7 @@ fn lindh_estimates_the_energy_scale() {
 
     let geom = water();
     let z = [8, 1, 1];
-    let params = LindhParams {
-        mu: Some(1.0),
-        ..LindhParams::default()
-    };
+    let params = LindhParams::default().with_mu(1.0);
     let model = rgmin::Lindh::assemble(geom.view(), &z, &[], &params).unwrap();
     let scale = 2.5;
     let obj = ModelQuad {
@@ -437,18 +410,13 @@ fn lindh_estimates_the_energy_scale() {
         dim: geom.len(),
         bounds: Bounds::new(Array1::from_elem(9, -1e6), Array1::from_elem(9, 1e6), 0.0),
     };
-    let estimated = LindhParams {
-        lengths: Some([4.0, 4.0, 4.0]),
-        ..LindhParams::default()
-    };
-    let control = Control {
-        maxiter: 1,
-        gtol: 1e-10,
-        istep: 1.0,
-        maxmove: None,
-        ..Default::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: 4 }, control, geom.len());
+    let estimated = LindhParams::default().with_lengths([4.0, 4.0, 4.0]);
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(1e-10)
+        .with_istep(1.0)
+        .with_maxmove(None);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(4), control, geom.len());
     solver.set_lindh(geom.view(), &z, &[], &estimated).unwrap();
     let mut x = geom.clone();
     solver.step(&obj, &mut x).unwrap();
@@ -557,11 +525,7 @@ fn precon_fingerprint() -> Vec<u64> {
         .max(size_above(rgmin::N_PAR_LINDH_APPLY))
         .max(size_above(rgmin::N_PAR_ASSEMBLE));
     let (pos, z) = lattice(n);
-    let lp = LindhParams {
-        mu: Some(1.0),
-        r_cut: Some(3.0),
-        ..LindhParams::default()
-    };
+    let lp = LindhParams::default().with_mu(1.0).with_r_cut(3.0);
     let lindh = Lindh::assemble(pos.view(), &z, &[], &lp).unwrap();
     let rhs = Array1::from_iter((0..pos.len()).map(|i| ((i % 5) as f64 - 2.0) * 0.1));
     let mut out = Vec::new();
@@ -569,11 +533,7 @@ fn precon_fingerprint() -> Vec<u64> {
     out.extend(bits_of(&lindh.solve(rhs.view()).unwrap()));
 
     let (bonds, angles) = rgmin::bonded_terms(pos.view(), 2.2, 1.0, 0.2, None).unwrap();
-    let fp = FfParams {
-        mu: Some(1.0),
-        r_cut: Some(3.0),
-        ..FfParams::default()
-    };
+    let fp = FfParams::default().with_mu(1.0).with_r_cut(3.0);
     let terms = FfTerms {
         bonds: &bonds,
         angles: &angles,
@@ -587,11 +547,7 @@ fn precon_fingerprint() -> Vec<u64> {
     let (pos, _z) = if exp_n == n { (pos, z) } else { lattice(exp_n) };
     let neigh = neighbours_cutoff(&pos, 2.6);
     let rhs = Array1::from_iter((0..pos.len()).map(|i| ((i % 5) as f64 - 2.0) * 0.1));
-    let ep = ExpParams {
-        mu: Some(1.0),
-        r_nn: Some(1.45),
-        ..ExpParams::default()
-    };
+    let ep = ExpParams::default().with_mu(1.0).with_r_nn(1.45);
     let exp = Exp::assemble(pos.view(), &neigh, &ep, 1.0, 1.45).unwrap();
     out.extend(bits_of(&exp.apply(rhs.view())));
     out.extend(bits_of(&exp.solve(rhs.view()).unwrap()));
@@ -626,14 +582,12 @@ fn geometry_position(precon: bool, cap: f64) -> Array1<f64> {
         bounds: wide_bounds(3 * n),
     };
     let mut x = geom;
-    let control = Control {
-        maxiter: 1,
-        gtol: 1e-12,
-        istep: 1.0,
-        maxmove: None,
-        ..Default::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: 5 }, control, x.len());
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(1e-12)
+        .with_istep(1.0)
+        .with_maxmove(None);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(5), control, x.len());
     solver.set_atom_maxmove(cap);
     solver.set_geometry_step(true);
     if precon {
@@ -673,14 +627,12 @@ fn geometry_lbfgs_caps_along_the_preconditioned_force() {
     };
     let cap = 0.05;
     let mut x = geom.clone();
-    let control = Control {
-        maxiter: 1,
-        gtol: 1e-12,
-        istep: 1.0,
-        maxmove: None,
-        ..Default::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: 5 }, control, x.len());
+    let control = Control::default()
+        .with_maxiter(1)
+        .with_gtol(1e-12)
+        .with_istep(1.0)
+        .with_maxmove(None);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(5), control, x.len());
     solver.set_atom_maxmove(cap);
     solver.set_geometry_step(true);
     solver

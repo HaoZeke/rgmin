@@ -7,21 +7,15 @@ use rgmin::linesearch::zoom;
 use rgmin::{Conjugacy, Control, LineSearch, Restart, minimize};
 
 fn control() -> Control {
-    Control {
-        maxiter: 200,
-        gtol: 1e-8,
-        istep: 0.1,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(200)
+        .with_gtol(1e-8)
+        .with_istep(0.1)
+        .with_maxmove(None)
 }
 
 fn wolfe() -> LineSearch {
-    LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 40,
-    }
+    LineSearch::wolfe(1e-4, 0.9, 40)
 }
 
 /// `f(x) = (x[0] - 1)^2`. Line `x = α` along `d = 1` has minimizer `α = 1`.
@@ -58,11 +52,7 @@ fn zoom_exhaustion_retains_the_feasible_armijo_endpoint() {
 
 #[test]
 fn wolfe_domain_boundary_keeps_a_measured_descent() {
-    let search = LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 6,
-    };
+    let search = LineSearch::wolfe(1e-4, 0.9, 6);
     let (point, value, alpha) =
         search.search(bounded_linear, array![0.0].view(), array![-1.0].view(), 1.0);
     assert_eq!(point[0], -3.0 / 32.0);
@@ -131,11 +121,7 @@ fn wolfe_zoom_finds_strong_wolfe_on_quadratic() {
     // is |α - 1| <= 0.1. istep = 3 fails Armijo, so algorithm 3.5 zooms.
     let pos = array![0.0];
     let dir = array![1.0];
-    let ls = LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.1,
-        maxiter: 40,
-    };
+    let ls = LineSearch::wolfe(1e-4, 0.1, 40);
     let (x, f, a) = ls.search(quadratic, pos.view(), dir.view(), 3.0);
     assert!(a > 0.0, "Wolfe returned a zero step");
     assert!(
@@ -158,11 +144,7 @@ fn goldstein_expands_a_too_short_step() {
     let pos = array![0.0];
     let dir = array![1.0];
     let c = 0.1;
-    let ls = LineSearch::Goldstein {
-        c,
-        beta: 0.5,
-        maxiter: 40,
-    };
+    let ls = LineSearch::goldstein(c, 0.5, 40);
     let (_x, f, a) = ls.search(quadratic, pos.view(), dir.view(), 1e-8);
     assert!(
         a + 1e-12 >= 2.0 * c,
@@ -179,11 +161,7 @@ fn goldstein_out_of_trials_reports_the_step_of_its_point() {
     // runs out of trials and returns its best point, at alpha = 0.8.
     let pos = array![0.0];
     let dir = array![1.0];
-    let ls = LineSearch::Goldstein {
-        c: 0.45,
-        beta: 0.5,
-        maxiter: 41,
-    };
+    let ls = LineSearch::goldstein(0.45, 0.5, 41);
     let (x, f, a) = ls.search(quadratic, pos.view(), dir.view(), 0.8);
     assert_eq!(x[0], 0.8);
     assert_eq!(a, x[0], "step {a} of point {}", x[0]);
@@ -239,11 +217,7 @@ fn goldstein_backtracking_descends() {
         &control(),
         Conjugacy::PolakRibiere,
         Restart::Never,
-        LineSearch::Goldstein {
-            c: 1e-4,
-            beta: 0.5,
-            maxiter: 40,
-        },
+        LineSearch::goldstein(1e-4, 0.5, 40),
     )
     .unwrap();
     assert!(report.value < f0, "Goldstein {} -> {}", f0, report.value);
@@ -258,25 +232,21 @@ fn a_huge_opening_value_zooms_by_bisection() {
     let dir = array![1.0];
     let g0 = array![-1.0];
     let mut alphas = Vec::new();
-    let out = LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 40,
-    }
-    .search_from(
-        |x: ArrayView1<f64>| {
-            alphas.push(x[0]);
-            let a = x[0];
-            (-a + 1e45 * a.powi(12), array![-1.0 + 12e45 * a.powi(11)])
-        },
-        pos.view(),
-        0.0,
-        g0.view(),
-        dir.view(),
-        1.0,
-        f64::INFINITY,
-    )
-    .expect("a step");
+    let out = LineSearch::wolfe(1e-4, 0.9, 40)
+        .search_from(
+            |x: ArrayView1<f64>| {
+                alphas.push(x[0]);
+                let a = x[0];
+                (-a + 1e45 * a.powi(12), array![-1.0 + 12e45 * a.powi(11)])
+            },
+            pos.view(),
+            0.0,
+            g0.view(),
+            dir.view(),
+            1.0,
+            f64::INFINITY,
+        )
+        .expect("a step");
     assert_eq!(alphas[..3], [1.0, 0.5, 0.25]);
     assert!(out.f < 0.0);
 }

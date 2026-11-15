@@ -55,6 +55,7 @@ pub enum TcgStop {
 }
 
 /// Result of one tangent-space subproblem.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct TcgResult {
     /// Tangent step `eta`.
@@ -158,6 +159,7 @@ where
 }
 
 /// Trust radius state with the reference update rule.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct RtrRadius {
     /// Radius of the current tangent-space trust region.
@@ -165,6 +167,11 @@ pub struct RtrRadius {
     /// Upper bound on the trust radius.
     pub radius_max: f64,
 }
+
+with_setters!(RtrRadius {
+    with_radius => radius: val f64,
+    with_radius_max => radius_max: val f64,
+});
 
 impl RtrRadius {
     /// Reference initialisation: `Delta_0 = Delta_bar / 8`.

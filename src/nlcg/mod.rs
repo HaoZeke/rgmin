@@ -69,6 +69,7 @@ pub enum Conjugacy {
     /// xtsci `HybridizedConj`: `max` or `min` of two child β formulas.
     ///
     /// This is not the Gilbert-Nocedal FR-PR hybrid ([`Self::FrPr`]).
+    #[non_exhaustive]
     Hybrid {
         /// First formula.
         a: Box<Conjugacy>,
@@ -91,12 +92,14 @@ pub enum Restart {
     ///
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    #[non_exhaustive]
     Njws {
         /// ν; book default is 0.1.
         threshold: f64,
     },
     /// eOn `ConjugateGradients::getStep`: restart when
     /// `|g·g_old| >= threshold * ||g_old||^2`. The client uses 0.5.
+    #[non_exhaustive]
     Powell {
         /// Fraction of `||g_old||^2`. The eOn value is 0.5.
         threshold: f64,
@@ -112,6 +115,16 @@ impl Restart {
     /// eOn conjugate-gradient restart, threshold 0.5.
     pub fn powell() -> Self {
         Self::Powell { threshold: 0.5 }
+    }
+
+    /// NJWS restart at `threshold`.
+    pub const fn njws_at(threshold: f64) -> Self {
+        Self::Njws { threshold }
+    }
+
+    /// Powell restart at `threshold`.
+    pub const fn powell_at(threshold: f64) -> Self {
+        Self::Powell { threshold }
     }
 
     /// True when the next step should reset to steepest descent.

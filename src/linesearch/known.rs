@@ -22,6 +22,7 @@ use super::interp::{clamp_between, cubic_min, quad_min};
 use super::{LineSearch, LineSearchOptions};
 
 /// Accepted point of a line search, with the oracle answer at it.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct LineOutcome {
     /// The accepted point `x0 + alpha d`.
