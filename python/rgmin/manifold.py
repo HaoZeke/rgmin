@@ -19,12 +19,12 @@ numbers.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar, cast
 
 import numpy as np
 import numpy.typing as npt
 
-from rgmin._core import RiemannianManifold
+from rgmin._maturin import RiemannianManifold
 
 __all__ = ["Manifold", "Product", "SPD", "Stiefel"]
 
@@ -59,15 +59,16 @@ class Manifold(Generic[Point]):
             if array.shape != shape:
                 raise ValueError(f"{name}: shape {array.shape} is not {shape}")
             chunks.append(array.ravel(order="F"))
-        return np.concatenate(chunks).tolist()
+        packed: list[float] = np.concatenate(chunks).tolist()
+        return packed
 
     def _parts(self, value: Any, name: str) -> Sequence[Any]:
         return (value,)
 
-    def _unpack(self, flat: list[float]) -> Any:
+    def _unpack(self, flat: list[float]) -> Point:
         data = np.asarray(flat, dtype=np.float64)
         rows, cols = self._shapes[0]
-        return data.reshape((rows, cols), order="F")
+        return cast(Point, data.reshape((rows, cols), order="F"))
 
     def project(self, x: Point, v: Point) -> Point:
         """Orthogonal projection of the ambient ``v`` onto the tangent space at ``x``.

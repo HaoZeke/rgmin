@@ -4,39 +4,43 @@ Continuous integration runs this file.
 """
 
 import numpy as np
+import numpy.typing as npt
 
 from rgmin import SPD, Product, Stiefel
+
+Array = npt.NDArray[np.float64]
 
 rng = np.random.default_rng(0)
 
 
-def frame(n, p):
+def frame(n: int, p: int) -> Array:
     q, r = np.linalg.qr(rng.normal(size=(n, p)))
     return q * np.sign(np.diag(r))
 
 
-def spd(p):
+def spd(p: int) -> Array:
     a = rng.uniform(-1.0, 1.0, size=(p, p))
-    return a @ a.T + 0.5 * np.eye(p)
+    out: Array = a @ a.T + 0.5 * np.eye(p)
+    return out
 
 
 manifold = Product(Stiefel(6, 2, "polar"), SPD(3, "affine_invariant"))
 target = (frame(6, 2), spd(3))
-x = (frame(6, 2), spd(3))
+x: tuple[Array, ...] = (frame(6, 2), spd(3))
 
 
-def cost_and_gradient(point):
+def cost_and_gradient(point: tuple[Array, ...]) -> tuple[float, tuple[Array, ...]]:
     """f(U, S) = |U - U*|^2 / 2 + |S - S*|^2 / 2 and its Euclidean gradient."""
     diff = tuple(a - b for a, b in zip(point, target))
-    return 0.5 * sum(np.sum(d * d) for d in diff), diff
+    return 0.5 * sum(float(np.sum(d * d)) for d in diff), diff
 
 
-start, _ = cost_and_gradient(x)
+start, egrad = cost_and_gradient(x)
 last = start
+rgrad = egrad
 for _ in range(200):
-    _, egrad = cost_and_gradient(x)
     rgrad, x = manifold.gradient_step(x, egrad, 0.1)
-    cost, _ = cost_and_gradient(x)
+    cost, egrad = cost_and_gradient(x)
     assert cost < last
     last = cost
 

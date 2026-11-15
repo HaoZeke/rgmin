@@ -17,19 +17,15 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+from ase.optimize.optimize import Optimizer
 
-from rgmin._core import Session
-
-
-def _optimizer_base():
-    from ase.optimize.optimize import Optimizer
-
-    return Optimizer
+from rgmin._maturin import Session
 
 
-class _RgminOptimizer(_optimizer_base()):
+class _RgminOptimizer(Optimizer):
     """Shared ASE loop. Subclasses choose the rgmin method."""
 
+    atoms: Any
     kind = "lbfgs"
 
     def __init__(
@@ -68,7 +64,7 @@ class _RgminOptimizer(_optimizer_base()):
         gradient = (-forces).reshape(-1)
         return energy, gradient.tolist()
 
-    def step(self, forces: Any = None) -> None:  # noqa: ARG002
+    def step(self, forces: Any = None) -> None:  # noqa: ARG002  # pyright: ignore[reportIncompatibleMethodOverride]
         native = self._open()
         x0 = np.asarray(self.atoms.get_positions(), dtype=np.float64).reshape(-1)
         updated, _energy, _gnorm = native.step(x0.tolist(), self._objective)

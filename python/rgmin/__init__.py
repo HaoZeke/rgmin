@@ -18,8 +18,8 @@ import numpy as np
 import rgmin._core as _core
 
 __version__ = getattr(_core, "__version__", None)
-if __version__ is None and hasattr(_core, "version"):
-    __version__ = _core.version
+if __version__ is None:
+    __version__ = getattr(_core, "version", None)
 
 _EXPORTS = [
     "BFGS",
@@ -76,6 +76,7 @@ def lowest_eigenpairs(
         return np.asarray(out, dtype=np.float64).reshape(-1).tolist()
 
     def apply_t(rows):
+        assert precond is not None
         incoming = np.asarray(rows, dtype=np.float64)
         out = np.asarray(precond(incoming), dtype=np.float64)
         if out.shape != incoming.shape:

@@ -1,14 +1,33 @@
 from collections.abc import Callable
 from typing import Any
 
-from rgmin._core import LbfgsPairs as LbfgsPairs
-from rgmin._core import LineSearch as LineSearch
-from rgmin._core import Session as Session
+import numpy
+from numpy.typing import NDArray
+
+from rgmin import _core
+from rgmin._core import Method as Method
+from rgmin._core import NumericalError as NumericalError
+from rgmin._core import Report as Report
+from rgmin._core import Solver as Solver
+from rgmin._core import Stop as Stop
+from rgmin._maturin import LbfgsPairs as LbfgsPairs
+from rgmin._maturin import LineSearch as LineSearch
+from rgmin._maturin import Session as Session
 from rgmin.manifold import SPD as SPD
 from rgmin.manifold import Product as Product
 from rgmin.manifold import Stiefel as Stiefel
 
 __version__: str
+
+class SolverConfig(_core.SolverConfig):
+    def __init__(self, method: str | Method = "lbfgs", **options: Any) -> None: ...
+
+def minimize(
+    f_and_grad: Callable[[NDArray[numpy.float64]], tuple[float, NDArray[numpy.float64]]],
+    x0: NDArray[numpy.float64],
+    method: str | Method = "lbfgs",
+    **options: Any,
+) -> tuple[Report, NDArray[numpy.float64]]: ...
 
 def lowest_eigenpairs(
     hvp: Callable[[Any, Any], Any],

@@ -7,7 +7,7 @@ from rgmin import lowest_eigenpairs
 lam = np.array([1.0, -2.0, 4.0])
 
 
-def hvp(_x, vector):
+def hvp(_x: np.ndarray, vector: np.ndarray) -> np.ndarray:
     return lam * np.asarray(vector, dtype=np.float64)
 
 
