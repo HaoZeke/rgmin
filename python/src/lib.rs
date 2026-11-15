@@ -226,12 +226,6 @@ impl Session {
         self.solver.steps()
     }
 
-    /// Gradient evaluations the session has charged.
-    #[getter]
-    fn gradient_calls(&self) -> usize {
-        self.solver.gradient_calls()
-    }
-
     /// Drop the method memory. The next step is a cold start.
     fn forget(&mut self) {
         self.solver.forget();
