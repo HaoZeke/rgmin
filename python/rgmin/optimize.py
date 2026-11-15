@@ -657,15 +657,31 @@ class BarzilaiBorwein(_Scaled):
 class Adam(_Scaled):
     """Kingma-Ba Adam (``beta1=0.9``, ``beta2=0.999``, ``eps=1e-8``).
 
+    The step is ``-learning_rate * mhat / (sqrt(vhat) + eps)``, so
+    each coordinate moves about ``learning_rate`` (Å) per step while
+    its gradient keeps its sign, whatever the gradient's size.
+    ``alpha`` scales the gradient, which Adam divides out, so it does
+    not set the step here; ``maxstep`` still caps the longest atomic
+    displacement. A ``learning_rate`` near ``maxstep`` makes every step
+    a capped sign step: the run climbs out of the starting basin and
+    where it ends depends on the last bits of the forces.
+
     ``accept`` defaults to ``"none"``: a refused step resets the
     moments, and under ``"energy"`` that stalls Adam short of a tight
-    ``fmax``. Unmonitored, Adam's sign-like steps walk off stiff
-    coordinates such as the strain of a ``StrainFilter``; pass
-    ``accept="energy"`` there.
+    ``fmax``.
     """
 
     kind = "adam"
     default_accept = "none"
+
+    def __init__(self, *args: Any, learning_rate: float = 0.02, **kwargs: Any) -> None:
+        self.learning_rate = float(learning_rate)
+        if not (np.isfinite(self.learning_rate) and self.learning_rate > 0.0):
+            raise ValueError(f"learning_rate must be positive and finite, not {learning_rate}")
+        super().__init__(*args, **kwargs)
+
+    def _session_options(self) -> dict[str, Any]:
+        return {**super()._session_options(), "istep": self.learning_rate}
 
 
 class CG(_Scaled):

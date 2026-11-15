@@ -153,8 +153,7 @@ SLOW_ON_STRAIN = ("SteepestDescent", "EonCG", "HagerZhang", "LiuStorey")
 def test_cell_filters_relax_the_cell(name, filter_cls, relaxed_cells):
     system = _vacancy_cell(filter_cls)
     start = system.atoms.cell.volume
-    kwargs = {"accept": "energy"} if name == "Adam" and filter_cls is StrainFilter else {}
-    opt = getattr(optimize, name)(system, logfile=None, **kwargs)
+    opt = getattr(optimize, name)(system, logfile=None)
     slow = filter_cls is StrainFilter and name in SLOW_ON_STRAIN
     converged = opt.run(fmax=0.01, steps=200 if slow else 3000)
     assert converged is not slow
@@ -162,11 +161,54 @@ def test_cell_filters_relax_the_cell(name, filter_cls, relaxed_cells):
     assert system.atoms.get_potential_energy() == pytest.approx(relaxed_cells[filter_cls], abs=2e-3)
 
 
-def test_unmonitored_adam_leaves_the_strain_basin():
+def test_adam_at_the_cap_leaves_the_strain_basin():
     system = _vacancy_cell(StrainFilter)
     start = system.atoms.get_potential_energy()
-    optimize.Adam(system, logfile=None).run(fmax=0.01, steps=200)
+    optimize.Adam(system, logfile=None, learning_rate=1.0).run(fmax=0.01, steps=200)
     assert system.atoms.get_potential_energy() > start
+
+
+def _adam_relax(system):
+    opt = optimize.Adam(system, logfile=None)
+    energies = [system.atoms.get_potential_energy()]
+    for _ in opt.irun(fmax=0.01, steps=3000):
+        energies.append(system.atoms.get_potential_energy())
+    return opt, energies
+
+
+@pytest.mark.parametrize("filter_cls", [FrechetCellFilter, UnitCellFilter])
+def test_adam_relaxation_does_not_hinge_on_rounding(filter_cls, relaxed_cells):
+    """A one-ulp change of the start leaves the default Adam run as it was.
+
+    Forces from another BLAS or CPU differ in the last bits. A run that
+    climbs out of the start basin turns those bits into another path and
+    possibly another minimum.
+    """
+    runs = []
+    for nudge in (False, True):
+        system = _vacancy_cell(filter_cls)
+        if nudge:
+            positions = system.atoms.get_positions()
+            system.atoms.set_positions(np.nextafter(positions, np.inf))
+        runs.append(_adam_relax(system))
+    (opt, energies), (nudged, nudged_energies) = runs
+    assert opt.converged() and nudged.converged()
+    assert opt.nsteps == nudged.nsteps
+    assert max(energies) == energies[0]
+    assert energies[-1] == pytest.approx(nudged_energies[-1], abs=1e-6)
+    assert energies[-1] == pytest.approx(relaxed_cells[filter_cls], abs=2e-3)
+
+
+def test_adam_step_is_the_learning_rate_per_coordinate():
+    system = _vacancy_cell(UnitCellFilter)
+    opt = optimize.Adam(system, logfile=None, learning_rate=0.005)
+    before = np.asarray(opt.optimizable.get_x(), dtype=np.float64).copy()
+    gradient = np.asarray(opt.optimizable.get_gradient(), dtype=np.float64).reshape(-1) / opt.alpha
+    opt.run(fmax=0.0, steps=1)
+    moved = np.asarray(opt.optimizable.get_x(), dtype=np.float64) - before
+    assert np.allclose(moved, -0.005 * gradient / (np.abs(gradient) + 1e-8), rtol=0.0, atol=1e-12)
+    with pytest.raises(ValueError, match="learning_rate"):
+        optimize.Adam(system, logfile=None, learning_rate=0.0)
 
 
 def _time_free(text: str) -> list[str]:
