@@ -1,5 +1,6 @@
 //! Persistent solver session. One [`Solver::step`] is one outer iteration.
 
+mod chart;
 mod constrained;
 pub(crate) mod drive;
 
@@ -179,6 +180,10 @@ pub struct Solver {
     manifold: ManifoldKind,
     /// Per-atom masses for [`ManifoldKind::MwRigid`]. Length N, not 3N.
     masses: Option<Array1<f64>>,
+    /// Scales `d` of the metric chart `z = d * x` of a weighted product.
+    chart: Option<Arc<Array1<f64>>>,
+    /// Natural point last written back from the chart, and its chart point.
+    chart_seen: Option<(Array1<f64>, Array1<f64>)>,
     #[cfg(feature = "highs")]
     highs: bool,
     #[cfg(feature = "highs")]
@@ -343,6 +348,8 @@ impl Solver {
             periodic: false,
             manifold: ManifoldKind::Euclidean,
             masses: None,
+            chart: None,
+            chart_seen: None,
             #[cfg(feature = "highs")]
             highs: false,
             #[cfg(feature = "highs")]
@@ -1000,12 +1007,48 @@ impl Solver {
     }
 
     /// Embedded manifold for project / retract / transport.
+    ///
+    /// A [`ManifoldKind::Product`] with a weight other than one steps in
+    /// its metric chart, [`crate::manifold::ProductManifold::chart`]. Points,
+    /// gradients and reports stay in the coordinates of the factors; the
+    /// chart only changes the inner product every method measures in to the
+    /// weighted product metric. Settings that read raw coordinates as atoms
+    /// or boxes (the exponential preconditioner, the Lindh model, rigid
+    /// projection of the whole vector, the HiGHS box) refuse such a product
+    /// with [`Error::ProductChart`].
     pub fn set_manifold(&mut self, kind: ManifoldKind) {
-        if kind != self.manifold {
+        let (kind, chart) = chart::chart_form(kind);
+        if kind != self.manifold || chart != self.chart {
             self.forget();
             self.tangent = TangentModel::default();
+            self.chart_seen = None;
         }
         self.manifold = kind;
+        self.chart = chart;
+    }
+
+    /// Weighted product of `factors`, \(g = \sum_i w_i g_i\).
+    /// See [`crate::manifold::ProductManifold::new`] and
+    /// [`Self::set_manifold`].
+    pub fn set_product<I>(&mut self, factors: I) -> Result<()>
+    where
+        I: IntoIterator<Item = crate::manifold::ProductFactor>,
+    {
+        self.set_manifold(ManifoldKind::product(factors)?);
+        Ok(())
+    }
+
+    /// `count` copies of `factor`, each of packed length `block`, with
+    /// unit weights. manopt `powermanifold`. Returns `false`, keeping the
+    /// manifold, when `factor` does not fit `block`.
+    pub fn set_power(&mut self, factor: ManifoldKind, block: usize, count: usize) -> bool {
+        match ManifoldKind::power(factor, block, count) {
+            Ok(kind) => {
+                self.set_manifold(kind);
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     /// Oblique \(\mathrm{OB}(n,m)\): product of `m` unit spheres in `R^n`.
@@ -1576,12 +1619,22 @@ impl Solver {
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
+        if let Some(d) = self.chart.clone() {
+            return self.in_chart(&d, obj, x, |s, obj, z| s.run_plain(obj, z));
+        }
+        self.run_plain(obj, x)
+    }
+
+    fn run_plain<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
         self.brief = true;
         let tol = self.control.gtol;
         let budget = self.control.maxiter;
         let mut stop: Result<()> = Ok(());
         for _ in 0..budget {
-            match self.step(obj, x) {
+            match self.step_plain(obj, x) {
                 Ok(rep) if rep.grad_norm < tol => {
                     let value = rep.value;
                     self.brief = false;
@@ -1626,10 +1679,23 @@ impl Solver {
     /// pair that belongs in L-BFGS memory is the one between successive
     /// outers, not a frozen-gradient inner trial (that writes `y = 0`
     /// and wrecks the two-loop).
+    ///
+    /// On a weighted product `s` is a displacement and `y` a difference of
+    /// Euclidean gradients in the factors' coordinates. They enter the
+    /// chart as `d * s` and `y / d`.
     pub fn push_pair(&mut self, s: ArrayView1<f64>, y: ArrayView1<f64>) -> bool {
         if s.len() != self.dim || y.len() != self.dim {
             return false;
         }
+        let charted = self
+            .chart
+            .as_ref()
+            .filter(|d| d.len() == s.len())
+            .map(|d| (&s * &**d, &y / &**d));
+        let (s, y) = match &charted {
+            Some((s, y)) => (s.view(), y.view()),
+            None => (s, y),
+        };
         if self.constraints.is_some() {
             let Ok((s, y)) = self.constrained_pair(s, y) else {
                 return false;
@@ -1657,6 +1723,9 @@ impl Solver {
     }
 
     /// Two-loop direction `d = -H g` with no evaluation and no push.
+    ///
+    /// On a weighted product `g` is a Euclidean gradient in the factors'
+    /// coordinates and the direction is a tangent vector there.
     pub fn search_direction(&self, g: ArrayView1<f64>) -> Result<Array1<f64>> {
         if g.len() != self.dim {
             return Err(Error::Dim {
@@ -1664,6 +1733,14 @@ impl Solver {
                 got: g.len(),
             });
         }
+        if let Some(d) = self.chart.as_ref().filter(|d| d.len() == g.len()) {
+            let dir = self.search_direction_plain((&g / &**d).view())?;
+            return Ok(dir / &**d);
+        }
+        self.search_direction_plain(g)
+    }
+
+    fn search_direction_plain(&self, g: ArrayView1<f64>) -> Result<Array1<f64>> {
         if self.constraints.is_some() {
             return self.constrained_direction(g);
         }
@@ -1754,6 +1831,16 @@ impl Solver {
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
+        if let Some(d) = self.chart.clone() {
+            return self.in_chart(&d, obj, x, |s, obj, z| s.step_plain(obj, z));
+        }
+        self.step_plain(obj, x)
+    }
+
+    fn step_plain<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
         if self.constraints.is_some() {
             return self.constrained_step(x, |s, x| s.step_constrained(obj, x));
         }
@@ -1780,6 +1867,16 @@ impl Solver {
 
     /// One Newton / RFO iteration. Hessian is rebuilt at the current `x`.
     pub fn step_hess<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: HessianObjective + ?Sized,
+    {
+        if let Some(d) = self.chart.clone() {
+            return self.in_chart(&d, obj, x, |s, obj, z| s.step_hess_plain(obj, z));
+        }
+        self.step_hess_plain(obj, x)
+    }
+
+    fn step_hess_plain<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: HessianObjective + ?Sized,
     {
@@ -1813,6 +1910,16 @@ impl Solver {
     /// [`Self::step`] and [`Self::step_hess`] on the same methods use a
     /// forward difference (one gradient per product) instead.
     pub fn step_hvp<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: HessianVector + ?Sized,
+    {
+        if let Some(d) = self.chart.clone() {
+            return self.in_chart(&d, obj, x, |s, obj, z| s.step_hvp_plain(obj, z));
+        }
+        self.step_hvp_plain(obj, x)
+    }
+
+    fn step_hvp_plain<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: HessianVector + ?Sized,
     {
