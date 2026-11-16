@@ -23,13 +23,24 @@
 //! coordinates, with \(c_i s_i^2 = w_i\): \(s_i = 1, c_i = w_i\) in natural
 //! coordinates and \(s_i = \sqrt{w_i}, c_i = 1\) in the chart.
 //!
+//! A factor may also carry a [`TangentMetric`] \(G\), an operator on its
+//! tangent spaces that the caller supplies, such as a harmonic Newton
+//! preconditioner. Its metric is then \(w_i\, g_i(u, G v)\), its gradient
+//! \(w_i^{-1} G^{-1} \mathrm{grad}_i f\) and its Hessian model
+//! \(w_i^{-1} G^{-1} \mathrm{Hess}_i f\), which is self-adjoint in that
+//! metric and exact at critical points. Its geodesics are not known in
+//! closed form, so the exponential, logarithm, distance and parallel
+//! transport of such a product are `None`.
+//!
 //! The derivation is the explanation page `product-manifold`.
 //! Absil, Mahony, Sepulchre, *Optimization Algorithms on Matrix
 //! Manifolds*, <https://doi.org/10.1515/9781400830244>.
 //! Boumal, *An Introduction to Optimization on Smooth Manifolds*,
 //! <https://doi.org/10.1017/9781009166164>.
 
+use std::fmt;
 use std::ops::Range;
+use std::sync::Arc;
 
 use ndarray::{Array1, s};
 
@@ -37,8 +48,42 @@ use crate::error::{Error, Result};
 
 use super::{Manifold, ManifoldKind};
 
-/// One factor of a [`ProductManifold`]: a geometry, its packed length
-/// and its metric weight.
+/// A metric operator \(G_x\) on the tangent spaces of one product factor.
+///
+/// The factor's contribution to the product metric becomes
+/// \(w\, g(u, G_x v)\), where \(g\) is the factor's own metric. At every
+/// factor point `x`, \(G_x\) must map the tangent space to itself and be
+/// self-adjoint and positive definite in \(g\), and [`Self::solve`] must
+/// invert [`Self::apply`] there. The product projects both results onto
+/// the tangent space; that removes rounding, not a wrong operator. Both
+/// methods receive the factor point and tangent vectors in the factor's
+/// own packing.
+pub trait TangentMetric: Send + Sync {
+    /// \(G_x v\) for a tangent vector `v` at the factor point `x`.
+    fn apply(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64>;
+
+    /// \(G_x^{-1} r\) for a tangent vector `r` at the factor point `x`.
+    fn solve(&self, x: &Array1<f64>, r: &Array1<f64>) -> Array1<f64>;
+}
+
+/// A shared [`TangentMetric`], equal only to itself.
+#[derive(Clone)]
+struct Metric(Arc<dyn TangentMetric>);
+
+impl fmt::Debug for Metric {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TangentMetric")
+    }
+}
+
+impl PartialEq for Metric {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// One factor of a [`ProductManifold`]: a geometry, its packed length,
+/// its metric weight and an optional [`TangentMetric`].
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ProductFactor {
@@ -48,6 +93,7 @@ pub struct ProductFactor {
     pub len: usize,
     /// Weight \(w_i > 0\) of the factor metric in the product metric.
     pub weight: f64,
+    metric: Option<Metric>,
 }
 
 impl Default for ProductFactor {
@@ -56,6 +102,7 @@ impl Default for ProductFactor {
             kind: ManifoldKind::Euclidean,
             len: 1,
             weight: 1.0,
+            metric: None,
         }
     }
 }
@@ -67,6 +114,7 @@ impl ProductFactor {
             kind,
             len,
             weight: 1.0,
+            metric: None,
         }
     }
 
@@ -87,6 +135,18 @@ impl ProductFactor {
         self.weight = weight;
         self
     }
+
+    /// Set the tangent metric. A factor that is itself a product takes
+    /// its tangent metrics on its own factors.
+    pub fn with_metric(mut self, metric: Arc<dyn TangentMetric>) -> Self {
+        self.metric = Some(Metric(metric));
+        self
+    }
+
+    /// The tangent metric, if one is set.
+    pub fn metric(&self) -> Option<&Arc<dyn TangentMetric>> {
+        self.metric.as_ref().map(|m| &m.0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -98,6 +158,7 @@ struct Block {
     metric: f64,
     /// \(s_i\): the block stores \(s_i x_i\).
     scale: f64,
+    tangent: Option<Metric>,
 }
 
 impl Block {
@@ -137,6 +198,23 @@ impl Block {
         }
         a
     }
+
+    /// \(G_x v\) at the factor point `x`, or `v` without a tangent metric.
+    fn apply_tangent(&self, x: &Array1<f64>, v: Array1<f64>) -> Array1<f64> {
+        match &self.tangent {
+            Some(m) => self.kind.project(x, &m.0.apply(x, &v)),
+            None => v,
+        }
+    }
+
+    /// \(G_x^{-1} r\) at the factor point `x`, or `r` without a tangent
+    /// metric.
+    fn solve_tangent(&self, x: &Array1<f64>, r: Array1<f64>) -> Array1<f64> {
+        match &self.tangent {
+            Some(m) => self.kind.project(x, &m.0.solve(x, &r)),
+            None => r,
+        }
+    }
 }
 
 /// Weighted Riemannian product of [`ManifoldKind`] factors, packed end to
@@ -154,8 +232,9 @@ impl ProductManifold {
     /// Product of `factors` in packing order.
     ///
     /// Fails with [`Error::ProductFactor`] when there is no factor, a
-    /// weight is not finite and positive, or a length is zero or does
-    /// not fit its kind.
+    /// weight is not finite and positive, a length is zero or does not
+    /// fit its kind, or a nested product carries a tangent metric of its
+    /// own.
     pub fn new<I>(factors: I) -> Result<Self>
     where
         I: IntoIterator<Item = ProductFactor>,
@@ -174,6 +253,11 @@ impl ProductManifold {
                 return Err(refuse("packed length does not fit the kind"));
             }
             match &factor.kind {
+                ManifoldKind::Product(_) if factor.metric.is_some() => {
+                    return Err(refuse(
+                        "a nested product takes tangent metrics on its factors",
+                    ));
+                }
                 ManifoldKind::Product(inner) => {
                     for b in &inner.blocks {
                         blocks.push(Block {
@@ -182,6 +266,7 @@ impl ProductManifold {
                             len: b.len,
                             metric: factor.weight * b.metric,
                             scale: b.scale,
+                            tangent: b.tangent.clone(),
                         });
                     }
                 }
@@ -191,6 +276,7 @@ impl ProductManifold {
                     len: factor.len,
                     metric: factor.weight,
                     scale: 1.0,
+                    tangent: factor.metric.clone(),
                 }),
             }
             len = len
@@ -228,12 +314,21 @@ impl ProductManifold {
         self.blocks.len()
     }
 
-    /// Factors after flattening, with their weights in the metric.
+    /// Factors after flattening, with their weights in the metric and
+    /// their tangent metrics.
     pub fn factors(&self) -> Vec<ProductFactor> {
         self.blocks
             .iter()
-            .map(|b| ProductFactor::new(b.kind.clone(), b.len).with_weight(b.weight()))
+            .map(|b| ProductFactor {
+                metric: b.tangent.clone(),
+                ..ProductFactor::new(b.kind.clone(), b.len).with_weight(b.weight())
+            })
             .collect()
+    }
+
+    /// Index of the first factor that carries a [`TangentMetric`].
+    pub fn tangent_metric_factor(&self) -> Option<usize> {
+        self.blocks.iter().position(|b| b.tangent.is_some())
     }
 
     /// Slice of the packed vector that holds factor `index`.
@@ -278,8 +373,9 @@ impl ProductManifold {
 
     /// The same Riemannian manifold in the coordinates \(z_i =
     /// \sqrt{w_i}\,x_i\), where every factor has weight one and the
-    /// metric of an embedded factor is the Euclidean inner product of the
-    /// packed vector.
+    /// metric of an embedded factor without a [`TangentMetric`] is the
+    /// Euclidean inner product of the packed vector. Tangent metrics carry
+    /// over unchanged, since they act on the factor's own tangent vectors.
     pub fn chart(&self) -> Self {
         let blocks = self
             .blocks
@@ -331,12 +427,18 @@ impl Manifold for ProductManifold {
             .unwrap_or_else(|| v.clone())
     }
 
+    /// Blockwise \(c_i^{-1} G^{-1} \mathrm{grad}_i f\), with \(G = I\)
+    /// on a factor without a [`TangentMetric`].
     fn egrad2rgrad(&self, x: &Array1<f64>, egrad: &Array1<f64>) -> Array1<f64> {
         if !self.fits(&[x, egrad]) {
             return egrad.clone();
         }
-        self.assemble(|b| Some(b.over_metric(b.kind.egrad2rgrad(&b.unscale(x), &b.part(egrad)))))
-            .unwrap_or_else(|| egrad.clone())
+        self.assemble(|b| {
+            let at = b.unscale(x);
+            let grad = b.kind.egrad2rgrad(&at, &b.part(egrad));
+            Some(b.over_metric(b.solve_tangent(&at, grad)))
+        })
+        .unwrap_or_else(|| egrad.clone())
     }
 
     fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
@@ -363,13 +465,23 @@ impl Manifold for ProductManifold {
         .unwrap_or_else(|| v.clone())
     }
 
+    /// \(\sum_i c_i\, g_i(u_i, G v_i)\), with \(G = I\) on a factor without
+    /// a [`TangentMetric`].
     fn inner(&self, x: &Array1<f64>, u: &Array1<f64>, v: &Array1<f64>) -> f64 {
         if !self.fits(&[x, u, v]) {
             return f64::NAN;
         }
         self.blocks
             .iter()
-            .map(|b| b.metric * b.kind.inner(&b.unscale(x), &b.part(u), &b.part(v)))
+            .map(|b| {
+                let at = b.unscale(x);
+                let gv = b.apply_tangent(&at, b.part(v));
+                if gv.len() == b.len {
+                    b.metric * b.kind.inner(&at, &b.part(u), &gv)
+                } else {
+                    f64::NAN
+                }
+            })
             .sum()
     }
 
@@ -378,10 +490,12 @@ impl Manifold for ProductManifold {
         if q.is_nan() { q } else { q.max(0.0).sqrt() }
     }
 
-    /// Blockwise \(c_i^{-1}\,\mathrm{Hess}_i\) at the factor point, with
-    /// the factor gradient \(\nabla_i f / s_i\): the Weingarten term of
-    /// the scaled factor \(s_i \mathcal{M}_i\) is \(1/s_i\) times the
-    /// unit one.
+    /// Blockwise \(c_i^{-1} G^{-1} \mathrm{Hess}_i\) at the factor point,
+    /// with the factor gradient \(\nabla_i f / s_i\): the Weingarten term
+    /// of the scaled factor \(s_i \mathcal{M}_i\) is \(1/s_i\) times the
+    /// unit one. With a [`TangentMetric`] this is the Hessian model
+    /// \(G^{-1} \mathrm{Hess}_i\), which differs from the Hessian of the
+    /// metric \(g(\cdot, G\,\cdot)\) by a term linear in the gradient.
     fn ehess2rhess(
         &self,
         x: &Array1<f64>,
@@ -393,29 +507,30 @@ impl Manifold for ProductManifold {
             return None;
         }
         self.assemble(|b| {
-            let h =
-                b.kind
-                    .ehess2rhess(&b.unscale(x), &b.unscale(egrad), &b.part(ehess), &b.part(v))?;
-            Some(b.over_metric(h))
+            let at = b.unscale(x);
+            let h = b
+                .kind
+                .ehess2rhess(&at, &b.unscale(egrad), &b.part(ehess), &b.part(v))?;
+            Some(b.over_metric(b.solve_tangent(&at, h)))
         })
     }
 
     fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
-        if !self.fits(&[x, v]) {
+        if !self.fits(&[x, v]) || self.tangent_metric_factor().is_some() {
             return None;
         }
         self.assemble(|b| Some(b.rescale(b.kind.exp(&b.unscale(x), &b.unscale(v))?)))
     }
 
     fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
-        if !self.fits(&[x, y]) {
+        if !self.fits(&[x, y]) || self.tangent_metric_factor().is_some() {
             return None;
         }
         self.assemble(|b| Some(b.rescale(b.kind.log(&b.unscale(x), &b.unscale(y))?)))
     }
 
     fn dist(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<f64> {
-        if !self.fits(&[x, y]) {
+        if !self.fits(&[x, y]) || self.tangent_metric_factor().is_some() {
             return None;
         }
         let mut sum = 0.0;
@@ -432,7 +547,7 @@ impl Manifold for ProductManifold {
         d: &Array1<f64>,
         v: &Array1<f64>,
     ) -> Option<Array1<f64>> {
-        if !self.fits(&[x, d, v]) {
+        if !self.fits(&[x, d, v]) || self.tangent_metric_factor().is_some() {
             return None;
         }
         self.assemble(|b| {
@@ -447,7 +562,7 @@ impl Manifold for ProductManifold {
         x_to: &Array1<f64>,
         v: &Array1<f64>,
     ) -> Option<Array1<f64>> {
-        if !self.fits(&[x_from, x_to, v]) {
+        if !self.fits(&[x_from, x_to, v]) || self.tangent_metric_factor().is_some() {
             return None;
         }
         self.assemble(|b| {
@@ -457,11 +572,13 @@ impl Manifold for ProductManifold {
     }
 
     fn transport_is_isometric(&self) -> bool {
-        self.blocks.iter().all(|b| b.kind.transport_is_isometric())
+        self.blocks
+            .iter()
+            .all(|b| b.tangent.is_none() && b.kind.transport_is_isometric())
     }
 
     /// \(\sqrt{\sum_i w_i\,\mathrm{typicaldist}_i^2}\); manopt's at unit
-    /// weights.
+    /// weights. Tangent metrics do not enter it.
     fn typical_dist(&self, _n: usize) -> f64 {
         self.blocks
             .iter()
@@ -568,6 +685,114 @@ mod tests {
         assert!((&rz - &(&r * &d)).mapv(f64::abs).sum() < 1e-14);
         let dz = c.dist(&z, &yz).unwrap();
         assert!((dz - m.dist(&x, &y).unwrap()).abs() < 1e-14);
+    }
+
+    /// \(G = \mathrm{diag}(1, 2, 4)\) on a Euclidean factor.
+    struct Diagonal;
+
+    impl TangentMetric for Diagonal {
+        fn apply(&self, _x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+            v * &array![1.0, 2.0, 4.0]
+        }
+
+        fn solve(&self, _x: &Array1<f64>, r: &Array1<f64>) -> Array1<f64> {
+            r / &array![1.0, 2.0, 4.0]
+        }
+    }
+
+    /// \(G_x = I + b b^\top\) on \(T_x S^2\), \(b = P_x a\), inverted by
+    /// Sherman–Morrison.
+    struct RankOne;
+
+    impl RankOne {
+        fn b(x: &Array1<f64>) -> Array1<f64> {
+            ManifoldKind::Sphere.project(x, &array![1.0, -2.0, 0.5])
+        }
+    }
+
+    impl TangentMetric for RankOne {
+        fn apply(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+            let b = Self::b(x);
+            v + &(&b * b.dot(v))
+        }
+
+        fn solve(&self, x: &Array1<f64>, r: &Array1<f64>) -> Array1<f64> {
+            let b = Self::b(x);
+            r - &(&b * (b.dot(r) / (1.0 + b.dot(&b))))
+        }
+    }
+
+    fn preconditioned() -> ProductManifold {
+        ProductManifold::new([
+            ProductFactor::new(ManifoldKind::Euclidean, 3)
+                .with_weight(4.0)
+                .with_metric(Arc::new(Diagonal)),
+            ProductFactor::new(ManifoldKind::Sphere, 3)
+                .with_weight(0.25)
+                .with_metric(Arc::new(RankOne)),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn a_tangent_metric_keeps_the_gradient_the_riesz_vector() {
+        let m = preconditioned();
+        let x = array![1.0, 2.0, 3.0, 0.0, 0.6, 0.8];
+        let g = array![0.3, -1.0, 2.0, 0.5, -0.2, 0.7];
+        let r = m.egrad2rgrad(&x, &g);
+        let u = m.project(&x, &array![0.4, -0.1, 0.2, 1.0, 0.3, -0.5]);
+        let v = m.project(&x, &array![-0.2, 0.7, 0.1, -0.3, 0.9, 0.2]);
+        for t in [&u, &v] {
+            assert!((m.inner(&x, &r, t) - dot(g.view(), t.view())).abs() < 1e-14);
+        }
+        assert!((m.inner(&x, &u, &v) - m.inner(&x, &v, &u)).abs() < 1e-14);
+        assert!((r[2] - 2.0 / 16.0).abs() < 1e-15);
+        let ehess = |w: &Array1<f64>| w * &array![1.0, 3.0, -2.0, 2.0, -1.0, 5.0];
+        let hu = m.ehess2rhess(&x, &g, &ehess(&u), &u).unwrap();
+        let hv = m.ehess2rhess(&x, &g, &ehess(&v), &v).unwrap();
+        assert!((m.inner(&x, &hu, &v) - m.inner(&x, &u, &hv)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn a_tangent_metric_drops_the_geodesic_operations() {
+        let m = preconditioned();
+        let x = array![1.0, 2.0, 3.0, 0.0, 0.6, 0.8];
+        let v = m.project(&x, &array![0.1, 0.0, 0.0, 0.2, 0.0, 0.0]);
+        let y = m.retract(&x, &v);
+        assert_eq!(m.tangent_metric_factor(), Some(0));
+        assert!(m.exp(&x, &v).is_none() && m.log(&x, &y).is_none());
+        assert!(m.dist(&x, &y).is_none());
+        assert!(m.parallel_transport_along(&x, &v, &v).is_none());
+        assert!(!m.transport_is_isometric());
+        assert_eq!(hyperplane(1.0, 1.0).tangent_metric_factor(), None);
+    }
+
+    #[test]
+    fn nested_products_keep_their_tangent_metrics() {
+        let nested = preconditioned();
+        let inner = ManifoldKind::Product(Arc::new(nested.clone()));
+        let outer = ProductManifold::new([
+            ProductFactor::new(ManifoldKind::So3, 9),
+            ProductFactor::new(inner.clone(), 6),
+        ])
+        .unwrap();
+        assert_eq!(outer.tangent_metric_factor(), Some(1));
+        let factors = outer.factors();
+        let original = nested.factors();
+        assert!(factors[0].metric().is_none());
+        assert!(Arc::ptr_eq(
+            factors[1].metric().unwrap(),
+            original[0].metric().unwrap()
+        ));
+        assert_ne!(
+            original[0],
+            ProductFactor::new(ManifoldKind::Euclidean, 3).with_weight(4.0)
+        );
+        let wrapped = ProductFactor::new(inner, 6).with_metric(Arc::new(RankOne));
+        assert!(matches!(
+            ProductManifold::new([wrapped]),
+            Err(Error::ProductFactor { index: 0, .. })
+        ));
     }
 
     #[test]
