@@ -19,7 +19,7 @@
 //! the piece of machinery the other first-order methods already use,
 //! and each one has a test on a named objective.
 //!
-//! 1. Displacement cap, then the FIRE velocity rescale. [`crate::step::scale_step_atom`]
+//! 1. Displacement cap, then the FIRE velocity rescale. `scale_step_atom`
 //!    (or [`crate::Control::maxmove`]) shortens `Δx`. The velocity that
 //!    entered the step was `Δx_proposed / Δt`. [`quickmin_rescale_velocity`]
 //!    multiplies it by `|Δx_taken| / |Δx_proposed|` when the cap binds,

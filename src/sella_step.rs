@@ -64,7 +64,7 @@ pub(crate) fn rfo_step_and_shift(
     (s, evals[col])
 }
 
-/// Sella TrustRegion + RFO: \(\|s\|\le\delta\). Alpha lives in \([0,1]\);
+/// Sella TrustRegion + RFO: \(\|s\|\le\delta\). Alpha lives in \(\[0,1\]\);
 /// \(\alpha=1\) is the unrestricted Banerjee step.
 pub fn rfo_restricted(h: &Array2<f64>, g: &Array1<f64>, order: usize, delta: f64) -> Array1<f64> {
     let s1 = rfo_get_s(h, g, order, 1.0);

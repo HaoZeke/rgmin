@@ -14,7 +14,7 @@
 //! `proj_x (H eta)`, which is the Riemannian Hessian when the tangent
 //! projector is constant along the retraction (linear tangent spaces) and
 //! its Gauss–Newton part otherwise. The caller retracts the step, measures
-//! the actual decrease and feeds the ratio to [`RtrRadius::update`].
+//! the actual decrease and feeds the ratio to [`RtrRadius::update`](crate::rtr::RtrRadius::update).
 //!
 //! The constants in the radius update are the theorem's: accept when
 //! `rho > rho' = 0.1`, shrink by 1/4 below `rho = 1/4`, grow by 2 above

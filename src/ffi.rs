@@ -288,7 +288,7 @@ pub struct rgmin_scg_params_t {
     pub tol_sol: f64,
     /// Relative objective-change tolerance.
     pub tol_func: f64,
-    /// Leaf conjugacy as [`xts_conjugacy_t`]. Stored as `i32` so an
+    /// Leaf conjugacy as `xts_conjugacy_t`. Stored as `i32` so an
     /// unknown C enumerant is not UB on a closed Rust enum.
     pub conjugacy: i32,
 }
@@ -3403,7 +3403,7 @@ fn linesearch_kind(
     }
 }
 
-/// Start a line search. The first [`rgmin_linesearch`] call supplies `f` and `g` at `x`.
+/// Start a line search. The first [`rgmin_linesearch`](fn@rgmin_linesearch) call supplies `f` and `g` at `x`.
 ///
 /// # Safety
 /// `x` and `dir` point at `n` doubles. The returned pointer is freed with

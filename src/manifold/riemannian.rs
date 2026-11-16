@@ -68,7 +68,7 @@ pub enum SpdMetric {
     /// \(\langle U, V\rangle_X = \mathrm{tr}(X^{-1} U X^{-1} V)\).
     #[default]
     AffineInvariant,
-    /// \(\langle U, V\rangle_X = \langle D\log(X)[U], D\log(X)[V]\rangle_F\).
+    /// \(\langle U, V\rangle_X = \langle D\log(X)\[U\], D\log(X)\[V\]\rangle_F\).
     LogEuclidean,
 }
 

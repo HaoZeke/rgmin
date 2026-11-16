@@ -833,7 +833,7 @@ impl Solver {
     /// eOn `maxAtomMotionAppliedV`. Preferred over the Euclidean cap.
     ///
     /// A fresh Cartesian session holds [`crate::DEFAULT_ATOM_MAXMOVE`]
-    /// when [`Method::installs_default_atom_cap`] is set. BFGS, dogleg,
+    /// when `Method::installs_default_atom_cap` is set. BFGS, dogleg,
     /// and FIRE 2.0 start without that cap. A positive `maxmove`
     /// replaces the value in force. A non-positive or non-finite value
     /// clears the cap.
@@ -859,7 +859,7 @@ impl Solver {
     /// reset on negative curvature, on a step past the per-atom cap or
     /// against the force, and an energy test with at most ten halvings.
     /// Off, the per-atom cap only clips the two-loop trial and the NEB
-    /// guards of [`Self::set_neb_guards`] apply. Needs [`Self::set_atom_maxmove`].
+    /// guards of [`Self::set_lbfgs_neb_guards`] apply. Needs [`Self::set_atom_maxmove`].
     /// Unset, a Wolfe session with an explicit per-atom cap takes this
     /// step; off keeps its strong Wolfe search under the cap.
     /// [`Self::set_lbfgs_step`] unsets it.
@@ -4610,7 +4610,7 @@ impl Solver {
     }
 
     /// ABC-FIRE on a FIRE 2.0 session. The fill path applies the bias.
-    /// [`Solver::step`] on the published schedule keeps [`fire2_displacement`].
+    /// [`Solver::step`] on the published schedule keeps [`fire2_displacement`](crate::fire::fire2_displacement).
     pub fn set_fire_abc(&mut self, on: bool) -> Result<()> {
         match &mut self.inner {
             Inner::Fire(state) if state.kind == FireKind::V2 => {
@@ -4963,7 +4963,7 @@ impl Solver {
     /// [`Status::Iterating`] and returns that status, so an energy-noise
     /// [`Status::NoiseFloor`] is kept rather than stepped past. A spent
     /// budget is [`Status::Budget`]. A zero `maxiter` takes no step: the
-    /// report is [`Self::assess`] of `x`, so it says [`Status::Tolerance`]
+    /// report is `Self::assess` of `x`, so it says [`Status::Tolerance`]
     /// only when the gradient evaluated there is below `gtol`.
     pub fn run<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where

@@ -9,11 +9,11 @@
 //! Fast Inertial Relaxation Engine*,
 //! <https://doi.org/10.1016/j.commatsci.2022.111978>.
 //!
-//! [`fire_displacement`] is the rgmin integrator: a downhill step mixes
+//! [`fire_displacement`](crate::fire::fire_displacement) is the rgmin integrator: a downhill step mixes
 //! first, then adapts, then takes a semi-implicit Euler kick. FIRE 1.0
-//! takes the kick here and mixes afterwards in [`fire_after_v1`].
-//! [`fire2_displacement`] is Guénolé algorithm 2. [`fire_prepare_v2`]
-//! followed by [`fire_displacement_into`] is that same published step
+//! takes the kick here and mixes afterwards in [`fire_after_v1`](crate::fire::fire_after_v1).
+//! [`fire2_displacement`](crate::fire::fire2_displacement) is Guénolé algorithm 2. `fire_prepare_v2`
+//! followed by [`fire_displacement_into`](crate::fire::fire_displacement_into) is that same published step
 //! split so a session can roll the half-step back before the kick, and
 //! it is where ABC-FIRE and [`FirePreset`] apply.
 
@@ -44,7 +44,7 @@ pub enum FireKind {
     /// Guénolé 2020 FIRE 2.0: semi-implicit Euler.
     ///
     /// [`fire_displacement`] mixes a downhill velocity before the kick.
-    /// [`fire2_displacement`] and [`fire_prepare_v2`] follow algorithm 2:
+    /// [`fire2_displacement`] and `fire_prepare_v2` follow algorithm 2:
     /// the kick, then the mix, with a half-step back on a non-positive power.
     V2,
 }
@@ -456,7 +456,7 @@ pub(crate) fn fire_prepare_v2(state: &mut FireState, force: &Array1<f64>) -> Fir
 /// there is no half-step and no non-positive-power limit. FIRE 1.0 takes
 /// the Verlet step first; the caller mixes on the force at the new point
 /// via [`fire_after_v1`]. The published step is [`fire2_displacement`],
-/// or [`fire_prepare_v2`] plus [`fire_displacement_into`].
+/// or `fire_prepare_v2` plus [`fire_displacement_into`].
 pub fn fire_displacement(state: &mut FireState, force: &Array1<f64>) -> Array1<f64> {
     match state.kind {
         FireKind::V2 => {
@@ -478,7 +478,7 @@ pub fn fire_displacement(state: &mut FireState, force: &Array1<f64>) -> Array1<f
     }
 }
 
-/// Forward displacement after [`fire_prepare_v2`], written into `dx`.
+/// Forward displacement after `fire_prepare_v2`, written into `dx`.
 ///
 /// FIRE 2.0 applies the semi-implicit Euler update, then mixes, then
 /// the ABC correction when [`FireState::abc`] is set, and counts the
@@ -546,7 +546,7 @@ pub fn fire_after_v1(state: &mut FireState, force: &Array1<f64>) {
 /// Displacement when the physical force and the steepest direction differ.
 ///
 /// `power_force` is `F = -∇E`. FIRE 2.0 power, rollback, and the time-step
-/// delay are [`fire_prepare_v2`] on that force, which the caller runs first.
+/// delay are `fire_prepare_v2` on that force, which the caller runs first.
 /// `steepest` is the kick and the mix direction (`P^{-1} F` when a metric
 /// is installed). `mix_at` is called with the post-kick velocity on FIRE 2.0
 /// and is not called on FIRE 1.0. FIRE 2.0 then mixes and advances the
@@ -626,7 +626,7 @@ pub enum FireVariant {
 ///
 /// Built only through [`Fire2Extras::new`], so fields can be added
 /// without breaking callers. [`fire2_displacement`] reads this. The
-/// preset integrator ([`fire_prepare_v2`]) keeps its own counter.
+/// preset integrator (`fire_prepare_v2`) keeps its own counter.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fire2Extras {

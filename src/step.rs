@@ -111,11 +111,11 @@ pub(crate) fn binding(cap: f64) -> bool {
 /// at `4be157d4`
 /// (<https://github.com/TheochemUI/eOn/blob/4be157d43265af6b1140aaac0e52e42add62693f/schema/eon_params.capnp>).
 /// The number is in the coordinate unit. A geometry stored in angstroms
-/// is capped at 0.2 Å. [`scale_step_atom`] limits the largest per-atom
+/// is capped at 0.2 Å. `scale_step_atom` limits the largest per-atom
 /// displacement. It does not limit the Euclidean norm of the whole step.
 ///
 /// BFGS, dogleg, and FIRE 2.0 do not install this value. See
-/// [`crate::method::Method::installs_default_atom_cap`].
+/// `Method::installs_default_atom_cap`.
 pub const DEFAULT_ATOM_MAXMOVE: f64 = 0.2;
 
 /// Cap used when the caller has not set a per-atom value and the method
