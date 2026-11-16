@@ -25,7 +25,8 @@
 //! the gradient through [`Manifold::egrad2rgrad`], the Hessian through
 //! [`Manifold::ehess2rhess`] with its Weingarten term where the kind
 //! supplies one, and every inner product and the trust ball in
-//! [`Manifold::inner`].
+//! [`Manifold::inner`]. [`truncated_cg_riemannian`] is one of its
+//! subproblems, for a driver that measures the decrease itself.
 //!
 //! For `f(x) = x^2` at `x = 1`, the model has its minimizer at `eta = -1`:
 //! ```
@@ -370,6 +371,7 @@ impl RtrOptions {
 
 /// Result of [`minimize_rtr`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct RtrMin {
     /// Point on the manifold.
     pub x: Array1<f64>,
@@ -381,6 +383,73 @@ pub struct RtrMin {
     pub iterations: usize,
     /// Steps the radius update accepted.
     pub accepted: usize,
+    /// Conjugate-gradient iterations over all subproblems.
+    pub inner_iterations: usize,
+}
+
+/// Solve the trust-region subproblem at `x` in the metric of `manifold`.
+///
+/// The model is the one [`minimize_rtr`] builds: the gradient is
+/// [`Manifold::egrad2rgrad`] of the Euclidean gradient `egrad`, the
+/// Hessian is [`Manifold::ehess2rhess`] of the Euclidean action
+/// `ehess(v)` or, for a kind without the Weingarten term, its
+/// Gauss–Newton part, and every inner product and the ball of radius
+/// `radius` are [`Manifold::inner`]. On a product with a
+/// [`crate::manifold::TangentMetric`] this is the preconditioned
+/// subproblem. `opts` supplies [`RtrOptions::theta`],
+/// [`RtrOptions::kappa`] and [`RtrOptions::cg_max`].
+///
+/// A driver that measures the decrease itself, for example from sampled
+/// free-energy differences, retracts `eta`, measures, and passes
+/// `manifold.norm(x, &eta)` to [`RtrRadius::update`].
+pub fn truncated_cg_riemannian<M, H>(
+    manifold: &M,
+    x: &Array1<f64>,
+    egrad: &Array1<f64>,
+    ehess: H,
+    radius: f64,
+    opts: &RtrOptions,
+) -> TcgResult
+where
+    M: Manifold + ?Sized,
+    H: FnMut(&Array1<f64>) -> Array1<f64>,
+{
+    let rgrad = manifold.egrad2rgrad(x, egrad);
+    tcg_in_metric(manifold, x, egrad, &rgrad, ehess, radius, opts)
+}
+
+/// [`truncated_cg_riemannian`] with the Riemannian gradient `rgrad` of
+/// `egrad` already formed.
+fn tcg_in_metric<M, H>(
+    manifold: &M,
+    x: &Array1<f64>,
+    egrad: &Array1<f64>,
+    rgrad: &Array1<f64>,
+    mut ehess: H,
+    radius: f64,
+    opts: &RtrOptions,
+) -> TcgResult
+where
+    M: Manifold + ?Sized,
+    H: FnMut(&Array1<f64>) -> Array1<f64>,
+{
+    tcg(
+        |a, b| manifold.inner(x, a, b),
+        |v| manifold.project(x, v),
+        rgrad.view(),
+        |v| {
+            let hv = ehess(v);
+            manifold
+                .ehess2rhess(x, egrad, &hv, v)
+                .unwrap_or_else(|| manifold.egrad2rgrad(x, &hv))
+        },
+        TcgLimits {
+            radius,
+            theta: opts.theta,
+            kappa: opts.kappa,
+            maxiter: opts.cg_max.unwrap_or(x.len()).max(1),
+        },
+    )
 }
 
 /// Minimise `value` on `manifold` by the Absil–Baker–Gallivan trust
@@ -417,7 +486,6 @@ where
     } else {
         1.0
     };
-    let maxiter = opts.cg_max.unwrap_or(x0.len()).max(1);
     let mut radius = RtrRadius::new(radius_max);
     let mut x = x0;
     let mut f = value(&x);
@@ -426,25 +494,19 @@ where
     let mut gnorm = manifold.norm(&x, &rgrad);
     let mut iterations = 0;
     let mut accepted = 0;
+    let mut inner_iterations = 0;
     while iterations < opts.max_iter && gnorm.is_finite() && gnorm > opts.grad_tol {
         iterations += 1;
-        let step = tcg(
-            |a, b| manifold.inner(&x, a, b),
-            |v| manifold.project(&x, v),
-            rgrad.view(),
-            |v| {
-                let hv = ehess(&x, v);
-                manifold
-                    .ehess2rhess(&x, &g, &hv, v)
-                    .unwrap_or_else(|| manifold.egrad2rgrad(&x, &hv))
-            },
-            TcgLimits {
-                radius: radius.radius,
-                theta: opts.theta,
-                kappa: opts.kappa,
-                maxiter,
-            },
+        let step = tcg_in_metric(
+            manifold,
+            &x,
+            &g,
+            &rgrad,
+            |v| ehess(&x, v),
+            radius.radius,
+            &opts,
         );
+        inner_iterations += step.iterations;
         let x_try = manifold.retract(&x, &step.eta);
         let f_try = value(&x_try);
         let shift = f.abs().max(1.0) * f64::EPSILON * opts.rho_regularization;
@@ -469,15 +531,19 @@ where
         grad_norm: gnorm,
         iterations,
         accepted,
+        inner_iterations,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifold::{Euclidean, Sphere};
+    use crate::manifold::{
+        Euclidean, ManifoldKind, ProductFactor, ProductManifold, Sphere, TangentMetric,
+    };
     use crate::vecops::nrm2;
     use ndarray::{Array2, array};
+    use std::sync::Arc;
 
     fn quad_hvp(h: &Array2<f64>) -> impl Fn(&Array1<f64>) -> Array1<f64> + '_ {
         move |v| h.dot(v)
@@ -583,6 +649,32 @@ mod tests {
         assert!((out.value - 1.0).abs() < 1e-12, "f = {}", out.value);
         assert!(out.x[1].abs() > 1.0 - 1e-12);
         assert!(out.iterations < 20, "{} iterations", out.iterations);
+    }
+
+    #[test]
+    fn the_riemannian_step_runs_in_the_tangent_metric() {
+        struct Curvature;
+        impl TangentMetric for Curvature {
+            fn apply(&self, _x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+                v * &array![1.0, 10.0, 100.0]
+            }
+            fn solve(&self, _x: &Array1<f64>, r: &Array1<f64>) -> Array1<f64> {
+                r / &array![1.0, 10.0, 100.0]
+            }
+        }
+        let a = array![1.0, 10.0, 100.0];
+        let factor = ProductFactor::new(ManifoldKind::Euclidean, 3);
+        let plain = ProductManifold::new([factor.clone()]).unwrap();
+        let newton = ProductManifold::new([factor.with_metric(Arc::new(Curvature))]).unwrap();
+        let x = array![1.0, 1.0, 1.0];
+        let g = &a * &x;
+        let opts = RtrOptions::default().with_kappa(1e-10);
+        let step = truncated_cg_riemannian(&newton, &x, &g, |v| &a * v, 100.0, &opts);
+        assert_eq!((step.stop, step.iterations), (TcgStop::Residual, 1));
+        assert!((&step.eta + &x).iter().all(|e| e.abs() < 1e-14));
+        assert!((step.model_decrease - 0.5 * g.dot(&x)).abs() < 1e-12);
+        let unscaled = truncated_cg_riemannian(&plain, &x, &g, |v| &a * v, 100.0, &opts);
+        assert_eq!(unscaled.iterations, 3, "{unscaled:?}");
     }
 
     #[test]
