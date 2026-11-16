@@ -27,6 +27,10 @@
 //! [`RiemannianManifold`] is a runtime product of Stiefel and SPD factors
 //! on column-major buffers, with the exponential, logarithm, metric and
 //! parallel transport of each factor.
+//! [`ManifoldKind::Product`] is manopt `productmanifold` with a weight on
+//! each factor metric; [`ManifoldKind::power`] is `powermanifold`.
+
+use std::sync::Arc;
 
 use ndarray::Array1;
 
@@ -142,6 +146,10 @@ macro_rules! with_kind {
                 };
                 $body
             }
+            ManifoldKind::Product(product) => {
+                let $f: &ProductManifold = product;
+                $body
+            }
         }
     };
 }
@@ -202,6 +210,7 @@ mod mw_rigid;
 mod oblique;
 mod poincare;
 mod positive;
+mod product;
 mod riemannian;
 mod rigid_quotient;
 mod se3;
@@ -242,6 +251,7 @@ pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
 pub use poincare::PoincareBall;
 pub use positive::{Positive, inner as inner_pos, is_positive, typical_dist as typical_dist_pos};
+pub use product::{ProductFactor, ProductManifold};
 pub use riemannian::{ManifoldFactor, RiemannianManifold, SpdMetric, StiefelRetraction};
 pub use rigid_quotient::RigidQuotient;
 pub use se3::Se3;
@@ -390,6 +400,11 @@ pub enum ManifoldKind {
         /// (manopt default).
         rows: bool,
     },
+    /// Weighted Riemannian product \(\mathcal{M}_1 \times \cdots \times
+    /// \mathcal{M}_k\) with metric \(\sum_i w_i g_i\), factors packed end to
+    /// end. Construct with [`ManifoldKind::product`] or
+    /// [`ManifoldKind::power`].
+    Product(Arc<ProductManifold>),
 }
 
 impl ManifoldKind {
@@ -416,7 +431,7 @@ impl ManifoldKind {
 
     /// Retract with an optional Grassmann factor shape.
     pub fn retract_shaped(
-        self,
+        &self,
         shape: Option<(usize, usize)>,
         x: &Array1<f64>,
         v: &Array1<f64>,
@@ -429,7 +444,7 @@ impl ManifoldKind {
 
     /// Project with an optional Grassmann factor shape.
     pub fn project_shaped(
-        self,
+        &self,
         shape: Option<(usize, usize)>,
         x: &Array1<f64>,
         v: &Array1<f64>,
@@ -442,7 +457,7 @@ impl ManifoldKind {
 
     /// Transport with an optional Grassmann factor shape.
     pub fn transport_shaped(
-        self,
+        &self,
         shape: Option<(usize, usize)>,
         x_from: &Array1<f64>,
         x_to: &Array1<f64>,
@@ -452,6 +467,21 @@ impl ManifoldKind {
             Self::Grassmann => Self::grassmann(shape, x_to.len()).transport(x_from, x_to, v),
             other => other.transport(x_from, x_to, v),
         }
+    }
+
+    /// Weighted product of `factors`. See [`ProductManifold::new`].
+    pub fn product<I>(factors: I) -> crate::Result<Self>
+    where
+        I: IntoIterator<Item = ProductFactor>,
+    {
+        ProductManifold::new(factors).map(|p| Self::Product(Arc::new(p)))
+    }
+
+    /// manopt `powermanifold`: `count` unit-weight copies of `factor`,
+    /// each of packed length `block`. A power is the product of equal
+    /// factors; [`Self::Oblique`] stays the dedicated power of spheres.
+    pub fn power(factor: Self, block: usize, count: usize) -> crate::Result<Self> {
+        ProductManifold::power(factor, block, count).map(|p| Self::Product(Arc::new(p)))
     }
 
     /// Stiefel \(\mathrm{St}(n,p)\). `p = 1` is the sphere packing.
@@ -536,6 +566,7 @@ impl ManifoldKind {
     /// tangent step before the retraction instead.
     pub(crate) fn is_flat(&self) -> bool {
         match self {
+            Self::Product(product) => product.is_flat(),
             Self::Euclidean
             | Self::RigidQuotient
             | Self::MwRigid
@@ -592,6 +623,7 @@ impl ManifoldKind {
             Self::SphereComplex { .. } => "spherecomplex",
             Self::Positive { .. } => "positive",
             Self::CenteredMatrix { .. } => "centeredmatrix",
+            Self::Product(_) => "product",
         }
     }
 }

@@ -222,6 +222,14 @@ pub enum Error {
     /// [`crate::RiemannianManifold`] refused a shape, a point or a step.
     #[error("manifold: {0}")]
     ManifoldArgument(String),
+    /// [`crate::manifold::ProductManifold::new`] refused a factor.
+    #[error("product factor {index}: {what}")]
+    ProductFactor {
+        /// Position of the factor in the list.
+        index: usize,
+        /// What was refused.
+        what: &'static str,
+    },
 }
 
 /// Result alias for this crate.
