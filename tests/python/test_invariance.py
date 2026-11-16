@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: MIT
 """SHA-256 of trajectories at several thread counts.
 
-The LJ38 and Pt7 goldens pin ASE's LennardJones and EMT, which are
-NumPy-dispatched. They are not pins of rgmin. rgmin's own results must
-be bit-identical across ISAs with no environment variable. That check
-is the diagonal quadratic.
+LJ38 thread and Rayon invariance compare every run with one reference
+run on the same machine. The LJ38 and Pt7 goldens pin ASE's
+LennardJones and EMT, which are NumPy-dispatched and call the platform
+libm. They are not pins of rgmin. The LJ38 digest is pinned on glibc
+only. Every platform compares the LJ38 frames and energies with the
+golden run within a tolerance. rgmin's own results must be
+bit-identical across ISAs with no environment variable. That check is
+the diagonal quadratic.
 """
 
 from __future__ import annotations
@@ -13,19 +17,41 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import numpy as np
 import pytest
 
 # One hash per fixture. 3.14 and 3.14t both compare against these values.
-# ASE LennardJones. Compared only in a process started with the pin below:
-# its ``(sigma**2 / r2) ** 3`` goes through NumPy's AVX512F power kernel,
-# which rounds differently, and the eOn step's finite-difference probe
-# carries that last bit into every frame. Every platform agrees under it.
+# ASE LennardJones on glibc, in a process started with the pin below.
+# ``(sigma**2 / r2) ** 3`` calls libm ``pow`` for every atom and each of
+# its neighbours. In the third force call atoms 4 and 17 are 0.383
+# apart, and the cube of 1 / r**2 = LJ38_PROBE lies 0.0013 ulp above the
+# midpoint between two doubles. glibc returns the upper one on x86_64
+# and aarch64. NumPy's AVX512F power kernel returns the lower one, and
+# macOS arm64 gives the digest of exactly that rounding, e3f64018...
+# The last three frames move by at most 3e-17. The digest pins glibc's
+# pow and not rgmin.
 LJ38 = "9ff5ac4e272b58e733c2336e8b2580a566cfd0eefd77c3c1797359fb024cf24a"
+LJ38_PROBE = float.fromhex("0x1.b499f0a26aea2p+2")
+LJ38_PROBE_CUBE = 317.4791692719938
+# Machines where glibc gives LJ38. The pin on both ISAs also sees a
+# rounding change that only one of them takes, such as a fused
+# multiply-add on aarch64.
+LJ38_MACHINES = frozenset({"x86_64", "aarch64"})
+# Frames and energies of the LJ38 run, recorded on Linux x86_64 under
+# the pin. The SHA-256 of the frames is LJ38.
+_LJ38_GOLDEN = os.path.join(os.path.dirname(__file__), "data", "lj38_golden.json")
+# Rounding the probe cube the other way moves LJ38 positions by at most
+# 3e-17 and energies by 2e-16 relative. Moving every cube one ulp up or
+# down at random moves them by at most 9e-16 and 1.4e-15 over 50 seeds.
+# The bounds sit about three decades above that and ten below a step.
+_LJ38_POSITION_ATOL = 1e-12
+_LJ38_ENERGY_RTOL = 1e-12
 # ASE EMT. Compared only in a process that was started with the pin below.
 # Linux, macOS, and arm agree. Windows NumPy does not, on this trajectory.
 PT7_EMT = "299f8164ab0df6f3b59731098b3d83e12c13c0b4117426437bf9af9df0a17ce8"
@@ -69,6 +95,16 @@ _LJ38_ONCE = """
 from test_invariance import assert_numpy_dispatch_disabled, trajectory_sha256
 assert_numpy_dispatch_disabled()
 print(trajectory_sha256("lj38"))
+"""
+
+_LJ38_RUN = """
+import json
+import numpy as np
+from test_invariance import LJ38_PROBE, assert_numpy_dispatch_disabled, lj38_frames
+assert_numpy_dispatch_disabled()
+record = lj38_frames()
+record["cube"] = float((np.array([LJ38_PROBE]) ** 3)[0])
+print(json.dumps(record))
 """
 
 _DISPATCH_PROBE = """
@@ -144,19 +180,37 @@ def _pt7() -> object:
     return atoms
 
 
-def trajectory_sha256(kind: str) -> str:
+def _trajectory(kind: str, energies: list[float] | None = None) -> list[np.ndarray]:
+    """Positions at every frame of the five-step run. Energies only on request."""
     from rgmin.ase import LBFGS
 
     atoms = _lj38() if kind == "lj38" else _pt7()
-    frames: list[bytes] = []
+    frames: list[np.ndarray] = []
 
     def grab() -> None:
-        frames.append(np.array(atoms.get_positions(), dtype=np.float64).tobytes())
+        frames.append(np.array(atoms.get_positions(), dtype=np.float64))
+        if energies is not None:
+            energies.append(float(atoms.get_potential_energy()))
 
     opt = LBFGS(atoms, logfile=None, maxstep=0.1)
     opt.attach(grab, interval=1)
     opt.run(fmax=0.0, steps=_STEPS)
-    return hashlib.sha256(b"".join(frames)).hexdigest()
+    return frames
+
+
+def _frames_sha256(frames: Any) -> str:
+    return hashlib.sha256(np.asarray(frames, dtype=np.float64).tobytes()).hexdigest()
+
+
+def trajectory_sha256(kind: str) -> str:
+    return _frames_sha256(_trajectory(kind))
+
+
+def lj38_frames() -> dict[str, object]:
+    """LJ38 energies and positions at every frame, as lists for JSON."""
+    energies: list[float] = []
+    frames = _trajectory("lj38", energies)
+    return {"energies": energies, "positions": [frame.tolist() for frame in frames]}
 
 
 def lj38_hashes(workers: int) -> list[str]:
@@ -223,19 +277,31 @@ def _numpy_pin() -> str | None:
     return ",".join(blocked)
 
 
+@pytest.fixture(scope="module")
+def lj38_run() -> dict[str, Any]:
+    """One pinned Lennard-Jones run on this machine, the reference for the LJ38 tests.
+
+    Frames, energies, their digest, and how this libm rounds the cube
+    of LJ38_PROBE.
+    """
+    pytest.importorskip("ase")
+    run: dict[str, Any] = json.loads(_run_child(_LJ38_RUN, pin=_numpy_pin())[-1])
+    run["digest"] = _frames_sha256(run["positions"])
+    return run
+
+
 # The child spawns a ThreadPoolExecutor of up to 8 workers. The marker
 # keeps pytest-run-parallel from multiplying those pools.
 @pytest.mark.thread_unsafe
-def test_python_thread_invariance() -> None:
-    """Lennard-Jones matches the golden at 1, 2 and 8 Python threads, pinned."""
-    pytest.importorskip("ase")
+def test_python_thread_invariance(lj38_run: dict[str, Any]) -> None:
+    """Lennard-Jones matches this machine's run at 1, 2 and 8 Python threads, pinned."""
+    digest = lj38_run["digest"]
     lines = _run_child(_LJ38_THREADS, pin=_numpy_pin())
-    assert [line.split() for line in lines] == [[LJ38] * workers for workers in (1, 2, 8)]
+    assert [line.split() for line in lines] == [[digest] * workers for workers in (1, 2, 8)]
 
 
-def test_lj38_rayon_env_invariance() -> None:
-    """Lennard-Jones matches the golden at every Rayon thread count, pinned."""
-    pytest.importorskip("ase")
+def test_lj38_rayon_env_invariance(lj38_run: dict[str, Any]) -> None:
+    """Lennard-Jones matches this machine's run at every Rayon thread count, pinned."""
     pin = _numpy_pin()
     for threads in ("1", "2", "3", "8"):
         lines = _run_child(
@@ -244,7 +310,49 @@ def test_lj38_rayon_env_invariance() -> None:
             RAYON_NUM_THREADS=threads,
             OMP_NUM_THREADS=threads,
         )
-        assert lines == [LJ38]
+        assert lines == [lj38_run["digest"]], threads
+
+
+@pytest.mark.skipif(
+    platform.libc_ver()[0] != "glibc" or platform.machine() not in LJ38_MACHINES,
+    reason="the LJ38 digest pins glibc's pow; test_lj38_golden_trajectory covers this platform",
+)
+def test_lj38_golden_digest(lj38_run: dict[str, Any]) -> None:
+    """This machine's Lennard-Jones run matches the golden digest on glibc.
+
+    A mismatch with the probe cube still at LJ38_PROBE_CUBE did not come
+    from that rounding.
+    """
+    assert lj38_run["digest"] == LJ38, (
+        f"{lj38_run['digest']} on {sys.platform} {platform.machine()} with NumPy {np.__version__}: "
+        f"LJ38_PROBE ** 3 = {lj38_run['cube']!r}, glibc gives {LJ38_PROBE_CUBE!r}"
+    )
+
+
+def test_lj38_golden_trajectory(lj38_run: dict[str, Any]) -> None:
+    """This machine's Lennard-Jones frames and energies match the golden run.
+
+    A tolerance and not a digest, because another libm may round a cube
+    on the path the other way. The stored frames hash to LJ38.
+    """
+    with open(_LJ38_GOLDEN, encoding="utf-8") as handle:
+        golden = json.load(handle)
+    assert _frames_sha256(golden["positions"]) == LJ38
+    where = f"{sys.platform} {platform.machine()}, NumPy {np.__version__}"
+    np.testing.assert_allclose(
+        np.asarray(lj38_run["positions"], dtype=np.float64),
+        np.asarray(golden["positions"], dtype=np.float64),
+        rtol=0.0,
+        atol=_LJ38_POSITION_ATOL,
+        err_msg=where,
+    )
+    np.testing.assert_allclose(
+        np.asarray(lj38_run["energies"], dtype=np.float64),
+        np.asarray(golden["energies"], dtype=np.float64),
+        rtol=_LJ38_ENERGY_RTOL,
+        atol=0.0,
+        err_msg=where,
+    )
 
 
 def test_pt7_emt_golden_pins_numpy_not_rgmin() -> None:
@@ -284,8 +392,6 @@ def test_pt7_emt_golden_pins_numpy_not_rgmin() -> None:
 
 def _pt7_record(observed: dict[str, str], expect: str, pin: str | None) -> dict[str, object]:
     """Everything needed to pin the Pt7 golden from one failing run."""
-    import platform
-
     import ase
 
     digests = sorted(set(observed.values()))
