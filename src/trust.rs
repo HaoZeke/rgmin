@@ -89,6 +89,22 @@ pub fn reduction_ratio(ared: f64, pred: f64) -> f64 {
     }
 }
 
+/// Burdakov, Gong, Zikrin, and Yuan, Math. Program. Comput. 9, 101-134
+/// (2017), <https://doi.org/10.1007/s12532-016-0109-7>, Algorithm 1 with
+/// the Section 9 constants: `tau2 = 0.25`, `tau3 = 0.75`, `eta1 = 0.25`,
+/// `eta2 = 0.5`, `eta3 = 0.8`, `eta4 = 2`. `snorm` is the step taken or
+/// refused. This is the ray-truncation radius, not
+/// [`crate::Solver::set_lbfgs_trust`].
+pub(crate) fn burdakov_radius(radius: f64, rho: f64, snorm: f64) -> f64 {
+    if rho < RHO_BAD {
+        (0.25 * radius).min(0.5 * snorm)
+    } else if rho >= RHO_GOOD && snorm >= BOUNDARY * radius {
+        2.0 * radius
+    } else {
+        radius
+    }
+}
+
 /// Nocedal-Wright radius update. Returns the new radius.
 pub fn update_radius(radius: f64, rho: f64, pnorm: f64, rmax: f64) -> f64 {
     let r = radius.max(1e-16);
@@ -110,6 +126,13 @@ pub fn accept_ratio(rho: f64) -> bool {
 mod tests {
     use super::*;
     use ndarray::array;
+
+    #[test]
+    fn burdakov_shrinks_a_poor_ratio_and_grows_a_full_step() {
+        assert!((burdakov_radius(1.0, 0.0, 0.4) - 0.2).abs() < 1e-15);
+        assert!((burdakov_radius(1.0, 0.9, 0.9) - 2.0).abs() < 1e-15);
+        assert!((burdakov_radius(1.0, 0.5, 1.0) - 1.0).abs() < 1e-15);
+    }
 
     #[test]
     fn dogleg_takes_the_newton_point_inside_a_large_radius() {

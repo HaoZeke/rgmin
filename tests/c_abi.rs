@@ -1084,17 +1084,47 @@ fn lowest_eigenpair_elpa_is_unavailable() {
     assert_eq!(status, rgmin_status_t::RGMIN_UNAVAILABLE);
 }
 
-/// ABI minor 44 adds `rgmin_solver_set_power`. Minor 43 is
-/// `rgmin_lbfgs_pairs_push_rho`, minor 42 is `rgmin_lowest_eigenpairs_ex`
-/// and minor 39 is `rgmin_lowest_eigenpairs`. Minors 40 and 41 are the
-/// 0.6.0 release and the manifold API.
+/// ABI minor 45 adds `rgmin_solver_set_lbfgs_trust`. Minor 44 is
+/// `rgmin_solver_set_power`. Minor 43 is `rgmin_lbfgs_pairs_push_rho`,
+/// minor 42 is `rgmin_lowest_eigenpairs_ex` and minor 39 is
+/// `rgmin_lowest_eigenpairs`. Minors 40 and 41 are the 0.6.0 release
+/// and the manifold API.
 #[test]
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 44);
+    assert_eq!(stamp.abi_minor, 45);
     assert_eq!(stamp.layout_revision, 5);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
+}
+
+#[test]
+fn c_abi_burdakov_radius_is_off_until_set() {
+    use rgmin::ffi::{rgmin_solver_lbfgs_trust_radius, rgmin_solver_set_lbfgs_trust};
+    assert_eq!(
+        unsafe { rgmin_solver_set_lbfgs_trust(std::ptr::null_mut(), 0.5) },
+        1
+    );
+    assert_eq!(
+        unsafe { rgmin_solver_lbfgs_trust_radius(std::ptr::null()) },
+        0.0
+    );
+    let ctrl = rgmin_control_t {
+        maxiter: 4,
+        gtol: 1e-8,
+        istep: 1.0,
+        memory: 8,
+        maxmove: 0.0,
+        noise_eps: 0.0,
+        noise_c: 0.0,
+    };
+    let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_LBFGS, &ctrl, 2) };
+    assert_eq!(unsafe { rgmin_solver_lbfgs_trust_radius(session) }, 0.0);
+    assert_eq!(unsafe { rgmin_solver_set_lbfgs_trust(session, 0.4) }, 0);
+    assert!((unsafe { rgmin_solver_lbfgs_trust_radius(session) } - 0.4).abs() < 1e-15);
+    assert_eq!(unsafe { rgmin_solver_set_lbfgs_trust(session, 0.0) }, 0);
+    assert_eq!(unsafe { rgmin_solver_lbfgs_trust_radius(session) }, 0.0);
+    unsafe { rgmin_solver_free(session) };
 }
 
 /// On `f = x . x` from rest the first FIRE 2.0 move is `-2 dt^2 x`.

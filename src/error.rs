@@ -73,6 +73,16 @@ pub enum Error {
         /// Outer iterations completed when the radius hit its floor.
         steps: usize,
     },
+    /// Session L-BFGS under [`crate::Solver::set_lbfgs_trust_radius`]
+    /// found no downhill direction: the slope `g^T d` was finite and
+    /// not negative even after the curvature pairs were dropped. An
+    /// exactly zero gradient with `gtol <= 0` does this. A NaN or
+    /// infinite slope is [`Error::Oracle`] instead.
+    #[error("no descent direction after {steps} steps")]
+    NoDescent {
+        /// Outer iterations completed before the refusal.
+        steps: usize,
+    },
     /// Host oracle returned a non-finite value or gradient.
     #[error("oracle: {what}")]
     Oracle {

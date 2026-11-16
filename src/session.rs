@@ -56,7 +56,8 @@ use crate::step::{
     qn_istep, scale_displacement_to_atom_cap, scale_step, scale_step_atom, take_step_with_options,
 };
 use crate::trust::{
-    accept_ratio, dogleg_direction, predicted_reduction, reduction_ratio, update_radius,
+    accept_ratio, burdakov_radius, dogleg_direction, predicted_reduction, reduction_ratio,
+    update_radius,
 };
 
 /// The session's line search until [`Solver::set_linesearch`]: strong
@@ -297,6 +298,10 @@ pub struct Solver {
     trust: bool,
     trust_delta: f64,
     trust_max: f64,
+    /// Starting Burdakov radius. Zero leaves that radius off.
+    lbfgs_burdakov_init: f64,
+    /// Current Burdakov radius.
+    lbfgs_burdakov: f64,
     scratch: Array1<f64>,
     scratch_b: Array1<f64>,
     saved_x: Array1<f64>,
@@ -402,6 +407,14 @@ struct PsoState {
     rng: StdRng,
 }
 
+/// Projects the rigid modes out of `dir` at `x`. True when more than
+/// rounding left the direction.
+fn strip_rigid(dir: &mut Array1<f64>, x: &Array1<f64>) -> bool {
+    let before = dir.clone();
+    project_out_rot_trans(dir, x.view());
+    l2(&(&before - &*dir)) > 1e-12 * l2(&before)
+}
+
 impl Solver {
     /// Fresh session for `method` in dimension `dim`.
     pub fn new(method: Method, control: Control, dim: usize) -> Self {
@@ -472,6 +485,8 @@ impl Solver {
             trust: false,
             trust_delta: 0.0,
             trust_max: 0.0,
+            lbfgs_burdakov_init: 0.0,
+            lbfgs_burdakov: 0.0,
             scratch: Array1::zeros(dim),
             scratch_b: Array1::zeros(dim),
             saved_x: Array1::zeros(dim),
@@ -1962,6 +1977,7 @@ impl Solver {
         self.istep = self.control.istep;
         self.e_hist.clear();
         self.last_pos = None;
+        self.lbfgs_burdakov = self.lbfgs_burdakov_init;
         self.lbfgs_plateau = crate::lbfgs_plateau::RepeatedAcceptedStep::new();
         if let Overlay::QuickMin(_, session) = &mut self.overlay {
             session.forget_last();
@@ -1975,6 +1991,7 @@ impl Solver {
         self.istep = self.control.istep;
         self.e_hist.clear();
         self.last_pos = None;
+        self.lbfgs_burdakov = self.lbfgs_burdakov_init;
         self.lbfgs_plateau = crate::lbfgs_plateau::RepeatedAcceptedStep::new();
         let sr_radius = self.sr_opening_radius();
         match &mut self.inner {
@@ -2402,6 +2419,144 @@ impl Solver {
         scale * force
     }
 
+    /// Adaptive Burdakov trust radius for session L-BFGS, starting at
+    /// `radius`. A non-positive or non-finite `radius` turns it off,
+    /// the default.
+    ///
+    /// The radius follows Algorithm 1 of Burdakov, Gong, Zikrin, and
+    /// Yuan, Math. Program. Comput. 9, 101-134 (2017),
+    /// <https://doi.org/10.1007/s12532-016-0109-7>, with their Section 9
+    /// constants. The step is a ray truncation along the two-loop
+    /// direction, the third L-BFGS variant in their comparison. It does
+    /// not solve their trust-region subproblem.
+    /// [`Self::set_lbfgs_trust`] is a different opt-in: it scales a long
+    /// capped step and scores the Newton model. The two can both be
+    /// stored. When this radius is on, the Euclidean L-BFGS step uses
+    /// this ray and leaves the capped step and that Newton-model radius
+    /// alone.
+    ///
+    /// With [`Self::set_project_rigid`] the rigid modes leave the
+    /// direction first. The ray stops at the Euclidean radius, then at
+    /// the per-atom or Euclidean cap. `rho` is the actual over the
+    /// predicted energy drop. `rho = 1` when the energy changes by at
+    /// most `1e-11 |f|`, so a rise that small is accepted. `rho < 0`
+    /// refuses the step: `x` and the pairs stay. `rho < 0.25` sets the
+    /// radius to `min(r/4, |s|/2)`. `rho >= 0.75` with `|s| >= 0.8 r`
+    /// doubles it. A trial moved by the box or by the rigid projection
+    /// is predicted from `-g^T s`. Whenever the radius falls below
+    /// `1e-15`, the step keeps the previous point and returns
+    /// [`Error::TrustCollapsed`]. When the slope `g^T d` is still NaN
+    /// or infinite after the pairs are dropped, the step returns
+    /// [`Error::Oracle`]. When it is finite and not negative, the step
+    /// returns [`Error::NoDescent`]. Neither moves.
+    ///
+    /// On Euclidean L-BFGS without HiGHS this replaces [`Self::set_accept`]
+    /// and the geometry step of [`Self::set_atom_maxmove`]. Other methods
+    /// and manifolds, and the HiGHS step, ignore the radius. `forget` and
+    /// `rebase` restore `radius`.
+    pub fn set_lbfgs_trust_radius(&mut self, radius: f64) {
+        let on = radius > 0.0 && radius.is_finite();
+        self.lbfgs_burdakov_init = if on { radius } else { 0.0 };
+        self.lbfgs_burdakov = self.lbfgs_burdakov_init;
+    }
+
+    /// Current Burdakov radius, or `None` when it is off. A session
+    /// whose method, manifold or HiGHS step ignores the radius still
+    /// reports the stored value.
+    pub fn lbfgs_trust_radius(&self) -> Option<f64> {
+        (self.lbfgs_burdakov_init > 0.0).then_some(self.lbfgs_burdakov)
+    }
+
+    fn use_lbfgs_burdakov(&self) -> bool {
+        // NaN is not `<= 0`, so a non-finite stored radius stays on.
+        let on = matches!(
+            self.lbfgs_burdakov_init.partial_cmp(&0.0),
+            Some(std::cmp::Ordering::Greater) | None
+        ) && matches!(self.inner, Inner::Lbfgs(_))
+            && matches!(self.manifold, ManifoldKind::Euclidean);
+        #[cfg(feature = "highs")]
+        let on = on && !self.highs;
+        on
+    }
+
+    /// One step under [`Self::set_lbfgs_trust_radius`]. One oracle call.
+    fn lbfgs_burdakov_step<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        value: f64,
+        grad: Array1<f64>,
+    ) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let rigid = self.project_rigid;
+        let Inner::Lbfgs(solver) = &mut self.inner else {
+            unreachable!("use_lbfgs_burdakov requires L-BFGS")
+        };
+        let mut dir = solver.direction(grad.view());
+        let mut projected = rigid && strip_rigid(&mut dir, x);
+        let mut gd = grad.dot(&dir);
+        if !gd.is_finite() || gd >= 0.0 {
+            solver.forget();
+            dir = solver.direction(grad.view());
+            projected = rigid && strip_rigid(&mut dir, x);
+            gd = grad.dot(&dir);
+        }
+        if !gd.is_finite() {
+            return Err(Error::Oracle {
+                what: "non-finite search direction",
+            });
+        }
+        if gd >= 0.0 {
+            return Err(Error::NoDescent { steps: self.steps });
+        }
+        let mut tau = (self.lbfgs_burdakov / l2(&dir)).min(1.0);
+        if let Some(cap) = self.atom_maxmove {
+            tau = tau.min(cap / max_atom_displacement(&dir));
+        } else if let Some(cap) = self.control.maxmove_cap() {
+            tau = tau.min(cap / l2(&dir));
+        }
+        let raw = &*x + &(tau * &dir);
+        let trial = obj.bounds().clip(raw.view());
+        let s = &trial - &*x;
+        // q(tau d) = tau g^T d + tau^2/2 d^T B d, and d^T B d = -g^T d
+        // only for d = -H g.
+        let pred = if trial == raw && !projected {
+            -gd * (tau - 0.5 * tau * tau)
+        } else {
+            -grad.dot(&s)
+        };
+        let (tval, tgrad) = obj.value_and_gradient(trial.view());
+        let ared = value - tval;
+        let rho = if !tval.is_finite() || tgrad.iter().any(|g| !g.is_finite()) {
+            f64::NEG_INFINITY
+        } else if ared.abs() <= 1e-11 * value.abs() {
+            1.0
+        } else if pred > 0.0 {
+            ared / pred
+        } else {
+            f64::NEG_INFINITY
+        };
+        self.lbfgs_burdakov = burdakov_radius(self.lbfgs_burdakov, rho, l2(&s));
+        self.steps += 1;
+        if self.lbfgs_burdakov < 1e-15 {
+            self.remember(x, value, &grad);
+            return Err(Error::TrustCollapsed { steps: self.steps });
+        }
+        if rho < 0.0 {
+            self.remember(x, value, &grad);
+            return Ok(self.report(value, x, &grad));
+        }
+        *x = trial;
+        let new_grad = self.horizontal_grad(x, &tgrad);
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.push_pair(s, &new_grad - &grad, Some(l2(&new_grad)));
+        }
+        self.remember(x, tval, &new_grad);
+        Ok(self.report(tval, x, &new_grad))
+    }
+
     /// Default Euclidean L-BFGS: the eOn cap, no line search.
     /// [`Self::set_geometry_step`] keeps the geometry algorithm.
     fn use_eon_lbfgs(&self) -> bool {
@@ -2417,6 +2572,9 @@ impl Solver {
             return false;
         }
         if !matches!(self.inner, Inner::Lbfgs(_)) || self.constraints.is_some() {
+            return false;
+        }
+        if self.use_lbfgs_burdakov() {
             return false;
         }
         #[cfg(feature = "highs")]
@@ -3329,6 +3487,9 @@ impl Solver {
         }
         self.refresh_exp(obj, x, &grad)?;
 
+        if self.use_lbfgs_burdakov() {
+            return self.lbfgs_burdakov_step(obj, x, value, grad);
+        }
         if eon {
             return self.eon_lbfgs_step(obj, x, grad);
         }

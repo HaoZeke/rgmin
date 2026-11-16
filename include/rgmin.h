@@ -61,11 +61,12 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 44
+#define RGMIN_ABI_VERSION_MINOR 45
 /* 37 linesearch, 38 lbfgs_direction, 39 rgmin_lowest_eigenpairs.
  * 40 is the 0.6.0 union with the 0.5.2 C surface.
  * 41 rgmin_manifold_handle_t, 42 rgmin_lowest_eigenpairs_ex,
- * 43 rgmin_lbfgs_pairs_push_rho, 44 rgmin_solver_set_power. */
+ * 43 rgmin_lbfgs_pairs_push_rho, 44 rgmin_solver_set_power,
+ * 45 rgmin_solver_set_lbfgs_trust (Burdakov ray, not set_lbfgs_trust). */
 #define RGMIN_ABI_LAYOUT_REVISION 5
 /* Layout revision 5. rgmin_control_t is maxiter, gtol, istep, memory,
  * maxmove, noise_eps, noise_c. maxmove > 0 is the Euclidean cap; 0 keeps
@@ -511,6 +512,13 @@ int32_t rgmin_solver_set_lbfgs_scaled(rgmin_solver_t *solver, double max_atom);
  *  does not search a line. Returns 0, or 1 on a null session or a
  *  session that is not RGMIN_LBFGS. ABI minor 34. */
 int32_t rgmin_solver_set_lbfgs_wolfe(rgmin_solver_t *solver);
+/** Burdakov ray-truncation radius for session L-BFGS. A non-positive,
+ *  NaN or infinite radius turns it off and still returns 0. This is
+ *  not the Newton-model radius. Returns 0, or 1 on a null session.
+ *  ABI minor 45. */
+int32_t rgmin_solver_set_lbfgs_trust(rgmin_solver_t *solver, double radius);
+/** Current Burdakov radius, or 0 when it is off or \c solver is null. */
+double rgmin_solver_lbfgs_trust_radius(const rgmin_solver_t *solver);
 /** Per-atom cap (eOn \c maxAtomMotionAppliedV). While the L-BFGS step
  *  is the default cap, this replaces that cap. After
  *  rgmin_solver_set_lbfgs_wolfe, and without a distance constraint set,

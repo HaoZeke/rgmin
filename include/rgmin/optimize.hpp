@@ -720,6 +720,11 @@ public:
     int set_lbfgs_scaled(double max_atom) { return rgmin_solver_set_lbfgs_scaled(ptr_, max_atom); }
     /// Strong Wolfe line search. The default session does not search a line.
     int set_lbfgs_wolfe() { return rgmin_solver_set_lbfgs_wolfe(ptr_); }
+    /// Burdakov ray-truncation radius for session L-BFGS. A non-positive,
+    /// NaN or infinite radius turns it off. Not the Newton-model radius.
+    int set_lbfgs_trust(double radius) { return rgmin_solver_set_lbfgs_trust(ptr_, radius); }
+    /// Current Burdakov radius, or 0 when it is off.
+    double lbfgs_trust_radius() const noexcept { return rgmin_solver_lbfgs_trust_radius(ptr_); }
     /// Copy the gradient behind the last step report. n is the session dimension.
     rgmin_status_t report_gradient(double* out, std::size_t n) const {
         return rgmin_solver_report_gradient(ptr_, out, n);
