@@ -528,6 +528,13 @@ impl Manifold for RiemannianManifold {
         }
     }
 
+    /// The factor metrics of [`RiemannianManifold::inner`], which
+    /// [`Self::egrad2rgrad`] represents the differential in. NaN when the
+    /// slice method refuses the call.
+    fn inner(&self, x: &Array1<f64>, u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        RiemannianManifold::inner(self, &x.to_vec(), &u.to_vec(), &v.to_vec()).unwrap_or(f64::NAN)
+    }
+
     fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         let mut out = vec![0.0; x.len()];
         match RiemannianManifold::retract(self, &x.to_vec(), &v.to_vec(), &mut out) {

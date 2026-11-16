@@ -397,6 +397,15 @@ fn trait_methods_match_the_slice_methods() {
     assert_eq!(ya.to_vec(), y);
     assert!(m.required_dim(12).is_ok());
     assert_eq!(m.required_dim(11), Err(12));
+
+    let (xa, va) = (Array1::from(x.clone()), Array1::from(v.clone()));
+    let egrad = Array1::from(rng.vec(m.packed_len()));
+    let rgrad = Manifold::egrad2rgrad(&m, &xa, &egrad);
+    let lhs = Manifold::inner(&m, &xa, &rgrad, &va);
+    assert_eq!(lhs, m.inner(&x, &rgrad.to_vec(), &v).unwrap());
+    let rhs = egrad.dot(&va);
+    assert!((lhs - rhs).abs() < 1e-12 * (1.0 + rhs.abs()), "{lhs} {rhs}");
+    assert!(Manifold::inner(&m, &xa, &rgrad, &Array1::zeros(11)).is_nan());
 }
 
 #[test]
