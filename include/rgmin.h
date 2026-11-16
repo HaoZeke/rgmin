@@ -61,11 +61,11 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 43
+#define RGMIN_ABI_VERSION_MINOR 44
 /* 37 linesearch, 38 lbfgs_direction, 39 rgmin_lowest_eigenpairs.
  * 40 is the 0.6.0 union with the 0.5.2 C surface.
  * 41 rgmin_manifold_handle_t, 42 rgmin_lowest_eigenpairs_ex,
- * 43 rgmin_lbfgs_pairs_push_rho. */
+ * 43 rgmin_lbfgs_pairs_push_rho, 44 rgmin_solver_set_power. */
 #define RGMIN_ABI_LAYOUT_REVISION 5
 /* Layout revision 5. rgmin_control_t is maxiter, gtol, istep, memory,
  * maxmove, noise_eps, noise_c. maxmove > 0 is the Euclidean cap; 0 keeps
@@ -700,6 +700,16 @@ void rgmin_solver_set_centered_matrix(rgmin_solver_t *solver, size_t m, size_t n
 void rgmin_solver_set_factor_shape(rgmin_solver_t *solver, size_t n, size_t p);
 void rgmin_solver_set_unitary(rgmin_solver_t *solver, size_t n);
 
+/** Cartesian power: count unit-weight copies of the shape-free manifold
+ *  token factor (EUCLIDEAN, SPHERE, SO3, STIEFEL, SE3, RIGID_QUOTIENT,
+ *  MW_RIGID, MULTINOMIAL, SYMMETRIC, SKEWSYMMETRIC), each of packed
+ *  length block. manopt powermanifold. MW_RIGID copies read
+ *  rgmin_solver_set_masses as one molecule reused on every copy or as
+ *  every copy's masses in order. Returns 0, or 1 on a null session, a
+ *  token whose shape needs its own setter, or a block the factor cannot
+ *  hold; the manifold is then unchanged. ABI minor 44. */
+int32_t rgmin_solver_set_power(rgmin_solver_t *solver, int32_t factor, size_t block,
+                               size_t count);
 /** Per-atom masses for MW_RIGID. n_atoms == 0 or masses == NULL
  *  restores unit mass. */
 void rgmin_solver_set_masses(rgmin_solver_t *solver, const double *masses,

@@ -111,6 +111,7 @@ rgmin_solver_set_oblique
 rgmin_solver_set_pbc_axes
 rgmin_solver_set_periodic
 rgmin_solver_set_positive
+rgmin_solver_set_power
 rgmin_solver_set_precon
 rgmin_solver_set_project_rigid
 rgmin_solver_set_qn_step

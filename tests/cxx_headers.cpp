@@ -583,6 +583,13 @@ int main() {
         std::fprintf(stderr, "callback H0 direction (%g, %g)\n", via_callback[0], via_callback[1]);
         return 9;
     }
+    rgmin::Solver power(rgmin::Method::Lbfgs, rgmin::Control{}, 6);
+    if (power.set_power(RGMIN_MANIFOLD_SPHERE, 3, 2) != 0 ||
+        power.set_power(RGMIN_MANIFOLD_OBLIQUE, 3, 2) != 1 ||
+        power.set_power(RGMIN_MANIFOLD_SO3, 8, 2) != 1) {
+        std::fprintf(stderr, "set_power took a shaped token or a bad block\n");
+        return 22;
+    }
     double s1[2] = {1.0, 0.0};
     double y1[2] = {2.0, 1.0};
     if (!pairs.push_rho(s1, y1, 0.5, 2) || pairs.push_rho(s1, y1, -1.0, 2) ||

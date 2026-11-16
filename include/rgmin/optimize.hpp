@@ -796,6 +796,11 @@ public:
     void set_centered_matrix(std::size_t m, std::size_t n, bool center_rows) {
         rgmin_solver_set_centered_matrix(ptr_, m, n, center_rows ? 1 : 0);
     }
+    /// count copies of a shape-free manifold. Returns 0, or 1 when the
+    /// token needs a shape or block does not fit it.
+    int set_power(rgmin_manifold_t factor, std::size_t block, std::size_t count) {
+        return rgmin_solver_set_power(ptr_, factor, block, count);
+    }
     /// Copy set into the session. Throws ConstraintError on a refused setting.
     void set_distance_constraints(DistanceConstraints const& set) {
         rgmin_status_t st = rgmin_solver_set_distance_constraints(ptr_, set.get());
