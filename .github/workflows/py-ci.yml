@@ -53,6 +53,9 @@ permissions:
   contents: read
 
 jobs:
+  # One rgpot commit for the five workflows and rgpot-ref: rgpot tests
+  # the workflows together at a commit, and rgbind-sync compares the
+  # vendored header with the rgpot that runs the other jobs.
   wheels:
     uses: OmniPotentRPC/rgpot/.github/workflows/py-wheels.yml@e34a43b63a69ccc88bc63692001cafc273992082
     with:
