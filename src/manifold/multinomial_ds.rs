@@ -288,6 +288,10 @@ impl Manifold for MultinomialDoublyStochastic {
     fn transport(&self, _x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         self.project(x_to, v)
     }
+
+    fn inner(&self, x: &Array1<f64>, u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        inner(x, u, v)
+    }
 }
 
 #[cfg(test)]

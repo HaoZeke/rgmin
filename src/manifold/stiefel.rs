@@ -213,6 +213,40 @@ impl Manifold for StiefelNp {
     fn transport(&self, _x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         self.project(x_to, v)
     }
+
+    /// manopt `stiefelfactory`: \(P_X(\nabla^2 f\,U - U\,\mathrm{sym}(X^\top \nabla f))\).
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        let (xv, gv, hv, uv) = (
+            x.as_slice()?,
+            egrad.as_slice()?,
+            ehess.as_slice()?,
+            v.as_slice()?,
+        );
+        if !self.fits(xv.len()) || [gv, hv, uv].iter().any(|a| a.len() != xv.len()) {
+            return None;
+        }
+        let mut s = self.xtu(xv, gv);
+        Self::sym_inplace(&mut s, self.p);
+        let mut w = hv.to_vec();
+        for j in 0..self.p {
+            let mut col = self.col(&w, j).to_owned();
+            for a in 0..self.p {
+                axpy(-s[a + self.p * j], self.col(uv, a), &mut col);
+            }
+            self.write_col(&mut w, j, &col);
+        }
+        Some(self.project(x, &Array1::from(w)))
+    }
+
+    fn typical_dist(&self, _n: usize) -> f64 {
+        (self.p as f64).sqrt()
+    }
 }
 
 #[cfg(test)]

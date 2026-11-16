@@ -203,6 +203,38 @@ impl Manifold for Spd {
     fn transport(&self, _x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         self.project(x_to, v)
     }
+
+    /// The gradient here is the symmetrization, so the metric these
+    /// operations match is Frobenius on the open cone, not manopt's
+    /// affine-invariant one. Segments stay in the convex cone, so `log`
+    /// and transport are exact; `exp` would leave it and is not offered.
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        _egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        _v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        (side(x.len()).is_some() && ehess.len() == x.len()).then(|| self.project(x, ehess))
+    }
+
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        (side(x.len()).is_some() && y.len() == x.len()).then(|| self.project(x, &(y - x)))
+    }
+
+    fn parallel_transport_along(
+        &self,
+        x: &Array1<f64>,
+        d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        (side(x.len()).is_some() && d.len() == x.len() && v.len() == x.len())
+            .then(|| self.project(x, v))
+    }
+
+    fn transport_is_isometric(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

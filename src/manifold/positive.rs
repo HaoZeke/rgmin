@@ -154,6 +154,48 @@ impl Manifold for Positive {
     ) -> Array1<f64> {
         Vector::from_host(v.clone()).into_host()
     }
+
+    fn inner(&self, x: &Array1<f64>, u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        inner(x, u, v)
+    }
+
+    /// manopt `positivefactory`: \(x^2 \odot \nabla^2 f\,v + x \odot v
+    /// \odot \nabla f\), the Christoffel symbol \(-1/x\) of \(dx^2/x^2\).
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        if !self.fits(x.len()) || [egrad, ehess, v].iter().any(|a| a.len() != x.len()) {
+            return None;
+        }
+        Some(Array1::from_shape_fn(x.len(), |i| {
+            x[i] * x[i] * ehess[i] + x[i] * v[i] * egrad[i]
+        }))
+    }
+
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        (self.fits(x.len()) && v.len() == x.len() && is_positive(x)).then(|| self.retract(x, v))
+    }
+
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        (self.fits(x.len()) && y.len() == x.len() && is_positive(x) && is_positive(y))
+            .then(|| Array1::from_shape_fn(x.len(), |i| x[i] * (y[i] / x[i]).ln()))
+    }
+
+    /// In \(u = \log x\) the metric is Euclidean, so \(v \oslash x\) is
+    /// constant along the geodesic.
+    fn parallel_transport_along(
+        &self,
+        x: &Array1<f64>,
+        d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        let y = self.exp(x, d)?;
+        (v.len() == x.len()).then(|| Array1::from_shape_fn(x.len(), |i| v[i] * y[i] / x[i]))
+    }
 }
 
 #[cfg(test)]

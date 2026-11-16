@@ -123,6 +123,48 @@ macro_rules! with_kind {
     };
 }
 
+/// Geodesic operations of a linear subspace whose tangent projector
+/// \(P\) does not depend on the point. The Weingarten term vanishes,
+/// geodesics are straight lines and parallel transport is the identity.
+macro_rules! flat_geodesics {
+    () => {
+        fn ehess2rhess(
+            &self,
+            x: &Array1<f64>,
+            _egrad: &Array1<f64>,
+            ehess: &Array1<f64>,
+            _v: &Array1<f64>,
+        ) -> Option<Array1<f64>> {
+            (self.required_dim(x.len()).is_ok() && ehess.len() == x.len())
+                .then(|| self.project(x, ehess))
+        }
+
+        fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+            (self.required_dim(x.len()).is_ok() && v.len() == x.len())
+                .then(|| x + &self.project(x, v))
+        }
+
+        fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+            (self.required_dim(x.len()).is_ok() && y.len() == x.len())
+                .then(|| self.project(x, &(y - x)))
+        }
+
+        fn parallel_transport_along(
+            &self,
+            x: &Array1<f64>,
+            d: &Array1<f64>,
+            v: &Array1<f64>,
+        ) -> Option<Array1<f64>> {
+            (self.required_dim(x.len()).is_ok() && d.len() == x.len() && v.len() == x.len())
+                .then(|| self.project(x, v))
+        }
+
+        fn transport_is_isometric(&self) -> bool {
+            true
+        }
+    };
+}
+
 mod centered;
 mod complex_circle;
 mod constant;

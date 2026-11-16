@@ -104,6 +104,12 @@ impl Manifold for Constant {
     ) -> Array1<f64> {
         zeros_of(v.len())
     }
+
+    fn typical_dist(&self, _n: usize) -> f64 {
+        typical_dist()
+    }
+
+    flat_geodesics!();
 }
 
 #[cfg(test)]

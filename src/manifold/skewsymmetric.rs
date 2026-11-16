@@ -120,6 +120,8 @@ impl Manifold for SkewSymmetric {
     ) -> Array1<f64> {
         v.clone()
     }
+
+    flat_geodesics!();
 }
 
 #[cfg(test)]
