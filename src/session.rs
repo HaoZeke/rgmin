@@ -1015,7 +1015,10 @@ impl Solver {
     /// weighted product metric. Settings that read raw coordinates as atoms
     /// or boxes (the exponential preconditioner, the Lindh model, rigid
     /// projection of the whole vector, the HiGHS box) refuse such a product
-    /// with [`Error::ProductChart`].
+    /// with [`Error::ProductChart`]. Steps refuse a product with a
+    /// [`crate::manifold::TangentMetric`] with
+    /// [`Error::ProductTangentMetric`]; [`crate::rtr::minimize_rtr`] runs
+    /// in its metric.
     pub fn set_manifold(&mut self, kind: ManifoldKind) {
         let (kind, chart) = chart::chart_form(kind);
         if kind != self.manifold || chart != self.chart {
@@ -1292,13 +1295,22 @@ impl Solver {
     }
 
     fn check_manifold(&self, n: usize) -> Result<()> {
-        if self.manifold.required_dim(n).is_ok() {
-            return Ok(());
+        if self.manifold.required_dim(n).is_err() {
+            return Err(Error::ManifoldDim {
+                kind: self.manifold.as_str(),
+                got: n,
+            });
         }
-        Err(Error::ManifoldDim {
-            kind: self.manifold.as_str(),
-            got: n,
-        })
+        self.refuse_tangent_metric()
+    }
+
+    fn refuse_tangent_metric(&self) -> Result<()> {
+        match &self.manifold {
+            ManifoldKind::Product(product) => product
+                .tangent_metric_factor()
+                .map_or(Ok(()), |index| Err(Error::ProductTangentMetric { index })),
+            _ => Ok(()),
+        }
     }
 
     /// Tangent projection. Periodic cells drop rotation (Sella `proj_rot`).
@@ -1700,9 +1712,10 @@ impl Solver {
     ///
     /// On a weighted product `s` is a displacement and `y` a difference of
     /// Euclidean gradients in the factors' coordinates. They enter the
-    /// chart as `d * s` and `y / d`.
+    /// chart as `d * s` and `y / d`. A product with a tangent metric keeps
+    /// no pairs.
     pub fn push_pair(&mut self, s: ArrayView1<f64>, y: ArrayView1<f64>) -> bool {
-        if s.len() != self.dim || y.len() != self.dim {
+        if s.len() != self.dim || y.len() != self.dim || self.refuse_tangent_metric().is_err() {
             return false;
         }
         let charted = self
@@ -1751,6 +1764,7 @@ impl Solver {
                 got: g.len(),
             });
         }
+        self.refuse_tangent_metric()?;
         if let Some(d) = self.chart.as_ref().filter(|d| d.len() == g.len()) {
             let dir = self.search_direction_plain((&g / &**d).view())?;
             return Ok(dir / &**d);
