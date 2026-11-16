@@ -116,6 +116,12 @@ Install the 0.6.0 release from crates.io with `cargo add rgmin ndarray@0.17` on 
 [`docs/orgmode/howto/install.org`](docs/orgmode/howto/install.org) covers the `develop` branch and how it differs from the release.
 It also covers the features of each route and the C library.
 
+## LAMMPS
+
+`lammps/` builds `min_style rgmin`, a LAMMPS plugin that runs rgmin's L-BFGS, FIRE, FIRE 2.0, steepest descent and Barzilai-Borwein sessions through the C ABI.
+After `plugin load rgminplugin.so`, change `min_style cg` to `min_style rgmin` and keep the rest of the input; it needs LAMMPS 22Jul2025 or later and runs under MPI.
+[`docs/orgmode/howto/lammps-migration.org`](docs/orgmode/howto/lammps-migration.org) covers the build, the stopping rules and the differences from LAMMPS's minimizers, and the benchmark from `benches/lammps_minstyle.py` ([`benches/lammps_minstyle/results.md`](benches/lammps_minstyle/results.md)).
+
 ## Citation
 
 If you use rgmin in published work, cite it with [`CITATION.cff`](CITATION.cff) and add the version or commit you ran.

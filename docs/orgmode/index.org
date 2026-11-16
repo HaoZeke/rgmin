@@ -103,6 +103,7 @@ It also covers the features of each route, the C library and a checkout.
    howto/python
    howto/ase-migration
    howto/ase-bench
+   howto/lammps-migration
    howto/precon
    howto/doxygen
    howto/bench-gate
@@ -135,6 +136,7 @@ It also covers the features of each route, the C library and a checkout.
    reference/api
    reference/constraints
    reference/python
+   reference/lammps-min-style
    reference/manifold
    reference/product-manifold
    reference/sota
