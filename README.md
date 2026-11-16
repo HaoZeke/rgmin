@@ -34,32 +34,36 @@ without a callback shim in each consumer.
 CPU f64 is wired now. A non-CPU tensor returns `RGMIN_UNSUPPORTED_DEVICE`
 so a CUDA path does not change the ABI.
 
-The production unconstrained local method is [`Lbfgs`] with the eOn cap.
+The production unconstrained local method is `Lbfgs` with the eOn cap.
 That step is the default, `LbfgsStep::Capped` at 0.2, and it runs no
 line search: the longest atom move is at most 0.2, the first step probes
 curvature, and a longer proposal clears the memory.
 `LbfgsStep::Wolfe` opts into the strong Wolfe line search.
 `LbfgsStep::Scaled` shortens the quasi-Newton step and keeps the pairs.
-anneal `WarmLbfgs` holds
-that type so hopping does not ship a second two-loop. Feature `highs` keeps the two-loop direction and projects it with
+The [`anneal`](https://github.com/HaoZeke/anneal) crate's `WarmLbfgs`
+holds an `Lbfgs`, so basin hopping does not need a second two-loop.
+Feature `highs` keeps the two-loop direction and projects it with
 HiGHS (`Q = I`) onto a box, trust region, or equalities.
 Constrained quadratic programming (QP) uses the HiGHS interior point method (IPM), IPX or HiPO, with crossover off.
 The C ABI pins the engine (`rgmin_highs_solver_t`).
 
-A session can retract onto an embedded manifold (`set_manifold`):
-Euclidean (default), sphere, SO(3), Stiefel `St(n,1)`, SE(3),
-SPD (affine-invariant, row-major `n x n`).
+A session can retract onto an embedded manifold (`set_manifold`), such
+as the sphere, SO(3), SE(3), Stiefel `St(n,1)`, SPD, or a cluster with
+the rigid-body motions removed. Euclidean is the default.
+[`docs/orgmode/howto/manifolds.org`](docs/orgmode/howto/manifolds.org)
+lists every `ManifoldKind`.
 
-Conjugacy: Fletcher-Reeves, Polak-Ribiere, Hestenes-Stiefel, Dai-Yuan,
-conjugate descent, Hager-Zhang, Liu-Storey, FR-PR, HybridizedConj.
-Line search: Brent, Armijo, Goldstein, strong Wolfe with zoom.
-Methods: nonlinear conjugate gradients (NLCG), BFGS, L-BFGS, SR1, SR2, Newton, RFO, Adam, steepest descent, PSO, FIRE and FIRE 2.0, quick-min, Barzilai-Borwein, Powell dogleg, Steihaug-Toint Newton-CG (`newton-cg`, `newton-pcg`).
+Conjugacy: Fletcher-Reeves, Polak-Ribiere, Polak-Ribiere-plus,
+Hestenes-Stiefel, Dai-Yuan, conjugate descent, Hager-Zhang, Liu-Storey,
+FR-PR, and `Conjugacy::Hybrid`, the max or min of two of these.
+Line search: Brent, Armijo backtracking, Goldstein, strong Wolfe with zoom.
+Methods: nonlinear conjugate gradients (NLCG), BFGS, L-BFGS, SR1, SR2, Newton, RFO, Adam, steepest descent, PSO, FIRE and FIRE 2.0, quick-min, Barzilai-Borwein, ODE12r, DIIS, Powell dogleg, Steihaug-Toint Newton-CG (`newton-cg`, `newton-pcg`).
 Newton, RFO and the dogleg also take a Hessian from the host.
 `Solver::set_exp` installs the exponential preconditioner of
 Packwood et al., J. Chem. Phys. 144, 164109 (2016).
 `rgmin_linesearch` (ABI minor 37) takes a caller-supplied energy and gradient.
-`lbfgs_direction` (ABI minor 38) applies a caller-supplied initial inverse Hessian.
-`lowest_eigenpairs` (ABI minor 39) is block LOBPCG for the k lowest pairs.
+`rgmin_lbfgs_direction` (ABI minor 38) applies a caller-supplied initial inverse Hessian.
+`rgmin_lowest_eigenpairs` (ABI minor 39) is block LOBPCG for the k lowest pairs.
 A session's line search defaults to strong Wolfe. Steepest descent,
 NLCG, BFGS, Adam, DIIS, and L-BFGS after `LbfgsStep::Wolfe` use it; the
 default L-BFGS step does not search a line. Each search starts from the
@@ -74,8 +78,6 @@ projection per atom with `QuickMinOptions::per_atom()`.
 gate: same stationary point, Kaplan-Meier, BCa, and a confidence sequence.
 `validation/` holds the sympy checks behind the interpolation, the
 two-loop map and FIRE 2.0 (`uv run --with sympy python validation/<file>.py`).
-Methods: NLCG, BFGS, L-BFGS, SR1, SR2, Newton, RFO, Adam, steepest
-descent, PSO, FIRE, FIRE 2.0, quick-min, Barzilai-Borwein, Powell dogleg.
 `Solver::set_precon` installs Exp, Lindh, or the bonded metric.
 L-BFGS uses the matrix as the initial inverse Hessian. FIRE and
 nonlinear CG use it as the metric. `select_precon` picks Exp for a

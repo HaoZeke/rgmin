@@ -857,18 +857,18 @@ The differences in detail:
 18 Reconciliation with the earlier manifold branches
 ----------------------------------------------------
 
-Two earlier branches carried product designs, and this one supersedes both.
+Two earlier branches carried product designs, and the product kind of this page supersedes both.
 
 ``feat/manifold-api-060`` added ``RiemannianManifold`` in ``cdc8f5dd``, a product of Stiefel and SPD factors over caller-owned column-major slices.
-It is part of the 0.6.0 line (``d3f94d11``), at which the OH-TST design pins rgmin, and this branch is built on that line.
+The OH-TST design pins rgmin at ``d3f94d11``, a commit that already has it, and the product kind was built on top of it.
 It has QR and polar Stiefel retractions, the Edelman, Arias and Smith exponential, SPD under the affine-invariant and log-Euclidean metrics, and a ``gradient_step`` helper.
 It sits beside ``ManifoldKind``, so no session can step it.
 It implemented the old ``Manifold`` trait, whose only metric was the dot product, so a driver would have measured its affine-invariant SPD gradient :math:`X \nabla f X` in another metric; its trait implementation now forwards ``inner`` to the factor metrics.
 Here the product is a ``ManifoldKind`` over every kind, with weights, and the trait carries ``inner``, so gradient and metric agree.
 Stiefel frames keep the column-major packing that both designs use.
 ``RiemannianManifold`` stays, and its polar retraction and log-Euclidean metric have no ``ManifoldKind``.
-The ``Spd`` kind of the 0.6.0 line already took the affine-invariant gradient :math:`X \nabla f X`, and it now carries the matching inner product :math:`\mathrm{tr}(X^{-1} U X^{-1} V)` and Hessian, so it enters a product in that metric.
-Sessions still form their secant pairs in the dot product of the packed coordinates, as on the 0.6.0 line, while ``minimize_rtr`` measures ``Spd`` in its own metric.
+The ``Spd`` kind already took the affine-invariant gradient :math:`X \nabla f X`, and it now carries the matching inner product :math:`\mathrm{tr}(X^{-1} U X^{-1} V)` and Hessian, so it enters a product in that metric.
+Sessions still form their secant pairs in the dot product of the packed coordinates, as before, while ``minimize_rtr`` measures ``Spd`` in its own metric.
 
 The rest of the branch, up to ``7ea30e08``, binds ``RiemannianManifold`` outside Rust.
 Its C handles are built by ``rgmin_manifold_stiefel``, ``rgmin_manifold_spd`` and ``rgmin_manifold_product``, released by ``rgmin_manifold_free``, and passed to one function per slice method, ``gradient_step`` included.
@@ -877,12 +877,12 @@ No function hands a handle to a session, whose manifold stays the unrelated ``rg
 The three bindings stay as they were and reach no ``ManifoldKind`` product.
 The handles hold ABI minor 41 and the line's minors 42 and 43 follow, so ``rgmin_solver_set_power`` takes minor 44.
 
-A caller of the 0.6.0 API who wants a session or the trust region moves over as follows:
+A caller of ``RiemannianManifold`` who wants a session or the trust region moves over as follows:
 
 .. table::
 
     +------------------------------------+-----------------------------------------------------------------------------------------+
-    | 0.6.0, ``RiemannianManifold``      | Here                                                                                    |
+    | ``RiemannianManifold``             | ``ManifoldKind``                                                                        |
     +====================================+=========================================================================================+
     | ``stiefel(n, 1, _)``               | ``ManifoldKind::Sphere``, or ``sphere_within`` and ``sphere_excluding`` for a subspace  |
     +------------------------------------+-----------------------------------------------------------------------------------------+
@@ -903,7 +903,7 @@ A caller of the 0.6.0 API who wants a session or the trust region moves over as 
     | Python ``rgmin.manifold``          | kept, over the slice methods                                                            |
     +------------------------------------+-----------------------------------------------------------------------------------------+
 
-The plane of the design, ``product([stiefel(D, 1, _), spd(1, _)])`` in 0.6.0, becomes
+The plane of the design, ``product([stiefel(D, 1, _), spd(1, _)])`` with ``RiemannianManifold``, becomes
 ``ManifoldKind::product([ProductFactor::new(ManifoldKind::sphere_excluding(e)?, D).with_weight(l2), ProductFactor::new(ManifoldKind::Euclidean, 1)])``
 with ``e`` the excluded directions and ``l2`` the block weight :math:`\ell^2`, or ``with_metric`` in place of ``with_weight`` for a harmonic metric on the normal.
 
@@ -967,7 +967,7 @@ It also checks that the gradient is the Riesz vector of the harmonic metric, run
 
 - The stochastic drivers of the OH-TST design (its item 5) are not here: stochastic gradient ascent with a step schedule and iterate averaging, the norm test on the sample size, a trust region that weighs a measured decrease against its standard error, and ``NoiseFloor`` driven by a caller's covariance.
   Each needs an interface for noisy values and gradients with their covariance, which the ``Manifold`` trait and the sessions do not have, and convergence tests on sampled objectives.
-  ``Control::noise_floor`` of the 0.6.0 line stops a session at :math:`c \sqrt{n_\mathrm{free}}\, \varepsilon_g` for a caller's gradient noise :math:`\varepsilon_g`, a scalar in place of a covariance, and ``minimize_rtr`` has no such stop.
+  ``Control::noise_floor`` stops a session at :math:`c \sqrt{n_\mathrm{free}}\, \varepsilon_g` for a caller's gradient noise :math:`\varepsilon_g`, a scalar in place of a covariance, and ``minimize_rtr`` has no such stop.
   The deterministic core of such a driver is here: ``egrad2rgrad`` gives the preconditioned direction, ``truncated_cg_riemannian`` the trust-region step in the metric and ``RtrRadius::update`` the radius from a decrease measured outside the model.
 
 - Item 6, a Hessian-vector product with an error bar and a preconditioner built from the harmonic model, is not here either.
@@ -979,7 +979,7 @@ It also checks that the gradient is the Riesz vector of the harmonic metric, run
 - ``Multinomial`` projects Fisher-orthogonally but keeps the dot product as its inner product, so its gradient does not represent the differential in that inner product, and the derivative tests leave it out.
   The doubly stochastic kinds carry the Fisher inner product and are consistent.
 
-- ``Spd`` carries the affine-invariant metric of the 0.6.0 line, in which its gradient, inner product and Hessian agree and its retraction :math:`x + v + \tfrac12 v x^{-1} v` is second order.
+- ``Spd`` carries the affine-invariant metric, in which its gradient, inner product and Hessian agree and its retraction :math:`x + v + \tfrac12 v x^{-1} v` is second order.
   Its transport, the identity on tangents, is not an isometry of that metric.
 
 - ``Multinomial`` and its doubly stochastic variants, ``MwRigid`` and ``RigidQuotient`` have no Hessian or geodesic closed forms, and ``StiefelP`` and ``Spd`` have a Hessian but no exponential, logarithm or parallel transport.
@@ -989,6 +989,6 @@ It also checks that the gradient is the Riesz vector of the harmonic metric, run
 
 - The C ABI selects powers only, through ``rgmin_solver_set_power``.
   A general weighted product has to carry its parameterized factors (the sizes of Oblique, Stiefel and the complex kinds), their weights and the basis of a subspace sphere across the ABI.
-  A descriptor struct or composed handles like those of the 0.6.0 line can do that, and either is a separate ABI design.
+  A descriptor struct or composed handles like those of ``RiemannianManifold`` can do that, and either is a separate ABI design.
   Tangent metrics and gauges are Rust callbacks: the C ABI exposes sessions, which refuse tangent metrics, and has no entry for ``minimize_rtr``, so both wait for a callback design.
   The Python module ``rgmin.manifold`` binds the slice methods of ``RiemannianManifold`` and no ``ManifoldKind``, so a Python product waits for a binding of ``ManifoldKind``.

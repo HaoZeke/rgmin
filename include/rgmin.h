@@ -151,7 +151,10 @@ _Static_assert(sizeof(rgmin_stop_t) == sizeof(int32_t),
                "rgmin_stop_t is i32-wide; do not build this header with -fshort-enums");
 #endif
 
-/** Outer-loop controls. \c memory is the L-BFGS pair cap. \c istep <= 0
+/** Outer-loop controls. Start from a zeroed struct, such as a designated
+ *  initializer, which zeroes the fields it omits. A stray positive
+ *  \c noise_eps turns on the noise-floor stop. \c memory is the L-BFGS
+ *  pair cap. \c istep <= 0
  *  selects 1. An energy-tested steepest, BFGS, SR1, SR2, BB or
  *  unpreconditioned CG session then takes min(1, 1/||g||) at its first
  *  step as the step scale, until rgmin_solver_forget or

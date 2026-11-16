@@ -65,7 +65,7 @@ Objects
 ``rgmin_solver_create`` / ``rgmin_solver_step`` / ``rgmin_solver_free``
     The session half of the waist.
     Callbacks are arguments of each step, not stored on the handle.
-      ``include/rgmin.h`` sets ``abi_major`` 1, ``abi_minor`` 43 and ``layout_revision`` 5.
+    ``include/rgmin.h`` sets ``abi_major`` 1, ``abi_minor`` 45 and ``layout_revision`` 5.
     ``rgmin_abi_compatible`` checks the major version and the layout revision only.
 
 ``DistanceConstraints``
@@ -75,9 +75,9 @@ Objects
 
 ``ManifoldKind``
     Embedded geometry. Euclidean is the identity.
-    Sphere, SO(3), Stiefel ``St(n,1)``, SE(3), Symmetric,
-    SkewSymmetric, ComplexCircle ``(S^1)^n``, and EuclideanComplex
-    ``C^n`` implement ``project`` / ``retract`` / ``transport``.
+    Every kind implements ``project`` / ``retract`` / ``transport``, for
+    example Sphere, SO(3), Stiefel ``St(n,1)``, SE(3), Spd and a product.
+    :doc:`../howto/manifolds` lists the kinds.
 
 ``rgmin_minimize``
     First-order / quasi-Newton C entry. CPU f64
