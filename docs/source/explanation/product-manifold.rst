@@ -8,8 +8,9 @@ Weighted product manifolds: metric, gradient, Hessian and geodesics
 A point of a product manifold :math:`\mathcal{M} = \mathcal{M}_1 \times \cdots \times \mathcal{M}_k` is a tuple :math:`x = (x_1, \dots, x_k)` of factor points.
 ``ProductManifold`` (``src/manifold/product.rs``) packs the tuple end to end in one vector and gives it the metric :math:`g = \sum_i w_i\, g_i` with constant weights :math:`w_i > 0`.
 This page derives every operation the solvers call from that one choice, shows where the weights enter and where they cancel, and compares the result with the products of manopt, Manifolds.jl, pymanopt and geomstats.
-The first consumer is the optimal dividing hyperplane of transition-state theory in ``rgsaddle``, a point and a unit normal in :math:`\mathbb{R}^n \times S^{n-1}`.
-Nothing below is specific to it.
+The first consumer is the optimal dividing hyperplane of transition-state theory in ``rgsaddle``: a point and a unit normal in :math:`\mathbb{R}^n \times S^{n-1}`, or a unit normal and a signed offset in :math:`S(U) \times \mathbb{R}`, with :math:`U` the directions a sampler moves in.
+Later sections derive what that design needs beyond the product: the sphere of a subspace, metrics supplied on a factor's tangent spaces, gauge moves between steps and the convention for sphere Hessians.
+The section on the optimal dividing plane puts them together; nothing else is specific to it.
 :doc:`../reference/product-manifold` lists the API.
 
 Each factor :math:`\mathcal{M}_i` sits in the space :math:`\mathcal{E}_i = \mathbb{R}^{n_i}` of its packed coordinates, with tangent projector :math:`P_i(x_i)` and metric :math:`g_i`.
@@ -447,7 +448,277 @@ The test ``iterates_do_not_depend_on_the_length_unit_once_the_weight_carries_it`
 Keeping :math:`w_p` in bohr moves them by more than :math:`10^{-4}`.
 The same test runs ``minimize_rtr`` in both units with :math:`\bar\Delta` set explicitly, and finds the same iteration count, accepted steps and minimizer.
 
-12 Comparison with manopt, Manifolds.jl, pymanopt and geomstats
+12 The sphere of a subspace
+---------------------------
+
+A sampler that fixes the centre of mass, or holds some atoms still, moves only in a linear subspace :math:`U \subset \mathbb{R}^n`, and the normal of a plane it samples must lie in :math:`U` too.
+The normal is then a point of the unit sphere of :math:`U`,
+
+
+.. math::
+
+    S(U) = \{ x \in U : \|x\| = 1 \}.
+
+
+``SubspaceSphere`` (``src/manifold/subspace_sphere.rs``) takes :math:`U` as the span of the rows of a matrix, ``SubspaceSphere::within``, or as the orthogonal complement of that span, ``SubspaceSphere::excluding``.
+The caller passes the smaller basis: the centre-of-mass directions and the coordinates of fixed atoms are excluded, a rotation subspace of a few modes is kept.
+The rows are orthonormalized once into :math:`Q`, so that :math:`P_U` is :math:`Q^\top Q` or :math:`I - Q^\top Q`, applied in two passes over the rows rather than as a dense :math:`n \times n` matrix.
+``ManifoldKind::sphere_within`` and ``ManifoldKind::sphere_excluding`` wrap the two constructors.
+
+:math:`U` with the Euclidean inner product is a Euclidean space, so :math:`S(U)` is a sphere, a Riemannian submanifold of :math:`U` and therefore of :math:`\mathbb{R}^n`.
+Its tangent space at :math:`x` is :math:`\{v \in U : x^\top v = 0\}`.
+Since :math:`P_U x = x`, the projectors :math:`P_U` and :math:`x x^\top` commute, and
+
+
+.. math::
+
+    P_x = (I - x x^\top) P_U = P_U - x x^\top
+
+
+is symmetric and idempotent with range :math:`U \cap x^\perp`: it is the orthogonal projector onto the tangent space.
+The Riemannian gradient is :math:`P_x \nabla \bar f = P_U \nabla \bar f - (x^\top \nabla \bar f)\, x`.
+
+The retraction normalizes the step inside :math:`U`,
+
+
+.. math::
+
+    R_x(v) = \frac{P_U (x + v)}{\|P_U (x + v)\|}.
+
+
+For :math:`x \in S(U)` and a tangent :math:`v` the projection changes nothing in exact arithmetic, so :math:`R_x(v)` is the point of :math:`S(U)` nearest to :math:`x + v`.
+That is the metric projection retraction, which is second order (Boumal, Propositions 5.54 and 5.55, and Example 5.43 for the sphere).
+In floating point the projection removes the rounding that would otherwise build up along the excluded directions over a long run.
+Transport is projection onto the arrival tangent space.
+
+For the Hessian, extend the gradient off the manifold by :math:`\bar G(y) = P_U \nabla \bar f(y) - (y^\top \nabla \bar f(y))\, y`.
+Its differential is
+
+
+.. math::
+
+    \mathrm{D} \bar G(x)[u] = P_U \nabla^2 \bar f(x)\, u - \bigl( u^\top \nabla \bar f(x) + x^\top \nabla^2 \bar f(x)\, u \bigr)\, x - (x^\top \nabla \bar f(x))\, u,
+
+
+and :math:`P_x` removes :math:`x`, keeps a tangent :math:`u` and satisfies :math:`P_x P_U = P_x`, so Boumal's Corollary 5.16 gives
+
+
+.. math::
+
+    \mathrm{Hess} f(x)[u] = P_x \bigl( \nabla^2 \bar f(x)\, u - (x^\top \nabla \bar f(x))\, u \bigr),
+
+
+the sphere's formula with :math:`P_x` in place of :math:`I - x x^\top`.
+:math:`U` is flat, so the part of :math:`\nabla \bar f` in :math:`U^\perp` adds no curvature and only the radial part :math:`x^\top \nabla \bar f` bends: the Weingarten map of :math:`S(U)` in :math:`\mathbb{R}^n` is :math:`\mathfrak{W}_x(u, \nu) = -(x^\top \nu)\, u` for every normal :math:`\nu \in U^\perp \oplus \mathrm{span}(x)`.
+
+:math:`S(U)` is a great sphere of :math:`S^{n-1}`.
+For :math:`x \in S(U)` and a tangent :math:`v`, the great circle :math:`\cos(t \|v\|)\, x + \sin(t \|v\|)\, v / \|v\|` stays in :math:`U`, and a geodesic of :math:`S^{n-1}` that stays in a submanifold is a geodesic of the submanifold.
+The exponential, logarithm, distance and parallel transport are therefore the sphere's, the injectivity radius is :math:`\pi`, and so is ``typical_dist``.
+
+Gram–Schmidt runs twice over the rows, which keeps them orthonormal to rounding even when they are nearly dependent.
+After the two passes the residual of a row of length :math:`L` carries an error of order :math:`\varepsilon L`, and normalizing a residual of length :math:`\rho` leaves an error of order :math:`\varepsilon L / \rho` in its orthogonality to the earlier rows.
+A row whose residual is at most :math:`\sqrt{\varepsilon}\, L` would leave more than :math:`\sqrt{\varepsilon}`, and is refused as dependent.
+The constructors also refuse an ambient dimension of zero, an entry that is not finite, no kept direction and excluded directions that fill :math:`\mathbb{R}^n`, all with ``Error::SubspaceBasis``.
+A single kept direction :math:`u` gives the two points :math:`\pm u`, at which every tangent vector is zero.
+
+13 Tangent metrics
+------------------
+
+A weight scales a whole factor.
+At the optimal plane the rotation block of the harmonic free energy is :math:`k_B T (I + |\lambda_1| H_\parallel^{-1})`, whose eigenvalues follow the in-plane curvatures of the saddle across decades, and no single scalar matches them.
+A ``TangentMetric`` supplies an operator :math:`G_x` on the tangent spaces of one factor, self-adjoint and positive definite in :math:`g_i` and smooth in :math:`x`, and that factor's part of the metric becomes
+
+
+.. math::
+
+    w_i\, g_i(u, G_x v).
+
+
+``ProductFactor::with_metric`` attaches one; ``TangentMetric::apply`` returns :math:`G_x v` and ``TangentMetric::solve`` returns :math:`G_x^{-1} r`.
+The product projects both results onto the tangent space, which removes rounding but does not repair an operator that leaves it.
+
+*Gradient.*
+The Riesz condition :math:`w_i\, g_i(\mathrm{grad}_G f, G_x u) = \mathrm{D}_i f(x)[u]` and the self-adjointness of :math:`G_x` give
+
+
+.. math::
+
+    \mathrm{grad}_G f = w_i^{-1} G_x^{-1}\, \mathrm{grad}_i f.
+
+
+``egrad2rgrad`` therefore returns the preconditioned gradient, and a driver that steps along it, deterministic or sampled, is preconditioned without knowing it.
+
+*Hessian model.*
+The Riemannian Hessian of the new metric needs its Levi-Civita connection, which involves derivatives of :math:`G_x` in :math:`x` that an operator supplied as ``apply`` and ``solve`` does not give.
+``ehess2rhess`` returns instead
+
+
+.. math::
+
+    H_G[u] = w_i^{-1} G_x^{-1}\, \mathrm{Hess}_i f(x)[u],
+
+
+with :math:`\mathrm{Hess}_i` the factor's Hessian in :math:`g_i`.
+It has the three properties the trust region needs.
+It is self-adjoint in the new metric, since :math:`w_i\, g_i(H_G u, G_x v) = g_i(\mathrm{Hess}_i f(x)[u], v)`.
+It is exact at a critical point, where the Hessian depends on the metric only through the inner product on the tangent space (Boumal, Proposition 5.45 and the remark after it): there :math:`g_G(\mathrm{Hess}_G f(x)[u], v) = g(\mathrm{Hess} f(x)[u], v) = g_G(H_G u, v)`.
+Away from critical points the bilinear forms of two Riemannian Hessians of one function differ by :math:`\mathrm{D} f(x)[\Gamma_x(u, v)]`, with :math:`\Gamma` the difference of the two Levi-Civita connections, and the Hessian of the pullback :math:`\hat f_x = f \circ R_x` at :math:`0` differs from either by another term linear in :math:`\mathrm{D} f(x)`.
+:math:`H_G` thus meets the condition :math:`\|H_k - \mathrm{Hess} \hat f_{x_k}(0)\| \le \beta_H \|\mathrm{grad} f(x_k)\|` of Absil, Mahony and Sepulchre, Theorem 7.4.11, and ``minimize_rtr`` keeps its local rate :math:`\min(\theta + 1, 2)` in the new metric.
+
+*Preconditioned truncated CG.*
+In this metric the truncated conjugate gradients of ``minimize_rtr`` are manopt's preconditioned ``trs_tCG`` in the unweighted metric :math:`\langle \cdot, \cdot \rangle`, with the preconditioner :math:`P` equal to :math:`(w_i G_x)^{-1}` on block :math:`i`.
+The residual of the model in the new metric is :math:`P r`, with :math:`r` the residual in the unweighted metric.
+The step length :math:`\langle P r, P r \rangle_G / \langle \delta, H_G \delta \rangle_G = \langle r, P r \rangle / \langle \delta, \mathrm{Hess} f\, \delta \rangle` is manopt's ``z_r / d_Hd``, and the trust ball :math:`\|\eta\|_G^2 = \langle \eta, P^{-1} \eta \rangle \le \Delta^2` is manopt's, so the iterates are the same.
+Two tests differ.
+The inner rule here reads the residual in the new metric, :math:`\langle r, P r \rangle^{1/2}`, where manopt reads :math:`\|r\|`; manopt's source calls the choice arbitrary and notes that Conn, Gould and Toint accept both (:cite:`connTrustRegionMethods2000`, page 206).
+The outer test here reads :math:`\|\mathrm{grad}_G f\|_G = \langle \mathrm{grad} f, P\, \mathrm{grad} f \rangle^{1/2}`, where manopt reads :math:`\|\mathrm{grad} f\|`.
+
+*What the metric costs.*
+The geodesics of the new metric have no closed form, so the exponential, logarithm, distance and both parallel transports of a product with a tangent metric return ``None``.
+Projection is not an isometry of the new metric, so ``transport_is_isometric`` is false.
+``typical_dist`` ignores :math:`G`, which has no single scale; a caller whose :math:`G` changes lengths by much sets :math:`\bar\Delta` with ``RtrOptions::with_radius_max``.
+
+*Nesting, the chart and sessions.*
+A factor that is itself a product takes tangent metrics on its own factors, and flattening keeps them.
+A metric on the whole nested product would couple blocks that the product keeps orthogonal, and ``ProductManifold::new`` refuses it with ``Error::ProductFactor``.
+The operator always receives the factor point and tangent vectors in the factor's own packing, so ``ProductManifold::chart`` keeps it unchanged.
+The session steppers measure with the dot product of the packed vector or of the chart, and no fixed change of coordinates turns :math:`g(u, G_x v)` into a dot product when :math:`G_x` varies with :math:`x`.
+A session therefore refuses a product with a tangent metric: a step fails with ``Error::ProductTangentMetric``, ``push_pair`` returns ``false`` and ``search_direction`` fails.
+``minimize_rtr``, ``minimize_rtr_gauged`` and ``truncated_cg_riemannian`` run in the metric.
+
+14 Gauge moves
+--------------
+
+A gauge move replaces the coordinates of the iterate by another representation of the same object, and leaves the objective's value unchanged.
+The plane :math:`\{q : n \cdot (q - c) = d\}` is named by its normal and its offset from a pivot :math:`c`, and the pivot can slide: moving it to :math:`c'` and the offset to
+
+
+.. math::
+
+    d' = d - n \cdot (c' - c)
+
+
+names the same plane.
+The pivot is a parameter of the objective, not a coordinate of the manifold, so the move changes both the packed point and the function that reads it.
+
+About a fixed pivot, turning the normal also moves the plane where it crosses the saddle region, so rotation and offset couple.
+The two parametrizations differ by the shear :math:`(n, d) \mapsto (n, d - n \cdot \Delta c)`, :math:`\Delta c = c' - c`: a turn :math:`u` about :math:`c` is, about :math:`c'`, the same turn with the offset changed by :math:`-u \cdot \Delta c`.
+For the harmonic free energy at the optimal plane, the Hessian couples offset and rotation through :math:`\lambda_1 P q_0`, with :math:`q_0` the saddle relative to the pivot and :math:`P` the tangent projector of the normal, and adds :math:`|\lambda_1| P q_0 q_0^\top P` to the rotation block.
+Both vanish when the pivot is the in-plane minimum :math:`q^\ddagger + (r/s) H^+ n` of the harmonic energy, the centre of the harmonic distribution on the plane, which at the optimum is the saddle.
+Re-centring the pivot there after every step makes the Hessian at the optimum block-diagonal, with the harmonic metric as its rotation block.
+
+*In the trust region.*
+``minimize_rtr_gauged`` calls the gauge after every accepted step.
+The step is accepted on the value before the move, since the ratio compares the model at :math:`x` with the objective at the trial point, both in the old parametrization.
+The value is evaluated again only when the gauge changed :math:`x`, because a gauge preserves it; the gradient always is, because a new parametrization changes it even when it leaves :math:`x` as it was.
+The next model, the stopping test and the returned ``RtrMin`` belong to the moved point, and the radius carries over.
+A gauge that changes the value still runs, without the monotone decrease.
+manopt's ``options.hook`` in ``trustregions`` does the same: it runs at the start of every iteration, before the stopping test, and when it moves :math:`x` the solver evaluates the cost and gradient again.
+It also runs after rejected steps, where an idempotent gauge has nothing to do.
+
+*In a session.*
+``Solver::run_gauged`` calls the gauge before every step but the first, so the returned report describes the point left in :math:`x`.
+A session keeps the last point, value and gradient, and its next step builds a secant pair from them, reading any change of :math:`x` between calls as a step.
+Across a move that pair mixes two parametrizations: its change of gradient holds the shear, not curvature.
+A gauge that changes :math:`x` therefore rebases the session, as ``Solver::rebase``.
+The curvature memory (the L-BFGS pairs, the BFGS matrix, the trust radii) stays, the cached point goes, and the next step evaluates the objective afresh at the moved point.
+The retained pairs come from nearby parametrizations, and the shear between them shrinks as the pivot converges.
+On the plane test, re-centring before every step and running to a gradient norm of :math:`10^{-7}`, the three ways to treat a move took these numbers of steps:
+
+.. table::
+
+    +----------------------------------------+--------+-----------+-----------------------+
+    | At a move                              | L-BFGS | Newton-CG |                  BFGS |
+    +========================================+========+===========+=======================+
+    | keep the secant across it              |     50 |        34 |                   111 |
+    +----------------------------------------+--------+-----------+-----------------------+
+    | forget all memory (``Solver::forget``) |     75 |       108 | not converged in 3000 |
+    +----------------------------------------+--------+-----------+-----------------------+
+    | rebase (``Solver::rebase``)            |     33 |        34 |                   111 |
+    +----------------------------------------+--------+-----------+-----------------------+
+
+L-BFGS without the gauge takes 36 steps.
+
+15 Sphere Hessians and the extension of the cost
+------------------------------------------------
+
+The caller's :math:`\bar f` is defined on :math:`\mathbb{R}^n`, and many functions agree with it on the sphere.
+``Sphere::ehess2rhess`` keeps the Weingarten term explicit,
+
+
+.. math::
+
+    \mathrm{Hess} f(x)[u] = (I - x x^\top) \nabla^2 \bar f(x)\, u - (x^\top \nabla \bar f(x))\, u,
+
+
+and every embedded kind that supplies ``ehess2rhess`` keeps its own term the same way.
+The result does not depend on the extension.
+If :math:`\bar f_1` and :math:`\bar f_2` agree on the sphere, then :math:`h = \bar f_1 - \bar f_2` vanishes there, so its gradient is normal: :math:`\nabla h(x) = \mu(x)\, x` with :math:`\mu = x^\top \nabla h`.
+Differentiating along a curve on the sphere with velocity :math:`u` gives :math:`\nabla^2 h(x)\, u = (\mathrm{D} \mu(x)[u])\, x + \mu(x)\, u`, so :math:`(I - x x^\top) \nabla^2 h(x)\, u = \mu(x)\, u`, which the Weingarten term :math:`-(x^\top \nabla h(x))\, u = -\mu(x)\, u` cancels.
+Boumal's Corollary 5.47 states the general fact: the correction depends on the extension only through the normal part of its gradient.
+On ``SubspaceSphere`` the gradient of :math:`h` also has a part in :math:`U^\perp`, whose derivative stays in :math:`U^\perp`, and :math:`P_x` removes both.
+
+The degree-zero extension :math:`\bar f(x) = f(x / \|x\|)` is constant along rays, so :math:`x^\top \nabla \bar f = 0` on the sphere and the term vanishes: the projected Hessian alone is the Riemannian Hessian.
+The session's dogleg step models the Hessian as :math:`Z^\top \nabla^2 \bar f\, Z`, with :math:`Z` an orthonormal basis of the tangent space, and its Newton-CG and Newton-PCG steps as :math:`P \nabla^2 \bar f\, P + (I - P)`.
+Neither has the Weingarten term, so both are exact for the degree-zero extension.
+For another extension the model is off by :math:`x^\top \nabla \bar f` times the identity on the tangent space, which at a minimizer is the Lagrange multiplier and does not vanish, and the steps converge linearly.
+For :math:`\bar f(x) = x^\top A x` the model is :math:`2A` on the tangent space where the Hessian is :math:`2(A - \lambda_1 I)`, so near the lowest eigenvector each step keeps :math:`\lambda_1 / \lambda_j` of the error along eigenvector :math:`j`, and the rate is :math:`\lambda_1 / \lambda_2` when :math:`0 < \lambda_1 < \lambda_2`.
+``tests/subspace_sphere.rs`` measures that rate, :math:`1/2` within 0.02, on a subspace sphere where :math:`\lambda_1 / \lambda_2 = 1/2`, against at most ten steps for the degree-zero extension :math:`x^\top A x / x^\top x`.
+``minimize_rtr`` uses ``ehess2rhess`` and converges quadratically with either.
+
+16 The optimal dividing plane
+-----------------------------
+
+Section 4.6 of the optimal-hyperplane (OH-TST) design in ``rgsaddle`` lists what it needs from rgmin.
+Its plane is a unit normal :math:`n` on the sphere of the subspace the sampler moves in and a signed offset :math:`d` from a pivot :math:`c`, so the manifold is :math:`S(U) \times \mathbb{R}`, and the drivers minimize :math:`f = -A` for the free energy :math:`A` of the plane.
+``tests/plane_free_energy.rs`` solves its harmonic model, :math:`A = r^2 / (2s) + \tfrac{k_B T}{2} \ln(-s)` with :math:`s = n^\top H^+ n` and :math:`r = d - n \cdot (q^\ddagger - c)`, whose optimum is the unstable mode through the saddle :math:`q^\ddagger`, with :math:`f^* = \tfrac{k_B T}{2} \ln |\lambda_1|`.
+The items of section 4.6 map onto the crate as follows.
+
+1. *A Euclidean factor.*
+   ``ProductFactor::new(ManifoldKind::Euclidean, 1)`` carries the offset.
+   SPD(1) is the half-line :math:`d > 0`, and no metric on it lets the offset change sign.
+   From a pivot at the origin the optimal offset of the test plane is :math:`e_1 \cdot q^\ddagger = -0.8`.
+   On SPD(1) the retraction :math:`d + v + v^2 / (2d)` never goes below :math:`d / 2`, and the run ends its 1000 iterations at :math:`d \approx 10^{-13}` with :math:`f` still 0.47 above :math:`f^*`.
+
+2. *Weights and a preconditioner.*
+   ``ProductFactor::with_weight`` sets the block weights of the design's section 4.2, and ``ProductFactor::with_metric`` attaches a tangent metric, here the harmonic rotation block :math:`k_B T (I + |\lambda_1| H_\parallel^{-1})` compressed to the tangent space.
+   Both enter ``egrad2rgrad`` and every inner product of the trust region.
+
+3. *A sphere of a subspace.*
+   ``ManifoldKind::sphere_excluding`` takes the centre-of-mass directions and fixed atoms, and ``ManifoldKind::sphere_within`` takes a rotation subspace.
+
+4. *A gauge hook.*
+   ``minimize_rtr_gauged`` re-centres the pivot after each accepted step, and ``Solver::run_gauged`` does it between the steps of a session.
+
+5. *Stochastic drivers.* Not here; see the limitations.
+
+6. *A Hessian-vector oracle with an error bar and a harmonic preconditioner.* Not here; see the limitations.
+
+7. *A convention for sphere Hessians.*
+   Both options of the design hold: ``ehess2rhess`` keeps the explicit Weingarten term for any extension, and the session steppers are exact for the degree-zero extension.
+
+On the harmonic model with :math:`D = 24` coordinates, :math:`k_B T = 0.3`, :math:`\lambda_1 = -1.5` and in-plane curvatures from 0.05 to 8, ``minimize_rtr`` from a normal a few degrees off the unstable mode reaches the optimal plane in every metric, to :math:`10^{-10}` in the gradient norm, the normal and :math:`f`:
+
+.. table::
+
+    +--------------------------------------------------------------------+------------------+------------------+
+    | Metric on :math:`(n, d)`                                           | Outer iterations | Inner iterations |
+    +====================================================================+==================+==================+
+    | unit weights                                                       |                8 |               40 |
+    +--------------------------------------------------------------------+------------------+------------------+
+    | block weight :math:`\ell^2 = 0.5` on the normal                    |                7 |               35 |
+    +--------------------------------------------------------------------+------------------+------------------+
+    | harmonic tangent metric, offset weight :math:`\vert\lambda_1\vert` |                6 |               14 |
+    +--------------------------------------------------------------------+------------------+------------------+
+    | the same, with the pivot re-centred after each step                |                6 |                8 |
+    +--------------------------------------------------------------------+------------------+------------------+
+
+Exact second derivatives keep the outer counts close; the metric shows in the inner solves.
+At the optimum the harmonic metric makes the Hessian the identity plus the rank-two coupling of rotation and offset, and re-centring removes the coupling.
+A session's L-BFGS in the block-weighted chart takes 36 steps, and 33 with ``Solver::run_gauged`` re-centring the pivot before each step.
+The sampled loop of the design is ``truncated_cg_riemannian`` for the step and ``RtrRadius::update`` for a decrease measured outside the model; the test runs it with exact decreases in place of estimates.
+
+17 Comparison with manopt, Manifolds.jl, pymanopt and geomstats
 ---------------------------------------------------------------
 
 At unit weights the product here is the product of:
@@ -560,7 +831,7 @@ The differences in detail:
   geomstats' ``ProductRiemannianMetric`` also offers a block-diagonal ``metric_matrix`` and the summed signature.
   The trait here has only ``inner`` on tangent vectors.
 
-13 Reconciliation with the unlanded manifold branches
+18 Reconciliation with the unlanded manifold branches
 -----------------------------------------------------
 
 Two earlier branches carried product designs.
@@ -585,7 +856,7 @@ The branch never shipped, so no ABI user sees the change.
 ``minimize_rtr`` is ported and now runs in ``inner`` with ``ehess2rhess`` and the typical distance.
 Oblique stays its own kind, the power of spheres with column loops of its own.
 
-14 How the derivation is checked
+19 How the derivation is checked
 --------------------------------
 
 ``tests/product_manifold.rs`` checks each section numerically on a quartic :math:`\bar f(x) = \tfrac12 x^\top A x + b^\top x + \tfrac14 \sum_i x_i^4` whose dense :math:`A` couples every block:
@@ -606,13 +877,40 @@ Oblique stays its own kind, the power of spheres with column loops of its own.
 
 - the unit test of the chart section, and the rigid factors keep their mass-weighted centres.
 
-15 Limitations
+``tests/subspace_sphere.rs`` checks the sphere of a subspace:
+
+- the ``checkgradient`` and ``checkhessian`` slopes along the retraction and the exponential;
+
+- a kept basis and its excluded complement give the same projector, nearest point, tangent projection and retraction;
+
+- retraction and exponential steps stay on the sphere and in the subspace, the logarithm inverts the exponential at the right distance, and both transports land in the arrival tangent space;
+
+- the Hessian is the same for :math:`\bar f` and for :math:`\bar f + (\|x\|^2 - 1)(c^\top x + 2)`, and equals the projected Hessian of the degree-zero extension by central differences, on ``SubspaceSphere`` and on ``Sphere``;
+
+- L-BFGS and ``minimize_rtr`` find the lowest mode inside the subspace of a Rayleigh quotient whose two lowest modes are excluded, which the whole sphere reaches instead;
+
+- the session Newton-CG rates of the section on sphere Hessians.
+
+``tests/plane_free_energy.rs`` solves the harmonic plane of the section on the optimal dividing plane and asserts the comparisons made there.
+It also checks that the gradient is the Riesz vector of the harmonic metric, runs the sampled trust-region loop, the gauged trust region and the gauged session, and checks that sessions refuse a tangent metric.
+
+20 Limitations
 --------------
 
-- The session's Newton-CG trust region models the Hessian by the projected ambient action, without the Weingarten term.
-  On a curved factor with a nonzero multiplier it converges linearly.
-  On the hyperplane test, on the tangent space of the sphere at the minimum, its model is :math:`2A` where the Hessian is :math:`2(A - \lambda_1 I)`, so each step multiplies the error by at most :math:`\lambda_1 / \lambda_2 = 1/2`, the ratio of the two lowest eigenvalues of :math:`A`, which is the rate it shows.
+- The session's dogleg, Newton-CG and Newton-PCG steps model the Hessian of a curved factor without its Weingarten term, which is exact for the degree-zero extension only (see the section on sphere Hessians).
+  On the hyperplane test, with :math:`n^\top A n` on the normal, the Newton-CG trust region converges at the rate :math:`\lambda_1 / \lambda_2 = 1/2` of the two lowest eigenvalues of :math:`A`.
   ``minimize_rtr`` uses ``ehess2rhess`` and converges quadratically on the same problem: its gradient norm goes from :math:`2 \times 10^{-4}` to :math:`2 \times 10^{-9}` to :math:`10^{-16}` in its last three iterations.
+
+- A tangent metric costs its product the exponential, logarithm, distance, parallel transport and isometric transport, ``typical_dist`` ignores it, and its Hessian is the model :math:`G^{-1} \mathrm{Hess}`, exact at critical points only.
+  Sessions refuse it with ``Error::ProductTangentMetric``.
+
+- The stochastic drivers of the OH-TST design (its item 5) are not here: stochastic gradient ascent with a step schedule and iterate averaging, the norm test on the sample size, a trust region that weighs a measured decrease against its standard error, and ``NoiseFloor`` driven by a caller's covariance.
+  Each needs an interface for noisy values and gradients with their covariance, which the ``Manifold`` trait and the sessions do not have, and convergence tests on sampled objectives; ``NoiseFloor`` belongs to the 0.6.0 line and comes with its port.
+  The deterministic core of such a driver is here: ``egrad2rgrad`` gives the preconditioned direction, ``truncated_cg_riemannian`` the trust-region step in the metric and ``RtrRadius::update`` the radius from a decrease measured outside the model.
+
+- Item 6, a Hessian-vector product with an error bar and a preconditioner built from the harmonic model, is not here either.
+  The truncated CG treats every Hessian-vector product as exact, and its curvature and boundary tests would need a confidence level to take an estimate.
+  A low-rank-plus-scalar model can already be supplied as a ``TangentMetric``, or as an ``hvp::Preconditioner`` for the Euclidean ``hvp::steihaug_pcg``.
 
 - The QR retraction of SO(3) is first order, so the numerical Hessian check on :math:`S^2 \times SO(3)` runs along the exponential.
 
@@ -630,4 +928,6 @@ Oblique stays its own kind, the power of spheres with column loops of its own.
 
 - The C ABI selects powers only, through ``rgmin_solver_set_power``.
   A general weighted product needs a descriptor for parameterized factors (the sizes of Oblique, Stiefel and the complex kinds) and their weights, and that struct is a separate ABI design.
+  A subspace sphere needs its basis passed as an array, which belongs in the same descriptor.
+  Tangent metrics and gauges are Rust callbacks: the C ABI exposes sessions, which refuse tangent metrics, and has no entry for ``minimize_rtr``, so both wait for a callback design.
   The Python extension selects no manifold at all yet; a product waits for that API.
