@@ -1,34 +1,26 @@
 # MIT License
 # Copyright 2026 Rohit Goswami
-"""ASE-shaped optimizers over the rgmin session.
+"""Geometry optimization through rgmin.
 
-``rgmin.optimize`` holds every optimizer class; ``BFGS``, ``LBFGS``,
-``LBFGSLineSearch``, ``FIRE`` and ``FIRE2`` are re-exported here.
-Importing this module does not import ASE. The optimizer classes do,
-on construction, because they are :class:`ase.optimize.optimize.Optimizer`
-subclasses: ``trajectory``, ``logfile``, ``attach`` and ``run(fmax, steps)``
-are ASE's.
+Importing this package does not import ASE. The ASE optimizer classes
+are loaded on first use. The extension module is either the maturin
+session binding or the nanobind solver binding; this module exposes
+whichever symbols that build provides, including ``lowest_eigenpairs``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import numpy as np
 
-from rgmin._core import LbfgsPairs, LineSearch, Session, lowest_eigenpairs as _lowest_eigenpairs, version
+import rgmin._core as _core
 
-__all__ = [
-    "BFGS",
-    "FIRE",
-    "FIRE2",
-    "LBFGS",
-    "LBFGSLineSearch",
-    "LbfgsPairs",
-    "LineSearch",
-    "Session",
-    "__version__",
-    "lowest_eigenpairs",
-]
-__version__ = version
+__version__ = getattr(_core, "__version__", None)
+if __version__ is None:
+    __version__ = getattr(_core, "version", None)
+
 _OPTIMIZERS = frozenset(
     {
         "Adam",
@@ -56,21 +48,53 @@ _OPTIMIZERS = frozenset(
     }
 )
 
+_EXPORTS = [
+    "BFGS",
+    "FIRE",
+    "FIRE2",
+    "LBFGS",
+    "LBFGSLineSearch",
+    "LbfgsPairs",
+    "LineSearch",
+    "Method",
+    "NumericalError",
+    "Product",
+    "Report",
+    "SPD",
+    "Session",
+    "Solver",
+    "SolverConfig",
+    "Stiefel",
+    "Stop",
+    "__version__",
+    "lowest_eigenpairs",
+    "minimize",
+]
 
-def lowest_eigenpairs(hvp, x0_block, *, x=None, tol=1e-8, max_iter=None):
+
+def lowest_eigenpairs(
+    hvp, x0_block, *, x=None, tol=1e-8, max_iter=None, precond=None, strict=True
+):
     """Lowest eigenpairs of a symmetric product.
 
     ``hvp(x, v)`` returns ``H(x) v`` without forming ``H``.
     ``x0_block`` has shape ``(n, k)``, one column per starting vector.
-    Block LOBPCG (Knyazev 2001) returns the values ascending and the
-    vectors as the columns of an ``(n, k)`` array. ``x`` is the point
-    where the product is taken; omitted, it is the origin.
+    Block LOBPCG (Knyazev 2001) returns the values ascending, the
+    vectors as the columns of an ``(n, k)`` array, the residual norms
+    ``||H v - lambda v||``, and a boolean converged flag per pair.
+    ``x`` is the point where the product is taken; omitted, it is the origin.
 
-    The default tolerance is ``1e-8``. ``max_iter`` defaults to
-    ``max(n, 8)`` block expansions. A pair that misses the tolerance
-    raises ``RuntimeError``. ``k = 0``, ``k`` above ``n``, and a
-    non-finite value or product are ``ValueError``.
+    ``precond(block)`` applies ``T`` to an ``(n, m)`` block. Omitted,
+    ``T`` is the identity. The default tolerance is ``1e-8``.
+    ``max_iter`` defaults to ``max(n, 8)`` block expansions.
+    ``strict=True`` raises ``RuntimeError`` when a pair misses the
+    tolerance. ``strict=False`` returns the per-pair flags instead.
+    ``k = 0``, ``k`` above ``n``, and a non-finite value or product
+    are ``ValueError``.
     """
+    native = getattr(_core, "lowest_eigenpairs", None)
+    if native is None:
+        raise AttributeError("this rgmin build has no lowest_eigenpairs")
     block = np.asarray(x0_block, dtype=np.float64)
     if block.ndim != 2:
         raise ValueError("x0_block must have shape (n, k)")
@@ -80,14 +104,71 @@ def lowest_eigenpairs(hvp, x0_block, *, x=None, tol=1e-8, max_iter=None):
         out = hvp(np.asarray(point, dtype=np.float64), np.asarray(vector, dtype=np.float64))
         return np.asarray(out, dtype=np.float64).reshape(-1).tolist()
 
-    values, columns = _lowest_eigenpairs(
+    def apply_t(rows):
+        assert precond is not None
+        incoming = np.asarray(rows, dtype=np.float64)
+        out = np.asarray(precond(incoming), dtype=np.float64)
+        if out.shape != incoming.shape:
+            raise ValueError("preconditioner must return shape (n, m)")
+        return out.reshape(incoming.shape).tolist()
+
+    values, columns, residuals, converged = native(
         product,
         block.tolist(),
         None if point is None else point.tolist(),
         tol=tol,
         max_iter=max_iter,
+        precond=None if precond is None else apply_t,
     )
-    return np.asarray(values, dtype=np.float64), np.asarray(columns, dtype=np.float64).T
+    values = np.asarray(values, dtype=np.float64)
+    vectors = np.asarray(columns, dtype=np.float64).T
+    residuals = np.asarray(residuals, dtype=np.float64)
+    converged = np.asarray(converged, dtype=bool)
+    if strict and not bool(np.all(converged)):
+        raise RuntimeError("lowest eigenpairs did not meet the residual tolerance")
+    return values, vectors, residuals, converged
+
+
+def minimize(
+    f_and_grad: Callable[[np.ndarray], tuple[float, np.ndarray]],
+    x0: np.ndarray,
+    method: str | Any = "lbfgs",
+    **options: Any,
+) -> tuple[Any, np.ndarray]:
+    """Minimize ``f_and_grad`` in place and return ``(report, x)``."""
+    native = getattr(_core, "minimize", None)
+    if native is None:
+        raise AttributeError("this rgmin build has no minimize")
+    report, x = native(f_and_grad, x0, method, **options)
+    return report, x
+
+
+_SolverConfigBase: Any = getattr(_core, "SolverConfig", object)
+
+
+class SolverConfig(_SolverConfigBase):
+    """Validated optimizer options.
+
+    Unknown keywords raise ``ValueError`` and name the valid options.
+    A Cartesian solver installs a per-atom cap of 0.2 unless the method
+    already limits the step. BFGS, dogleg, and FIRE 2.0 start without
+    that cap. ``maxstep`` or ``atom_maxmove`` replaces it on every
+    method. A non-positive value clears it, except on the default
+    L-BFGS step, where it restores 0.2.
+
+    The default ``"lbfgs"`` step is the line-search-free eOn step.
+    ``linesearch="wolfe"`` opts into the strong Wolfe search. Both
+    keep every atom move within ``maxstep``. A ``linesearch`` the chosen
+    step ignores raises ``ValueError``.
+
+    ``Solver`` takes the native configuration type, so this class
+    derives from it rather than wrapping it.
+    """
+
+    def __init__(self, method: str | Any = "lbfgs", **options: Any) -> None:
+        if _SolverConfigBase is object:
+            raise AttributeError("this rgmin build has no SolverConfig")
+        super().__init__(method, **options)
 
 
 def __getattr__(name: str):
@@ -95,4 +176,13 @@ def __getattr__(name: str):
         from rgmin import optimize
 
         return getattr(optimize, name)
+    if name in {"Product", "SPD", "Stiefel"}:
+        from rgmin import manifold
+
+        return getattr(manifold, name)
+    if hasattr(_core, name):
+        return getattr(_core, name)
     raise AttributeError(f"module 'rgmin' has no attribute {name}")
+
+
+__all__ = _EXPORTS

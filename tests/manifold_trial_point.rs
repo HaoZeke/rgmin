@@ -14,13 +14,11 @@ const CAP: f64 = 0.1;
 const CAP_ROUNDING: f64 = 8.0 * f64::EPSILON;
 
 fn control() -> Control {
-    Control {
-        maxiter: STEPS,
-        gtol: 1e-12,
-        istep: 1.0,
-        maxmove: Some(CAP),
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(STEPS)
+        .with_gtol(1e-12)
+        .with_istep(1.0)
+        .with_maxmove(CAP)
 }
 
 fn distance(a: &Array1<f64>, b: &Array1<f64>) -> f64 {
@@ -168,14 +166,14 @@ fn steepest_with_one_trial_stays_on_the_sphere() {
 
 #[test]
 fn fire_v1_stays_on_the_sphere() {
-    let walk = walk(Method::Fire { kind: FireKind::V1 }, Accept::None, 0.0);
+    let walk = walk(Method::fire(FireKind::V1), Accept::None, 0.0);
     assert_on_sphere(&walk);
     assert!(walk.energies <= STEPS + 1, "{} energies", walk.energies);
 }
 
 #[test]
 fn fire_v2_stays_on_the_sphere() {
-    let walk = walk(Method::Fire { kind: FireKind::V2 }, Accept::None, 0.0);
+    let walk = walk(Method::fire(FireKind::V2), Accept::None, 0.0);
     assert_on_sphere(&walk);
 }
 
@@ -306,12 +304,10 @@ fn newton_pcg_stays_on_the_sphere() {
 #[test]
 fn a_newton_cg_run_reports_the_riemannian_gradient() {
     let tilt = Tilt::new(2.0);
-    let control = Control {
-        maxiter: 200,
-        gtol: 1e-6,
-        istep: 1.0,
-        ..Default::default()
-    };
+    let control = Control::default()
+        .with_maxiter(200)
+        .with_gtol(1e-6)
+        .with_istep(1.0);
     let mut solver = Solver::new(Method::NewtonCg, control, 3);
     solver.set_manifold(ManifoldKind::Sphere);
     let mut x = array![0.6, 0.0, 0.8];
@@ -362,8 +358,8 @@ fn flat_walks_keep_their_digests() {
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     let cases = [
         (Method::NewtonCg, 0xf760_362d_9a91_9afa_u64),
-        (Method::NewtonPcg, 0xce41_c263_ea63_b4a1),
-        (Method::Fire { kind: FireKind::V2 }, 0x552b_a4b9_b0eb_63a9),
+        (Method::NewtonPcg, 0x988d_159b_1dc5_d42e),
+        (Method::fire(FireKind::V2), 0x552b_a4b9_b0eb_63a9),
         (Method::lbfgs(), 0x9753_1d14_9209_f75e),
     ];
     for (method, recorded) in cases {

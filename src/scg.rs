@@ -16,8 +16,15 @@ use crate::control::{Control, StopNorm};
 use crate::error::{Error, Result};
 use crate::nlcg::{Conjugacy, ConjugacyContext, Restart};
 use crate::report::Report;
-use crate::step::l2;
+use crate::vecops::dot_ordered;
 use ndarray::ArrayView1;
+
+/// Sequential Euclidean norm. SCG reproduces the reference C++ trajectory
+/// of gpridge to its parity tolerance, so its reductions keep the plain
+/// left-to-right order of that code instead of the fused SIMD kernels.
+fn l2_ordered(g: &Array1<f64>) -> f64 {
+    dot_ordered(g.view(), g.view()).sqrt()
+}
 
 /// Exact directional curvature `d . grad^2 f(x) . d` for SCG's step
 /// pricing. gpr_optim supplies this from its analytic marginal-likelihood
@@ -32,6 +39,7 @@ pub trait DirectionalCurvature: DifferentiableObjective<f64> {
 /// Damping schedule and convergence tolerances for [`minimize_scg`].
 ///
 /// Defaults follow Netlab `scg.m` and the gpr_optim production values.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct ScgParams {
     /// Base finite-difference curvature probe step (Møller `sigma_0`).
@@ -51,6 +59,14 @@ pub struct ScgParams {
     pub tol_func: f64,
 }
 
+with_setters!(ScgParams {
+    with_sigma0 => sigma0: val f64,
+    with_lambda => lambda: val f64,
+    with_lambda_limit => lambda_limit: val f64,
+    with_tol_sol => tol_sol: val f64,
+    with_tol_func => tol_func: val f64,
+});
+
 impl Default for ScgParams {
     fn default() -> Self {
         Self {
@@ -62,6 +78,28 @@ impl Default for ScgParams {
         }
     }
 }
+
+/// Norm and scaling used by the accepted-step convergence test.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScgStepTolerance {
+    /// `||alpha d||_inf < tol_sol`.
+    #[default]
+    AbsoluteInfinity,
+    /// `||alpha d||_2 < tol_sol * (1 + ||accepted x||_2)`.
+    RelativeEuclidean,
+}
+
+/// Optional SCG policies. The default preserves [`minimize_scg`] semantics.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ScgOptions {
+    /// Accepted-step convergence rule, combined with the objective-change test.
+    pub step_tolerance: ScgStepTolerance,
+}
+
+with_setters!(ScgOptions {
+    with_step_tolerance => step_tolerance: val ScgStepTolerance,
+});
 
 const LAMBDA_MIN: f64 = 1.0e-15;
 const LAMBDA_MAX: f64 = 1.0e100;
@@ -95,11 +133,18 @@ const MAX_PROBE_RETRIES: usize = 2000;
 /// retries, both within fixed budgets. An objective wrapped with
 /// interior-point barriers therefore composes with no optimizer hook.
 /// A zero `control.maxiter` leaves termination to convergence and the
-/// numerical failure checks.
+/// numerical failure checks. Such a fit also stops, with
+/// [`crate::Status::StepTolerance`] while `||g||` is at or above `gtol`,
+/// after `max(n, 2)` consecutive accepted steps whose objective change
+/// passes `tol_func` and whose gradient norm never falls below its value at
+/// the first of them. Each flat step quadruples the damping, so for large
+/// `n` the default `lambda_limit` can end the run first. A positive
+/// `maxiter` leaves the trajectory unchanged.
 ///
 /// A positive finite `control.maxmove` bounds the Euclidean length of
 /// every trial step, retries included, as [`Control::maxmove`] states.
-/// Zero, negative, infinite and NaN values leave the step unbounded.
+/// Zero, negative, infinite and NaN values leave the step unbounded
+/// and leave Møller's 1993 comparison ratio unchanged.
 pub fn minimize_scg<O>(
     obj: &O,
     init: impl Into<Array1<f64>>,
@@ -111,6 +156,30 @@ pub fn minimize_scg<O>(
 where
     O: DifferentiableObjective<f64> + ?Sized,
 {
+    minimize_scg_with_options(
+        obj,
+        init,
+        control,
+        params,
+        conjugacy,
+        restart,
+        &ScgOptions::default(),
+    )
+}
+
+/// [`minimize_scg`] with an explicit accepted-step convergence rule.
+pub fn minimize_scg_with_options<O>(
+    obj: &O,
+    init: impl Into<Array1<f64>>,
+    control: &Control,
+    params: &ScgParams,
+    conjugacy: Conjugacy,
+    restart: Restart,
+    options: &ScgOptions,
+) -> Result<Report>
+where
+    O: DifferentiableObjective<f64> + ?Sized,
+{
     run_scg(
         obj,
         init.into(),
@@ -118,6 +187,7 @@ where
         params,
         conjugacy,
         restart,
+        options,
         |_, _| None,
     )
 }
@@ -138,6 +208,30 @@ pub fn minimize_scg_exact<O>(
 where
     O: DirectionalCurvature + ?Sized,
 {
+    minimize_scg_exact_with_options(
+        obj,
+        init,
+        control,
+        params,
+        conjugacy,
+        restart,
+        &ScgOptions::default(),
+    )
+}
+
+/// [`minimize_scg_exact`] with an explicit accepted-step convergence rule.
+pub fn minimize_scg_exact_with_options<O>(
+    obj: &O,
+    init: impl Into<Array1<f64>>,
+    control: &Control,
+    params: &ScgParams,
+    conjugacy: Conjugacy,
+    restart: Restart,
+    options: &ScgOptions,
+) -> Result<Report>
+where
+    O: DirectionalCurvature + ?Sized,
+{
     run_scg(
         obj,
         init.into(),
@@ -145,6 +239,7 @@ where
         params,
         conjugacy,
         restart,
+        options,
         |x, d| obj.directional_curvature(x, d),
     )
 }
@@ -152,7 +247,7 @@ where
 /// `alpha` shortened so that `||alpha d||_2` is at most a positive finite
 /// `control.maxmove`, with `kappa = d . d`, and whether it was shortened.
 fn bound_step(alpha: f64, kappa: f64, control: &Control) -> (f64, bool) {
-    let Some(cap) = control.maxmove.filter(|c| c.is_finite() && *c > 0.0) else {
+    let Some(cap) = control.maxmove_cap() else {
         return (alpha, false);
     };
     let length = alpha.abs() * kappa.sqrt();
@@ -187,6 +282,7 @@ fn run_scg<O>(
     params: &ScgParams,
     conjugacy: Conjugacy,
     restart: Restart,
+    options: &ScgOptions,
     curvature: impl Fn(ArrayView1<f64>, ArrayView1<f64>) -> Option<f64>,
 ) -> Result<Report>
 where
@@ -221,9 +317,11 @@ where
     let mut gamma = 0.0;
 
     let mut step = 0;
+    let mut flat_steps: usize = 0;
+    let mut flat_grad = 0.0;
     while control.maxiter == 0 || step < control.maxiter {
-        let gnorm = l2(&grad);
-        if gnorm < control.gtol {
+        let gnorm = l2_ordered(&grad);
+        if let Some(status) = control.halt(gnorm, grad.len()) {
             return Ok(Report {
                 value: f_old,
                 coords: w,
@@ -231,27 +329,37 @@ where
                 grad_norm: gnorm,
                 stop_norm: StopNorm::Two,
                 grad: None,
+                status,
             });
         }
 
         if success {
-            mu = crate::vecops::dot(dir.view(), grad.view());
+            mu = crate::vecops::dot_ordered(dir.view(), grad.view());
             if mu >= 0.0 {
                 // Descent safeguard (Møller step 2): a non-descent
                 // direction resets to steepest descent.
                 dir = -grad.clone();
-                mu = crate::vecops::dot(dir.view(), grad.view());
+                mu = crate::vecops::dot_ordered(dir.view(), grad.view());
             }
-            kappa = crate::vecops::dot(dir.view(), dir.view());
+            kappa = crate::vecops::dot_ordered(dir.view(), dir.view());
             if kappa < f64::EPSILON {
-                return Ok(Report {
-                    value: f_old,
-                    coords: w,
-                    steps: step,
-                    grad_norm: gnorm,
-                    stop_norm: StopNorm::Two,
-                    grad: None,
-                });
+                if crate::vecops::dot_ordered(grad.view(), grad.view()) < f64::EPSILON {
+                    return Ok(Report {
+                        value: f_old,
+                        coords: w,
+                        steps: step,
+                        grad_norm: gnorm,
+                        stop_norm: StopNorm::Two,
+                        grad: None,
+                        status: scg_stop(control, gnorm, grad.len()),
+                    });
+                }
+                // Conjugacy can cancel the direction while the gradient
+                // remains nonstationary. Price a steepest-descent step.
+                dir = -grad.clone();
+                mu = crate::vecops::dot_ordered(dir.view(), grad.view());
+                kappa = crate::vecops::dot_ordered(dir.view(), dir.view());
+                nsuccess = 0;
             }
 
             // Exact Hessian-vector curvature when the objective
@@ -276,7 +384,7 @@ where
                     });
                 }
                 let dg = &probed.1 - &grad;
-                gamma = crate::vecops::dot(dg.view(), dir.view()) / sigma;
+                gamma = crate::vecops::dot_ordered(dg.view(), dir.view()) / sigma;
             }
         }
 
@@ -319,31 +427,74 @@ where
             nsuccess += 1;
             objective_min = objective_min.min(f_new);
             objective_max = objective_max.max(f_new);
-            let step_inf = alpha.abs() * crate::vecops::nrminf(dir.view());
-            let solution_converged = step_inf < params.tol_sol;
+            let solution_converged = match options.step_tolerance {
+                ScgStepTolerance::AbsoluteInfinity => {
+                    alpha.abs() * crate::vecops::nrminf(dir.view()) < params.tol_sol
+                }
+                ScgStepTolerance::RelativeEuclidean => {
+                    alpha.abs() * l2_ordered(&dir) < params.tol_sol * (1.0 + l2_ordered(&trial))
+                }
+            };
             let objective_converged =
                 (f_new - f_old).abs() < params.tol_func * (1.0 + (objective_max - objective_min));
             w = trial;
             if solution_converged && objective_converged {
+                let grad_norm = l2_ordered(&grad_new);
                 return Ok(Report {
                     value: f_new,
                     coords: w,
                     steps: step + 1,
-                    grad_norm: l2(&grad_new),
+                    grad_norm,
                     stop_norm: StopNorm::Two,
                     grad: None,
+                    status: scg_stop(control, grad_norm, grad.len()),
                 });
+            }
+            // With no iteration budget a plateau otherwise ends only on the
+            // damping limit, as a gradient error, and never when
+            // `lambda_limit` is at or above `LAMBDA_MAX`, where the damping
+            // saturates. One flat step whose gradient does not fall can be an
+            // overshoot that the next step corrects, so the plateau is a run
+            // of one Møller period (at least two accepted steps) inside the
+            // objective tolerance whose gradient never drops below its norm
+            // at the start of the run. The `sqrt(eps)` band absorbs probe
+            // rounding.
+            if control.maxiter == 0 && objective_converged {
+                if flat_steps == 0 {
+                    flat_grad = l2_ordered(&grad);
+                }
+                let grad_norm = l2_ordered(&grad_new);
+                if grad_norm + flat_grad * f64::EPSILON.sqrt() >= flat_grad {
+                    flat_steps += 1;
+                    if flat_steps >= nparams.max(2) {
+                        return Ok(Report {
+                            value: f_new,
+                            coords: w,
+                            steps: step + 1,
+                            grad_norm,
+                            stop_norm: StopNorm::Two,
+                            grad: None,
+                            status: scg_stop(control, grad_norm, grad_new.len()),
+                        });
+                    }
+                } else {
+                    flat_steps = 0;
+                }
+            } else {
+                flat_steps = 0;
             }
             f_old = f_new;
             grad_old = std::mem::replace(&mut grad, grad_new);
-            if crate::vecops::dot(grad.view(), grad.view()) < f64::EPSILON {
+            if crate::vecops::dot_ordered(grad.view(), grad.view()) < f64::EPSILON {
+                let grad_norm = l2_ordered(&grad);
                 return Ok(Report {
                     value: f_old,
                     coords: w,
                     steps: step + 1,
-                    grad_norm: l2(&grad),
+                    grad_norm,
                     stop_norm: StopNorm::Two,
                     grad: None,
+                    status: scg_stop(control, grad_norm, grad.len()),
                 });
             }
         }
@@ -379,14 +530,28 @@ where
         step += 1;
     }
 
+    let grad_norm = l2_ordered(&grad);
     Ok(Report {
         value: f_old,
-        grad_norm: l2(&grad),
+        grad_norm,
         stop_norm: StopNorm::Two,
         coords: w,
         steps: control.maxiter,
         grad: None,
+        status: control.finish_status(grad_norm, grad.len(), true),
     })
+}
+
+/// SCG's step and objective tests are [`crate::Status::StepTolerance`]
+/// when `||g||` is still at or above `gtol`. A gradient below `gtol` stays
+/// [`crate::Status::Tolerance`]. The noise floor still wins when the
+/// measure is above `gtol` and below `c * sqrt(n_free) * eps_g`.
+fn scg_stop(control: &Control, grad: f64, n_free: usize) -> crate::report::Status {
+    match control.classify(grad, n_free) {
+        crate::report::Status::NoiseFloor => crate::report::Status::NoiseFloor,
+        crate::report::Status::Tolerance => crate::report::Status::Tolerance,
+        _ => crate::report::Status::StepTolerance,
+    }
 }
 
 #[cfg(test)]
@@ -416,7 +581,14 @@ mod tests {
     #[test]
     fn unbounded_step_keeps_the_1993_ratio() {
         let (mu, delta) = (-4.0, 2.0);
-        for maxmove in [None, Some(5.0), Some(0.0), Some(f64::NAN)] {
+        for maxmove in [
+            None,
+            Some(5.0),
+            Some(0.0),
+            Some(-1.0),
+            Some(f64::INFINITY),
+            Some(f64::NAN),
+        ] {
             let (alpha, bounded) = bound_step(-mu / delta, 1.0, &capped(maxmove));
             assert_eq!((alpha, bounded), (2.0, false), "maxmove {maxmove:?}");
         }

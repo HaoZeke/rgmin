@@ -26,21 +26,19 @@ fn well_h(x: ArrayView1<f64>) -> Array2<f64> {
 }
 
 fn control(gtol: f64) -> Control {
-    Control {
-        maxiter: 80,
-        gtol,
-        istep: 0.2,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(80)
+        .with_gtol(gtol)
+        .with_istep(0.2)
+        .with_maxmove(None)
 }
 
 #[test]
 fn geometry_lbfgs_reaches_the_bowl_with_a_per_atom_cap() {
     let obj = rgmin::Oracle::unbounded(3, bowl);
     let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 3);
-    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     solver.set_atom_maxmove(0.2);
+    solver.set_geometry_step(true);
     let mut x = array![1.2, -0.4, 0.7];
     let mut last = f64::MAX;
     for _ in 0..80 {
@@ -64,8 +62,8 @@ fn geometry_lbfgs_probes_only_severely_clipped_starts() {
             bowl(x)
         });
         let mut solver = Solver::new(Method::lbfgs(), control(1e-12), 3);
-        solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
         solver.set_atom_maxmove(0.2);
+        solver.set_geometry_step(true);
         let mut x = array![start, 0.0, 0.0];
         solver.step(&obj, &mut x).expect("step");
         assert_eq!(calls.load(Ordering::Relaxed), expected_calls);
@@ -78,16 +76,12 @@ fn dogleg_and_newton_leave_a_saddle() {
     let gtol = 1e-8;
     let methods = [
         ("dogleg", Method::Dogleg),
-        (
-            "newton",
-            Method::Newton {
-                kind: NewtonKind::Shifted,
-            },
-        ),
+        ("newton", Method::newton(NewtonKind::Shifted)),
     ];
     for (name, method) in methods {
         let mut solver = Solver::new(method, control(gtol), 2);
         solver.set_atom_maxmove(0.25);
+        solver.set_geometry_step(true);
         let mut x = array![0.0, 0.0];
         let first = solver.step_hess(&obj, &mut x).expect("kick");
         assert!(
@@ -157,8 +151,8 @@ fn geometry_lbfgs_clips_the_finite_difference_probe() {
         seen: Mutex::new(Vec::new()),
     };
     let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 1);
-    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     solver.set_atom_maxmove(0.2);
+    solver.set_geometry_step(true);
     let mut x = array![0.0];
     solver.step(&obj, &mut x).expect("step");
     let seen = obj.seen.lock().expect("seen").clone();
@@ -179,10 +173,10 @@ fn geometry_lbfgs_resets_on_negative_curvature() {
         (-0.5 * y * y, array![-y])
     });
     let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 1);
-    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     assert!(solver.push_pair(array![0.1].view(), array![0.1].view()));
     assert_eq!(solver.pair_count(), 1);
     solver.set_atom_maxmove(0.2);
+    solver.set_geometry_step(true);
     let mut x = array![1.0];
     solver.step(&obj, &mut x).expect("step");
     assert_eq!(
@@ -208,8 +202,8 @@ fn geometry_lbfgs_falls_back_after_ten_halvings() {
         (value, array![y])
     });
     let mut solver = Solver::new(Method::lbfgs(), control(1e-8), 1);
-    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
     solver.set_atom_maxmove(0.5);
+    solver.set_geometry_step(true);
     let mut x = array![1.0];
     solver.step(&obj, &mut x).expect("step");
     assert!(
@@ -226,8 +220,15 @@ fn geometry_lbfgs_falls_back_after_ten_halvings() {
 #[test]
 fn uncapped_lbfgs_still_takes_the_unit_newton_step() {
     let obj = rgmin::Oracle::unbounded(2, bowl);
-    let mut solver = Solver::new(Method::lbfgs(), control(1e-12), 2);
+    let mut ctrl = control(1e-12);
+    // Empty memory opens at `istep`. The unit Newton step of H0 = I is
+    // alpha = 1; the geometry file's 0.2 opening already satisfies Wolfe.
+    ctrl.istep = 1.0;
+    let mut solver = Solver::new(Method::lbfgs(), ctrl, 2);
+    // The strong Wolfe search is opt-in. The per-atom default would clip
+    // this step, so the test turns that cap off and checks the unit Newton step.
     solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
+    solver.set_atom_maxmove(0.0);
     let mut x = array![0.4, -0.2];
     let rep = solver.step(&obj, &mut x).expect("step");
     assert!(
@@ -235,4 +236,72 @@ fn uncapped_lbfgs_still_takes_the_unit_newton_step() {
         "uncapped L-BFGS |g|={} x={x:?}",
         rep.grad_norm
     );
+}
+
+const SCALES: [f64; 6] = [1.0, 4.0, 9.0, 16.0, 2.0, 3.0];
+
+fn stiff(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+    let g = Array1::from_iter(x.iter().zip(SCALES).map(|(xi, s)| s * xi));
+    (0.5 * x.dot(&g), g)
+}
+
+fn max_atom_move(a: &Array1<f64>, b: &Array1<f64>) -> f64 {
+    let d = b - a;
+    d.as_slice()
+        .unwrap()
+        .chunks(3)
+        .map(|c| c.iter().map(|v| v * v).sum::<f64>().sqrt())
+        .fold(0.0, f64::max)
+}
+
+/// Runs a Wolfe session with the geometry step explicitly off. Returns
+/// the steps on the cap and the strong Wolfe steps checked.
+fn wolfe_with_explicit_cap(cap: f64) -> (usize, usize) {
+    let obj = rgmin::Oracle::unbounded(6, stiff);
+    let mut solver = Solver::new(Method::lbfgs(), control(1e-10), 6);
+    solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
+    solver.set_atom_maxmove(cap);
+    solver.set_geometry_step(false);
+    let mut x = array![0.4, -0.2, 0.7, 0.1, -0.3, 0.5];
+    let (mut on_cap, mut checked) = (0, 0);
+    for _ in 0..60 {
+        let (f0, g0) = stiff(x.view());
+        if f0 <= 1e-12 {
+            break;
+        }
+        let before = x.clone();
+        solver.step(&obj, &mut x).expect("step");
+        let (f1, g1) = stiff(x.view());
+        let s = &x - &before;
+        let slope = g0.dot(&s);
+        let moved = max_atom_move(&before, &x);
+        assert!(moved <= cap * (1.0 + 1e-12), "moved {moved} past {cap}");
+        assert!(slope < 0.0, "not a descent step: {slope}");
+        assert!(
+            f1 <= f0 + 1e-4 * slope,
+            "no sufficient decrease: {f0} -> {f1}"
+        );
+        if moved >= 0.999 * cap {
+            on_cap += 1;
+        } else {
+            assert!(
+                g1.dot(&s).abs() <= 0.9 * slope.abs(),
+                "curvature condition fails: {} vs {}",
+                g1.dot(&s),
+                slope
+            );
+            checked += 1;
+        }
+    }
+    (on_cap, checked)
+}
+
+#[test]
+fn wolfe_with_the_geometry_step_off_keeps_strong_wolfe_under_a_cap() {
+    let (on_cap, checked) = wolfe_with_explicit_cap(1.0e3);
+    assert_eq!(on_cap, 0);
+    assert!(checked >= 5, "only {checked} strong Wolfe steps");
+    let (on_cap, checked) = wolfe_with_explicit_cap(0.05);
+    assert!(on_cap >= 3, "the cap never bound: {on_cap}");
+    assert!(checked >= 1, "no interior step: {checked}");
 }

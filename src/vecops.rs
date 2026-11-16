@@ -1,6 +1,6 @@
-// Copyright (c) rgmin developers
 //! The vector seam: every O(n) operation a solver performs, in one
 //! place.
+#![allow(clippy::assign_op_pattern)]
 //!
 //! TAO writes each algorithm against PETSc `Vec` -- `VecDot`,
 //! `VecAXPY`, `VecNorm` -- and that seam is its entire scaling story:
@@ -10,289 +10,759 @@
 //! matching one for the solver's own algebra. Algorithms call these
 //! functions; storage-specific execution lives behind them.
 //!
-//! The default implementation is the serial one the whole test suite
-//! pins bit-identically. Above [`REDUCTION_MIN`] every build sums fixed
-//! chunks and then a balanced pairwise tree of those chunks. The `par`
-//! feature only decides which thread fills which chunk.
+//! Contiguous `dot` keeps eight partials `p0`..`p7`. Each product is
+//! one `mul_add` into its partial. The partials then combine as
+//! `(p0+p4)`, `(p1+p5)`, `(p2+p6)`, `(p3+p7)`, and the tail is one
+//! `mul_add` per element. `sum` uses the same tree of plain adds.
+//! The `simd` feature compiles that loop with `multiversion` 0.9 for
+//! `x86_64+avx512f+fma` (rustc >= 1.89), `x86_64+avx2+fma`,
+//! `aarch64+sve`, and `aarch64+neon`, plus the default clone.
+//! `RGMIN_SIMD` is `scalar`, `avx2`, `avx512`, `neon`, or `sve`.
+//! An unknown name is ignored. A name this CPU cannot run selects
+//! the portable `mul_add` path. That path is the bit reference: a
+//! hardware FMA and `f64::mul_add` round once, so every clone matches
+//! it. The `par` feature folds each contiguous chunk of 4096 with
+//! that same tree, then adds the chunk totals from the first index
+//! upward. Element updates use the same chunk size. Thread count
+//! does not change a bit.
+
+use std::cell::Cell;
+use std::sync::OnceLock;
 
 use ndarray::{Array1, ArrayView1};
 
-/// Chunk width of the deterministic reduction.
-pub(crate) const REDUCTION_CHUNK: usize = 4096;
-
-/// Length at which reductions switch to the fixed-chunk pairwise tree.
-pub(crate) const REDUCTION_MIN: usize = 65_536;
-
-/// Below this length the par feature stays on the serial element loops.
+/// Eight partials, the ndarray 0.17 fold width.
+const W: usize = 8;
+/// Fixed `par` chunk length. A multiple of [`W`], independent of the pool size.
 #[cfg(feature = "par")]
-const PAR_MIN_LEN: usize = REDUCTION_MIN;
+const PAR_CHUNK: usize = 4096;
 
-fn pairwise_sum(v: &[f64]) -> f64 {
-    fn rec(v: &[f64]) -> f64 {
-        match v.len() {
-            0 => 0.0,
-            1 => v[0],
-            n => {
-                let mid = n / 2;
-                rec(&v[..mid]) + rec(&v[mid..])
-            }
+/// Below this length the par feature stays on the serial path: on the
+/// reference host the rayon reductions measured 2.6x slower than
+/// serial at n = 20000 (thread coordination outweighs O(n) arithmetic),
+/// so parallel length-n algebra engages only where it has a chance.
+#[cfg(feature = "par")]
+pub(crate) const PAR_MIN_LEN: usize = 65_536;
+
+/// Kernel clone selected for this thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Path {
+    Scalar,
+    Avx2,
+    Avx512,
+    Neon,
+    Sve,
+}
+
+impl Path {
+    fn name(self) -> &'static str {
+        match self {
+            Path::Scalar => "scalar",
+            Path::Avx2 => "avx2",
+            Path::Avx512 => "avx512",
+            Path::Neon => "neon",
+            Path::Sve => "sve",
         }
     }
-    rec(v)
-}
 
-fn chunk_dot(a: &[f64], b: &[f64]) -> f64 {
-    let mut acc = 0.0;
-    for (x, y) in a.iter().zip(b) {
-        acc += x * y;
-    }
-    acc
-}
-
-fn chunk_sum(a: &[f64]) -> f64 {
-    let mut acc = 0.0;
-    for x in a {
-        acc += *x;
-    }
-    acc
-}
-
-fn fill_dot_parts(a: &[f64], b: &[f64], parts: &mut [f64]) {
-    #[cfg(feature = "par")]
-    if rayon::current_num_threads() > 1 {
-        use rayon::prelude::*;
-        let _join = crate::phase::Guard::rayon();
-        parts.par_iter_mut().enumerate().for_each(|(c, slot)| {
-            let start = c * REDUCTION_CHUNK;
-            let end = (start + REDUCTION_CHUNK).min(a.len());
-            *slot = chunk_dot(&a[start..end], &b[start..end]);
-        });
-        return;
-    }
-    for (c, slot) in parts.iter_mut().enumerate() {
-        let start = c * REDUCTION_CHUNK;
-        let end = (start + REDUCTION_CHUNK).min(a.len());
-        *slot = chunk_dot(&a[start..end], &b[start..end]);
+    fn usable(self) -> bool {
+        match self {
+            Path::Scalar => true,
+            Path::Avx2 => avx2_ready(),
+            Path::Avx512 => avx512_ready(),
+            Path::Neon => neon_ready(),
+            Path::Sve => sve_ready(),
+        }
     }
 }
 
-fn fill_sum_parts(a: &[f64], parts: &mut [f64]) {
-    #[cfg(feature = "par")]
-    if rayon::current_num_threads() > 1 {
-        use rayon::prelude::*;
-        let _join = crate::phase::Guard::rayon();
-        parts.par_iter_mut().enumerate().for_each(|(c, slot)| {
-            let start = c * REDUCTION_CHUNK;
-            let end = (start + REDUCTION_CHUNK).min(a.len());
-            *slot = chunk_sum(&a[start..end]);
-        });
-        return;
-    }
-    for (c, slot) in parts.iter_mut().enumerate() {
-        let start = c * REDUCTION_CHUNK;
-        let end = (start + REDUCTION_CHUNK).min(a.len());
-        *slot = chunk_sum(&a[start..end]);
-    }
+#[derive(Clone, Copy)]
+enum Choice {
+    Auto,
+    Forced(Path),
 }
 
 thread_local! {
-    static PARTS: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
+    static FORCE: Cell<Option<Path>> = const { Cell::new(None) };
 }
 
-fn with_parts<R>(n: usize, f: impl FnOnce(&mut [f64]) -> R) -> R {
-    let nchunks = n.div_ceil(REDUCTION_CHUNK).max(1);
-    PARTS.with(|parts| {
-        let mut parts = parts.borrow_mut();
-        if parts.len() < nchunks {
-            parts.resize(nchunks, 0.0);
-        }
-        f(&mut parts[..nchunks])
+fn parse(name: &str) -> Option<Path> {
+    match name {
+        "scalar" | "0" => Some(Path::Scalar),
+        "avx2" | "avx2fma" => Some(Path::Avx2),
+        "avx512" | "avx512f" => Some(Path::Avx512),
+        "neon" => Some(Path::Neon),
+        "sve" => Some(Path::Sve),
+        _ => None,
+    }
+}
+
+/// `RGMIN_SIMD`, read once. `None` means no override.
+fn env_path() -> Option<Path> {
+    static CACHED: OnceLock<Option<Path>> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        let raw = std::env::var("RGMIN_SIMD").ok()?;
+        let path = parse(raw.trim())?;
+        Some(if path.usable() { path } else { Path::Scalar })
     })
 }
 
-/// `x . y`. At or above [`REDUCTION_MIN`] this is the fixed-chunk
-/// pairwise sum, identical for every thread count.
-pub fn dot(x: ArrayView1<f64>, y: ArrayView1<f64>) -> f64 {
-    let _phase = crate::phase::Guard::dot();
-    if x.len() < REDUCTION_MIN {
-        return x.dot(&y);
+/// Override on this thread, else the cached environment, else multiversion.
+fn choice() -> Choice {
+    if let Some(path) = FORCE.with(|slot| slot.get()) {
+        return Choice::Forced(if path.usable() { path } else { Path::Scalar });
     }
+    if let Some(path) = env_path() {
+        return Choice::Forced(path);
+    }
+    Choice::Auto
+}
+
+fn avx2_ready() -> bool {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma")
+    }
+    #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+    {
+        false
+    }
+}
+
+fn avx512_ready() -> bool {
+    #[cfg(all(feature = "simd", target_arch = "x86_64", rgmin_avx512))]
+    {
+        std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("fma")
+    }
+    #[cfg(not(all(feature = "simd", target_arch = "x86_64", rgmin_avx512)))]
+    {
+        false
+    }
+}
+
+fn neon_ready() -> bool {
+    cfg!(all(feature = "simd", target_feature = "neon"))
+}
+
+fn sve_ready() -> bool {
+    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+    {
+        std::arch::is_aarch64_feature_detected!("sve")
+    }
+    #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+    {
+        false
+    }
+}
+
+/// The AVX2 clone enables FMA. A CPU with AVX2 and no FMA stays on
+/// the portable `mul_add` path, which has the same bits.
+#[cfg(feature = "simd")]
+fn scalar_gate() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if avx512_ready() {
+            return false;
+        }
+        let avx2 = std::is_x86_feature_detected!("avx2");
+        let fma = std::is_x86_feature_detected!("fma");
+        avx2 && !fma
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
+    }
+}
+
+/// Force one clone on this thread. Unknown names do nothing.
+///
+/// Returns whether that clone can run here. A known name this CPU
+/// cannot run forces scalar and returns false: the path was not exercised.
+#[doc(hidden)]
+pub fn force_simd_path(name: &str) -> bool {
+    let Some(path) = parse(name) else {
+        return false;
+    };
+    let ok = path.usable();
+    FORCE.with(|slot| slot.set(Some(if ok { path } else { Path::Scalar })));
+    ok
+}
+
+/// Drop the per-thread override. The cached `RGMIN_SIMD` value stays.
+#[doc(hidden)]
+pub fn clear_simd_path() {
+    FORCE.with(|slot| slot.set(None));
+}
+
+/// Whether this build and this CPU can execute `name`.
+#[doc(hidden)]
+pub fn simd_clone_usable(name: &str) -> bool {
+    parse(name).is_some_and(|path| path.usable())
+}
+
+/// `auto` or the override currently in force on this thread.
+#[doc(hidden)]
+pub fn active_simd_path() -> &'static str {
+    match choice() {
+        Choice::Auto => "auto",
+        Choice::Forced(path) => path.name(),
+    }
+}
+
+macro_rules! dot_w8 {
+    ($xs:expr, $ys:expr) => {{
+        let xs: &[f64] = $xs;
+        let ys: &[f64] = $ys;
+        let n = xs.len();
+        let mut i = 0;
+        let mut sum = 0.0f64;
+        let (mut p0, mut p1, mut p2, mut p3, mut p4, mut p5, mut p6, mut p7) =
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        while i + W <= n {
+            // SAFETY: `i + 7 < n` because `i + W <= n`.
+            unsafe {
+                p0 = (*xs.get_unchecked(i)).mul_add(*ys.get_unchecked(i), p0);
+                p1 = (*xs.get_unchecked(i + 1)).mul_add(*ys.get_unchecked(i + 1), p1);
+                p2 = (*xs.get_unchecked(i + 2)).mul_add(*ys.get_unchecked(i + 2), p2);
+                p3 = (*xs.get_unchecked(i + 3)).mul_add(*ys.get_unchecked(i + 3), p3);
+                p4 = (*xs.get_unchecked(i + 4)).mul_add(*ys.get_unchecked(i + 4), p4);
+                p5 = (*xs.get_unchecked(i + 5)).mul_add(*ys.get_unchecked(i + 5), p5);
+                p6 = (*xs.get_unchecked(i + 6)).mul_add(*ys.get_unchecked(i + 6), p6);
+                p7 = (*xs.get_unchecked(i + 7)).mul_add(*ys.get_unchecked(i + 7), p7);
+            }
+            i += W;
+        }
+        sum = sum + (p0 + p4);
+        sum = sum + (p1 + p5);
+        sum = sum + (p2 + p6);
+        sum = sum + (p3 + p7);
+        while i < n {
+            // SAFETY: `i < n`.
+            unsafe {
+                sum = (*xs.get_unchecked(i)).mul_add(*ys.get_unchecked(i), sum);
+            }
+            i += 1;
+        }
+        sum
+    }};
+}
+
+macro_rules! sum_w8 {
+    ($xs:expr) => {{
+        let xs: &[f64] = $xs;
+        let n = xs.len();
+        let mut i = 0;
+        let mut acc = 0.0f64;
+        let (mut p0, mut p1, mut p2, mut p3, mut p4, mut p5, mut p6, mut p7) =
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        while i + W <= n {
+            // SAFETY: `i + 7 < n` because `i + W <= n`.
+            unsafe {
+                p0 = p0 + *xs.get_unchecked(i);
+                p1 = p1 + *xs.get_unchecked(i + 1);
+                p2 = p2 + *xs.get_unchecked(i + 2);
+                p3 = p3 + *xs.get_unchecked(i + 3);
+                p4 = p4 + *xs.get_unchecked(i + 4);
+                p5 = p5 + *xs.get_unchecked(i + 5);
+                p6 = p6 + *xs.get_unchecked(i + 6);
+                p7 = p7 + *xs.get_unchecked(i + 7);
+            }
+            i += W;
+        }
+        acc = acc + (p0 + p4);
+        acc = acc + (p1 + p5);
+        acc = acc + (p2 + p6);
+        acc = acc + (p3 + p7);
+        while i < n {
+            // SAFETY: `i < n`.
+            unsafe {
+                acc = acc + *xs.get_unchecked(i);
+            }
+            i += 1;
+        }
+        acc
+    }};
+}
+
+macro_rules! axpy_body {
+    ($a:expr, $xs:expr, $ys:expr) => {{
+        let a: f64 = $a;
+        let xs: &[f64] = $xs;
+        let ys: &mut [f64] = $ys;
+        for i in 0..xs.len() {
+            ys[i] = a.mul_add(xs[i], ys[i]);
+        }
+    }};
+}
+
+macro_rules! scale_body {
+    ($a:expr, $ys:expr) => {{
+        let a: f64 = $a;
+        let ys: &mut [f64] = $ys;
+        for p in ys.iter_mut() {
+            *p = *p * a;
+        }
+    }};
+}
+
+macro_rules! mul_body {
+    ($xs:expr, $ys:expr) => {{
+        let xs: &[f64] = $xs;
+        let ys: &mut [f64] = $ys;
+        let n = xs.len().min(ys.len());
+        for i in 0..n {
+            ys[i] = ys[i] * xs[i];
+        }
+    }};
+}
+
+macro_rules! div_body {
+    ($xs:expr, $ys:expr, $floor:expr) => {{
+        let floor: f64 = $floor;
+        let xs: &[f64] = $xs;
+        let ys: &mut [f64] = $ys;
+        let n = xs.len().min(ys.len());
+        for i in 0..n {
+            ys[i] = ys[i] / xs[i].max(floor);
+        }
+    }};
+}
+
+macro_rules! define_kernels {
+    (
+        fn $mv:ident($($arg:ident: $ty:ty),*) -> $ret:ty,
+        avx2 $avx2:ident,
+        avx512 $avx512:ident,
+        neon $neon:ident,
+        sve $sve:ident,
+        $body:ident
+    ) => {
+        #[cfg(all(feature = "simd", rgmin_avx512))]
+        #[inline(never)]
+        #[multiversion::multiversion(targets(
+            "x86_64+avx512f+fma",
+            "x86_64+avx2+fma",
+            "aarch64+sve",
+            "aarch64+neon"
+        ))]
+        fn $mv($($arg: $ty),*) -> $ret {
+            $body!($($arg),*)
+        }
+
+        #[cfg(all(feature = "simd", not(rgmin_avx512)))]
+        #[inline(never)]
+        #[multiversion::multiversion(targets(
+            "x86_64+avx2+fma",
+            "aarch64+sve",
+            "aarch64+neon"
+        ))]
+        fn $mv($($arg: $ty),*) -> $ret {
+            $body!($($arg),*)
+        }
+
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        #[target_feature(enable = "avx2,fma")]
+        #[inline(never)]
+        unsafe fn $avx2($($arg: $ty),*) -> $ret {
+            $body!($($arg),*)
+        }
+
+        #[cfg(all(feature = "simd", target_arch = "x86_64", rgmin_avx512))]
+        #[target_feature(enable = "avx512f,fma")]
+        #[inline(never)]
+        unsafe fn $avx512($($arg: $ty),*) -> $ret {
+            $body!($($arg),*)
+        }
+
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        #[target_feature(enable = "neon")]
+        #[inline(never)]
+        unsafe fn $neon($($arg: $ty),*) -> $ret {
+            $body!($($arg),*)
+        }
+
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        #[target_feature(enable = "sve")]
+        #[inline(never)]
+        unsafe fn $sve($($arg: $ty),*) -> $ret {
+            $body!($($arg),*)
+        }
+    };
+}
+
+define_kernels!(
+    fn dot_mv(xs: &[f64], ys: &[f64]) -> f64,
+    avx2 dot_avx2_version,
+    avx512 dot_avx512_version,
+    neon dot_neon_version,
+    sve dot_sve_version,
+    dot_w8
+);
+define_kernels!(
+    fn sum_mv(xs: &[f64]) -> f64,
+    avx2 sum_avx2_version,
+    avx512 sum_avx512_version,
+    neon sum_neon_version,
+    sve sum_sve_version,
+    sum_w8
+);
+define_kernels!(
+    fn axpy_mv(a: f64, xs: &[f64], ys: &mut [f64]) -> (),
+    avx2 axpy_avx2_version,
+    avx512 axpy_avx512_version,
+    neon axpy_neon_version,
+    sve axpy_sve_version,
+    axpy_body
+);
+define_kernels!(
+    fn scale_mv(a: f64, ys: &mut [f64]) -> (),
+    avx2 scale_avx2_version,
+    avx512 scale_avx512_version,
+    neon scale_neon_version,
+    sve scale_sve_version,
+    scale_body
+);
+define_kernels!(
+    fn mul_mv(xs: &[f64], ys: &mut [f64]) -> (),
+    avx2 mul_avx2_version,
+    avx512 mul_avx512_version,
+    neon mul_neon_version,
+    sve mul_sve_version,
+    mul_body
+);
+define_kernels!(
+    fn div_mv(xs: &[f64], ys: &mut [f64], floor: f64) -> (),
+    avx2 div_avx2_version,
+    avx512 div_avx512_version,
+    neon div_neon_version,
+    sve div_sve_version,
+    div_body
+);
+
+macro_rules! dispatch_dot {
+    ($choice:expr, $xs:expr, $ys:expr) => {{
+        match $choice {
+            Choice::Forced(Path::Scalar) => dot_w8!($xs, $ys),
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            Choice::Forced(Path::Avx2) => unsafe { dot_avx2_version($xs, $ys) },
+            #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+            Choice::Forced(Path::Avx2) => dot_w8!($xs, $ys),
+            #[cfg(all(feature = "simd", target_arch = "x86_64", rgmin_avx512))]
+            Choice::Forced(Path::Avx512) => unsafe { dot_avx512_version($xs, $ys) },
+            #[cfg(not(all(feature = "simd", target_arch = "x86_64", rgmin_avx512)))]
+            Choice::Forced(Path::Avx512) => dot_w8!($xs, $ys),
+            #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+            Choice::Forced(Path::Neon) => unsafe { dot_neon_version($xs, $ys) },
+            #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+            Choice::Forced(Path::Neon) => dot_w8!($xs, $ys),
+            #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+            Choice::Forced(Path::Sve) => unsafe { dot_sve_version($xs, $ys) },
+            #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+            Choice::Forced(Path::Sve) => dot_w8!($xs, $ys),
+            #[cfg(feature = "simd")]
+            Choice::Auto => {
+                if scalar_gate() {
+                    dot_w8!($xs, $ys)
+                } else {
+                    dot_mv($xs, $ys)
+                }
+            }
+            #[cfg(not(feature = "simd"))]
+            Choice::Auto => dot_w8!($xs, $ys),
+        }
+    }};
+}
+
+fn dot_contiguous(xs: &[f64], ys: &[f64]) -> f64 {
+    let picked = choice();
+    #[cfg(feature = "par")]
+    if matches!(picked, Choice::Auto) && xs.len() >= PAR_MIN_LEN {
+        return dot_parallel(picked, xs, ys);
+    }
+    dispatch_dot!(picked, xs, ys)
+}
+
+macro_rules! dispatch_sum {
+    ($choice:expr, $xs:expr) => {{
+        match $choice {
+            Choice::Forced(Path::Scalar) => sum_w8!($xs),
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            Choice::Forced(Path::Avx2) => unsafe { sum_avx2_version($xs) },
+            #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+            Choice::Forced(Path::Avx2) => sum_w8!($xs),
+            #[cfg(all(feature = "simd", target_arch = "x86_64", rgmin_avx512))]
+            Choice::Forced(Path::Avx512) => unsafe { sum_avx512_version($xs) },
+            #[cfg(not(all(feature = "simd", target_arch = "x86_64", rgmin_avx512)))]
+            Choice::Forced(Path::Avx512) => sum_w8!($xs),
+            #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+            Choice::Forced(Path::Neon) => unsafe { sum_neon_version($xs) },
+            #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+            Choice::Forced(Path::Neon) => sum_w8!($xs),
+            #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+            Choice::Forced(Path::Sve) => unsafe { sum_sve_version($xs) },
+            #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+            Choice::Forced(Path::Sve) => sum_w8!($xs),
+            #[cfg(feature = "simd")]
+            Choice::Auto => {
+                if scalar_gate() {
+                    sum_w8!($xs)
+                } else {
+                    sum_mv($xs)
+                }
+            }
+            #[cfg(not(feature = "simd"))]
+            Choice::Auto => sum_w8!($xs),
+        }
+    }};
+}
+
+fn sum_contiguous(xs: &[f64]) -> f64 {
+    let picked = choice();
+    #[cfg(feature = "par")]
+    if matches!(picked, Choice::Auto) && xs.len() >= PAR_MIN_LEN {
+        return sum_parallel(picked, xs);
+    }
+    dispatch_sum!(picked, xs)
+}
+
+#[cfg(feature = "par")]
+fn fold_in_index_order(parts: Vec<f64>) -> f64 {
+    let mut acc = 0.0;
+    for part in parts {
+        acc = acc + part;
+    }
+    acc
+}
+
+#[cfg(feature = "par")]
+fn dot_parallel(picked: Choice, xs: &[f64], ys: &[f64]) -> f64 {
+    use rayon::prelude::*;
+    let parts: Vec<f64> = xs
+        .par_chunks(PAR_CHUNK)
+        .zip(ys.par_chunks(PAR_CHUNK))
+        .map(move |(cx, cy)| dispatch_dot!(picked, cx, cy))
+        .collect();
+    fold_in_index_order(parts)
+}
+
+#[cfg(feature = "par")]
+fn sum_parallel(picked: Choice, xs: &[f64]) -> f64 {
+    use rayon::prelude::*;
+    let parts: Vec<f64> = xs
+        .par_chunks(PAR_CHUNK)
+        .map(move |cx| dispatch_sum!(picked, cx))
+        .collect();
+    fold_in_index_order(parts)
+}
+
+#[cfg(feature = "par")]
+fn par_chunks_zip(xs: &[f64], ys: &mut [f64], f: impl Fn(&[f64], &mut [f64]) + Sync + Send) {
+    use rayon::prelude::*;
+    if ys.len() < PAR_MIN_LEN {
+        f(xs, ys);
+        return;
+    }
+    ys.par_chunks_mut(PAR_CHUNK)
+        .zip(xs.par_chunks(PAR_CHUNK))
+        .for_each(|(cy, cx)| f(cx, cy));
+}
+
+#[cfg(feature = "par")]
+fn par_chunks_mut(ys: &mut [f64], f: impl Fn(&mut [f64]) + Sync + Send) {
+    use rayon::prelude::*;
+    if ys.len() < PAR_MIN_LEN {
+        f(ys);
+        return;
+    }
+    ys.par_chunks_mut(PAR_CHUNK).for_each(f);
+}
+
+fn axpy_one(picked: Choice, a: f64, xs: &[f64], ys: &mut [f64]) {
+    match picked {
+        Choice::Forced(Path::Scalar) => axpy_body!(a, xs, ys),
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        Choice::Forced(Path::Avx2) => unsafe { axpy_avx2_version(a, xs, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+        Choice::Forced(Path::Avx2) => axpy_body!(a, xs, ys),
+        #[cfg(all(feature = "simd", target_arch = "x86_64", rgmin_avx512))]
+        Choice::Forced(Path::Avx512) => unsafe { axpy_avx512_version(a, xs, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "x86_64", rgmin_avx512)))]
+        Choice::Forced(Path::Avx512) => axpy_body!(a, xs, ys),
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        Choice::Forced(Path::Neon) => unsafe { axpy_neon_version(a, xs, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+        Choice::Forced(Path::Neon) => axpy_body!(a, xs, ys),
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        Choice::Forced(Path::Sve) => unsafe { axpy_sve_version(a, xs, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+        Choice::Forced(Path::Sve) => axpy_body!(a, xs, ys),
+        #[cfg(feature = "simd")]
+        Choice::Auto => {
+            if scalar_gate() {
+                axpy_body!(a, xs, ys);
+            } else {
+                axpy_mv(a, xs, ys);
+            }
+        }
+        #[cfg(not(feature = "simd"))]
+        Choice::Auto => axpy_body!(a, xs, ys),
+    }
+}
+
+fn scale_one(picked: Choice, a: f64, ys: &mut [f64]) {
+    match picked {
+        Choice::Forced(Path::Scalar) => scale_body!(a, ys),
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        Choice::Forced(Path::Avx2) => unsafe { scale_avx2_version(a, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+        Choice::Forced(Path::Avx2) => scale_body!(a, ys),
+        #[cfg(all(feature = "simd", target_arch = "x86_64", rgmin_avx512))]
+        Choice::Forced(Path::Avx512) => unsafe { scale_avx512_version(a, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "x86_64", rgmin_avx512)))]
+        Choice::Forced(Path::Avx512) => scale_body!(a, ys),
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        Choice::Forced(Path::Neon) => unsafe { scale_neon_version(a, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+        Choice::Forced(Path::Neon) => scale_body!(a, ys),
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        Choice::Forced(Path::Sve) => unsafe { scale_sve_version(a, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+        Choice::Forced(Path::Sve) => scale_body!(a, ys),
+        #[cfg(feature = "simd")]
+        Choice::Auto => {
+            if scalar_gate() {
+                scale_body!(a, ys);
+            } else {
+                scale_mv(a, ys);
+            }
+        }
+        #[cfg(not(feature = "simd"))]
+        Choice::Auto => scale_body!(a, ys),
+    }
+}
+
+fn mul_one(picked: Choice, xs: &[f64], ys: &mut [f64]) {
+    match picked {
+        Choice::Forced(Path::Scalar) => mul_body!(xs, ys),
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        Choice::Forced(Path::Avx2) => unsafe { mul_avx2_version(xs, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+        Choice::Forced(Path::Avx2) => mul_body!(xs, ys),
+        #[cfg(all(feature = "simd", target_arch = "x86_64", rgmin_avx512))]
+        Choice::Forced(Path::Avx512) => unsafe { mul_avx512_version(xs, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "x86_64", rgmin_avx512)))]
+        Choice::Forced(Path::Avx512) => mul_body!(xs, ys),
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        Choice::Forced(Path::Neon) => unsafe { mul_neon_version(xs, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+        Choice::Forced(Path::Neon) => mul_body!(xs, ys),
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        Choice::Forced(Path::Sve) => unsafe { mul_sve_version(xs, ys) },
+        #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+        Choice::Forced(Path::Sve) => mul_body!(xs, ys),
+        #[cfg(feature = "simd")]
+        Choice::Auto => {
+            if scalar_gate() {
+                mul_body!(xs, ys);
+            } else {
+                mul_mv(xs, ys);
+            }
+        }
+        #[cfg(not(feature = "simd"))]
+        Choice::Auto => mul_body!(xs, ys),
+    }
+}
+
+fn div_one(picked: Choice, xs: &[f64], ys: &mut [f64], floor: f64) {
+    match picked {
+        Choice::Forced(Path::Scalar) => div_body!(xs, ys, floor),
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        Choice::Forced(Path::Avx2) => unsafe { div_avx2_version(xs, ys, floor) },
+        #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+        Choice::Forced(Path::Avx2) => div_body!(xs, ys, floor),
+        #[cfg(all(feature = "simd", target_arch = "x86_64", rgmin_avx512))]
+        Choice::Forced(Path::Avx512) => unsafe { div_avx512_version(xs, ys, floor) },
+        #[cfg(not(all(feature = "simd", target_arch = "x86_64", rgmin_avx512)))]
+        Choice::Forced(Path::Avx512) => div_body!(xs, ys, floor),
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        Choice::Forced(Path::Neon) => unsafe { div_neon_version(xs, ys, floor) },
+        #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+        Choice::Forced(Path::Neon) => div_body!(xs, ys, floor),
+        #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+        Choice::Forced(Path::Sve) => unsafe { div_sve_version(xs, ys, floor) },
+        #[cfg(not(all(feature = "simd", target_arch = "aarch64")))]
+        Choice::Forced(Path::Sve) => div_body!(xs, ys, floor),
+        #[cfg(feature = "simd")]
+        Choice::Auto => {
+            if scalar_gate() {
+                div_body!(xs, ys, floor);
+            } else {
+                div_mv(xs, ys, floor);
+            }
+        }
+        #[cfg(not(feature = "simd"))]
+        Choice::Auto => div_body!(xs, ys, floor),
+    }
+}
+
+/// `x . y` summed from the first index upward.
+///
+/// [`dot`] fuses each product into an eight-partial tree. This loop
+/// keeps a separate multiply and add, in element order, for noise
+/// projections.
+pub fn dot_ordered(x: ArrayView1<f64>, y: ArrayView1<f64>) -> f64 {
+    debug_assert_eq!(x.len(), y.len());
+    let mut acc = 0.0;
+    for i in 0..x.len() {
+        acc += x[i] * y[i];
+    }
+    acc
+}
+
+/// `x . y`.
+pub fn dot(x: ArrayView1<f64>, y: ArrayView1<f64>) -> f64 {
+    assert_eq!(x.len(), y.len());
     match (x.as_slice(), y.as_slice()) {
-        (Some(a), Some(b)) => with_parts(a.len(), |parts| {
-            fill_dot_parts(a, b, parts);
-            pairwise_sum(parts)
-        }),
-        _ => x.dot(&y),
+        (Some(xs), Some(ys)) => dot_contiguous(xs, ys),
+        // A strided view has the same element order. Copying into the
+        // contiguous kernel keeps the mul_add tree, including chunks.
+        _ => {
+            let xs: Vec<f64> = x.iter().copied().collect();
+            let ys: Vec<f64> = y.iter().copied().collect();
+            dot_contiguous(&xs, &ys)
+        }
     }
 }
 
 /// `y += a x`.
-#[cfg(not(feature = "par"))]
 pub fn axpy(a: f64, x: ArrayView1<f64>, y: &mut Array1<f64>) {
-    let _phase = crate::phase::Guard::axpy();
-    y.scaled_add(a, &x);
-}
-
-/// `y += a x`, updated in parallel chunks.
-#[cfg(feature = "par")]
-pub fn axpy(a: f64, x: ArrayView1<f64>, y: &mut Array1<f64>) {
-    use rayon::prelude::*;
-    let _phase = crate::phase::Guard::axpy();
-    if x.len() < PAR_MIN_LEN {
-        y.scaled_add(a, &x);
-        return;
-    }
+    assert_eq!(x.len(), y.len());
+    let picked = choice();
     match (x.as_slice(), y.as_slice_mut()) {
         (Some(xs), Some(ys)) => {
-            let _join = crate::phase::Guard::rayon();
-            ys.par_chunks_mut(4096)
-                .zip(xs.par_chunks(4096))
-                .for_each(|(cy, cx)| {
-                    for (p, q) in cy.iter_mut().zip(cx) {
-                        *p += a * q;
-                    }
-                });
+            #[cfg(feature = "par")]
+            {
+                par_chunks_zip(xs, ys, move |cx, cy| axpy_one(picked, a, cx, cy));
+            }
+            #[cfg(not(feature = "par"))]
+            {
+                axpy_one(picked, a, xs, ys);
+            }
         }
-        _ => y.scaled_add(a, &x),
+        _ => {
+            for i in 0..x.len() {
+                y[i] = a.mul_add(x[i], y[i]);
+            }
+        }
     }
 }
 
-/// `sum_i x_i`. At or above [`REDUCTION_MIN`] this is the fixed-chunk
-/// pairwise sum, identical for every thread count.
+/// `sum_i x_i`.
 pub fn sum(x: ArrayView1<f64>) -> f64 {
-    if x.len() < REDUCTION_MIN {
-        return x.sum();
-    }
-    match x.as_slice() {
-        Some(a) => with_parts(a.len(), |parts| {
-            fill_sum_parts(a, parts);
-            pairwise_sum(parts)
-        }),
-        None => x.sum(),
-    }
-}
-
-/// `dst[i] = src[i]`. A memcpy, not a rayon join: at n = 96_000 a join
-/// costs more than the copy.
-pub fn copy_slice(dst: &mut [f64], src: &[f64]) {
-    debug_assert_eq!(dst.len(), src.len());
-    dst.copy_from_slice(src);
-}
-
-/// `dst[i] = op(src[i])`, one pass.
-#[inline(always)]
-pub fn apply1(dst: &mut [f64], src: &[f64], op: impl Fn(&mut f64, f64) + Sync) {
-    debug_assert_eq!(dst.len(), src.len());
-    #[cfg(feature = "par")]
-    if dst.len() >= PAR_MIN_LEN && rayon::current_num_threads() > 1 {
-        use rayon::prelude::*;
-        let _join = crate::phase::Guard::rayon();
-        dst.par_chunks_mut(16_384)
-            .zip(src.par_chunks(16_384))
-            .for_each(|(d, s)| {
-                for (di, &si) in d.iter_mut().zip(s) {
-                    op(di, si);
-                }
-            });
-        return;
-    }
-    for (d, &s) in dst.iter_mut().zip(src) {
-        op(d, s);
-    }
-}
-
-/// `dst[i] = op(a[i], b[i])`, one pass.
-#[inline(always)]
-pub fn apply2(dst: &mut [f64], a: &[f64], b: &[f64], op: impl Fn(&mut f64, f64, f64) + Sync) {
-    debug_assert_eq!(dst.len(), a.len());
-    debug_assert_eq!(dst.len(), b.len());
-    #[cfg(feature = "par")]
-    if dst.len() >= PAR_MIN_LEN && rayon::current_num_threads() > 1 {
-        use rayon::prelude::*;
-        let _join = crate::phase::Guard::rayon();
-        dst.par_chunks_mut(16_384)
-            .zip(a.par_chunks(16_384))
-            .zip(b.par_chunks(16_384))
-            .for_each(|((d, x), y)| {
-                for ((di, &xi), &yi) in d.iter_mut().zip(x).zip(y) {
-                    op(di, xi, yi);
-                }
-            });
-        return;
-    }
-    for ((d, &x), &y) in dst.iter_mut().zip(a).zip(b) {
-        op(d, x, y);
-    }
-}
-
-/// `dst[i] = keep * dst[i] + scale * src[i]`.
-#[inline(always)]
-pub fn blend(dst: &mut [f64], keep: f64, scale: f64, src: &[f64]) {
-    debug_assert_eq!(dst.len(), src.len());
-    #[cfg(feature = "par")]
-    if dst.len() >= PAR_MIN_LEN && rayon::current_num_threads() > 1 {
-        use rayon::prelude::*;
-        let _join = crate::phase::Guard::rayon();
-        dst.par_chunks_mut(16_384)
-            .zip(src.par_chunks(16_384))
-            .for_each(|(d, s)| {
-                for (di, &si) in d.iter_mut().zip(s) {
-                    *di = keep * *di + scale * si;
-                }
-            });
-        return;
-    }
-    for (di, &si) in dst.iter_mut().zip(src) {
-        *di = keep * *di + scale * si;
-    }
-}
-
-/// `dst[i] += scale * src[i]`.
-#[inline(always)]
-pub fn add_scaled(dst: &mut [f64], src: &[f64], scale: f64) {
-    debug_assert_eq!(dst.len(), src.len());
-    #[cfg(feature = "par")]
-    if dst.len() >= PAR_MIN_LEN && rayon::current_num_threads() > 1 {
-        use rayon::prelude::*;
-        let _join = crate::phase::Guard::rayon();
-        dst.par_chunks_mut(16_384)
-            .zip(src.par_chunks(16_384))
-            .for_each(|(d, s)| {
-                for (di, &si) in d.iter_mut().zip(s) {
-                    *di += scale * si;
-                }
-            });
-        return;
-    }
-    for (di, &si) in dst.iter_mut().zip(src) {
-        *di += scale * si;
-    }
-}
-
-/// `dst[i] = pos[i] + t * dir[i]` in one pass.
-///
-/// A line-search trial used to copy `pos` and then axpy. That is two
-/// trips over three vectors and, under `par`, a rayon join on the
-/// second trip only. One pass writes the same bits.
-pub fn lincomb(dst: &mut [f64], pos: &[f64], t: f64, dir: &[f64]) {
-    debug_assert_eq!(dst.len(), pos.len());
-    debug_assert_eq!(dst.len(), dir.len());
-    #[cfg(feature = "par")]
-    if dst.len() >= PAR_MIN_LEN {
-        use rayon::prelude::*;
-        let _join = crate::phase::Guard::rayon();
-        dst.par_chunks_mut(4096)
-            .zip(pos.par_chunks(4096))
-            .zip(dir.par_chunks(4096))
-            .for_each(|((d, p), r)| {
-                for ((di, &pi), &ri) in d.iter_mut().zip(p).zip(r) {
-                    *di = pi + t * ri;
-                }
-            });
-        return;
-    }
-    for ((di, &pi), &ri) in dst.iter_mut().zip(pos).zip(dir) {
-        *di = pi + t * ri;
+    if let Some(xs) = x.as_slice() {
+        sum_contiguous(xs)
+    } else {
+        x.sum()
     }
 }
 
@@ -303,70 +773,120 @@ pub fn nrm2(x: ArrayView1<f64>) -> f64 {
 
 /// `||x - y||_2`, the same bits as [`nrm2`] of the stored difference.
 ///
-/// Each element is subtracted once. The squares then fold the way
-/// ndarray folds `d · d` on that contiguous difference. Above the
-/// parallel cutoff the difference is stored and [`nrm2`] runs, so the
-/// chunk fold stays the one `d · d` uses.
+/// Each element is subtracted once and the squares then fold through
+/// [`nrm2`], including its eight-partial tree and any SIMD clone that
+/// tree selects. Above the parallel cutoff that is also how a long
+/// `d · d` folds, so the two lengths agree.
 pub fn nrm2_diff(x: ArrayView1<f64>, y: ArrayView1<f64>) -> f64 {
     assert_eq!(x.len(), y.len());
-    #[cfg(feature = "par")]
-    if x.len() >= PAR_MIN_LEN {
-        let diff = &x.to_owned() - &y;
-        return nrm2(diff.view());
-    }
-    diff_sq(x, y).sqrt()
+    nrm2((&x.to_owned() - &y).view())
 }
 
-/// Eight-way sum of squares of `x - y`, matching ndarray's unrolled dot
-/// of the stored difference with itself.
-fn diff_sq(x: ArrayView1<f64>, y: ArrayView1<f64>) -> f64 {
-    let n = x.len();
-    let mut i = 0;
-    let (mut p0, mut p1, mut p2, mut p3, mut p4, mut p5, mut p6, mut p7) =
-        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-    while i + 8 <= n {
-        let d0 = x[i] - y[i];
-        let d1 = x[i + 1] - y[i + 1];
-        let d2 = x[i + 2] - y[i + 2];
-        let d3 = x[i + 3] - y[i + 3];
-        let d4 = x[i + 4] - y[i + 4];
-        let d5 = x[i + 5] - y[i + 5];
-        let d6 = x[i + 6] - y[i + 6];
-        let d7 = x[i + 7] - y[i + 7];
-        p0 += d0 * d0;
-        p1 += d1 * d1;
-        p2 += d2 * d2;
-        p3 += d3 * d3;
-        p4 += d4 * d4;
-        p5 += d5 * d5;
-        p6 += d6 * d6;
-        p7 += d7 * d7;
-        i += 8;
+/// `y *= a`.
+pub fn scale(a: f64, y: &mut Array1<f64>) {
+    let picked = choice();
+    match y.as_slice_mut() {
+        Some(ys) => {
+            #[cfg(feature = "par")]
+            {
+                par_chunks_mut(ys, move |cy| scale_one(picked, a, cy));
+            }
+            #[cfg(not(feature = "par"))]
+            {
+                scale_one(picked, a, ys);
+            }
+        }
+        None => y.mapv_inplace(|v| v * a),
     }
-    let mut sum = 0.0;
-    sum += p0 + p4;
-    sum += p1 + p5;
-    sum += p2 + p6;
-    sum += p3 + p7;
-    while i < n {
-        let d = x[i] - y[i];
-        sum += d * d;
-        i += 1;
+}
+
+/// `y[i] *= x[i]`.
+pub fn mul_assign(x: ArrayView1<f64>, y: &mut Array1<f64>) {
+    let n = x.len().min(y.len());
+    let picked = choice();
+    match (x.as_slice(), y.as_slice_mut()) {
+        (Some(xs), Some(ys)) => {
+            #[cfg(feature = "par")]
+            {
+                par_chunks_zip(&xs[..n], &mut ys[..n], move |cx, cy| {
+                    mul_one(picked, cx, cy)
+                });
+            }
+            #[cfg(not(feature = "par"))]
+            {
+                mul_one(picked, &xs[..n], &mut ys[..n]);
+            }
+        }
+        _ => {
+            for i in 0..n {
+                y[i] *= x[i];
+            }
+        }
     }
-    sum
+}
+
+/// `y[i] /= x[i].max(floor)`.
+pub fn div_assign_floor(x: ArrayView1<f64>, y: &mut Array1<f64>, floor: f64) {
+    let n = x.len().min(y.len());
+    let picked = choice();
+    match (x.as_slice(), y.as_slice_mut()) {
+        (Some(xs), Some(ys)) => {
+            #[cfg(feature = "par")]
+            {
+                par_chunks_zip(&xs[..n], &mut ys[..n], move |cx, cy| {
+                    div_one(picked, cx, cy, floor);
+                });
+            }
+            #[cfg(not(feature = "par"))]
+            {
+                div_one(picked, &xs[..n], &mut ys[..n], floor);
+            }
+        }
+        _ => {
+            for i in 0..n {
+                y[i] /= x[i].max(floor);
+            }
+        }
+    }
 }
 
 /// `||x||_inf`, infinity on any non-finite component: a broken vector
 /// is never a small one.
 pub fn nrminf(x: ArrayView1<f64>) -> f64 {
-    let mut m = 0.0_f64;
-    for v in x.iter() {
-        if !v.is_finite() {
-            return f64::INFINITY;
+    fn fold(xs: &[f64]) -> f64 {
+        let mut m = 0.0_f64;
+        for v in xs {
+            if !v.is_finite() {
+                return f64::INFINITY;
+            }
+            m = m.max(v.abs());
         }
-        m = m.max(v.abs());
+        m
     }
-    m
+    let Some(xs) = x.as_slice() else {
+        let mut m = 0.0_f64;
+        for v in x.iter() {
+            if !v.is_finite() {
+                return f64::INFINITY;
+            }
+            m = m.max(v.abs());
+        }
+        return m;
+    };
+    #[cfg(feature = "par")]
+    if xs.len() >= PAR_MIN_LEN {
+        use rayon::prelude::*;
+        let parts: Vec<f64> = xs.par_chunks(PAR_CHUNK).map(fold).collect();
+        let mut m = 0.0_f64;
+        for part in parts {
+            if !part.is_finite() {
+                return f64::INFINITY;
+            }
+            m = m.max(part);
+        }
+        return m;
+    }
+    fold(xs)
 }
 
 /// A solver-owned vector: storage plus the DLPack device it lives on.
@@ -407,14 +927,11 @@ impl Vector {
     /// Claim `data` for `device`. Only the CPU has a backend today;
     /// any other tag is refused so device data is never silently
     /// staged through the host.
-    pub fn try_on(
-        device: dlpk::sys::DLDevice,
-        data: Array1<f64>,
-    ) -> std::result::Result<Self, UnsupportedDevice> {
+    pub fn try_on(device: dlpk::sys::DLDevice, data: Array1<f64>) -> crate::Result<Self> {
         if device.device_type == dlpk::sys::DLDeviceType::kDLCPU {
             Ok(Self { data, device })
         } else {
-            Err(UnsupportedDevice {
+            Err(crate::Error::UnsupportedDevice {
                 device_type: device.device_type as i32,
             })
         }
@@ -441,25 +958,6 @@ impl Vector {
     }
 }
 
-/// The device tag names a backend this build does not carry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnsupportedDevice {
-    /// The DLPack `DLDeviceType` discriminant that was refused.
-    pub device_type: i32,
-}
-
-impl std::fmt::Display for UnsupportedDevice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "DLPack device {} has no kernel backend in this build (CPU only)",
-            self.device_type
-        )
-    }
-}
-
-impl std::error::Error for UnsupportedDevice {}
-
 /// `x . y` on the vectors' device.
 pub fn vdot(x: &Vector, y: &Vector) -> f64 {
     dot(x.data.view(), y.data.view())
@@ -478,6 +976,11 @@ pub fn vnrm2(x: &Vector) -> f64 {
 /// `||x||_inf` on the vector's device, infinity on non-finite.
 pub fn vnrminf(x: &Vector) -> f64 {
     nrminf(x.data.view())
+}
+
+/// `sum_i x_i` on the vector's device.
+pub fn vsum(x: &Vector) -> f64 {
+    sum(x.data.view())
 }
 
 #[cfg(test)]
@@ -548,79 +1051,10 @@ mod tests {
             device_id: 0,
         };
         let err = Vector::try_on(cuda, Array1::zeros(4)).unwrap_err();
-        assert_eq!(err.device_type, dlpk::sys::DLDeviceType::kDLCUDA as i32);
-    }
-
-    fn reference_dot(a: &[f64], b: &[f64]) -> f64 {
-        let mut parts = Vec::new();
-        let mut start = 0;
-        while start < a.len() {
-            let end = (start + REDUCTION_CHUNK).min(a.len());
-            let mut acc = 0.0;
-            for i in start..end {
-                acc += a[i] * b[i];
-            }
-            parts.push(acc);
-            start = end;
-        }
-        fn rec(v: &[f64]) -> f64 {
-            match v.len() {
-                0 => 0.0,
-                1 => v[0],
-                n => {
-                    let mid = n / 2;
-                    rec(&v[..mid]) + rec(&v[mid..])
-                }
-            }
-        }
-        rec(&parts)
-    }
-
-    #[test]
-    fn a_long_dot_matches_the_fixed_chunk_pairwise_tree() {
-        let n = 70_000;
-        let a = Array1::from((0..n).map(|i| (i as f64 * 0.01).sin()).collect::<Vec<_>>());
-        let b = Array1::from((0..n).map(|i| (i as f64 * 0.01).cos()).collect::<Vec<_>>());
-        let got = dot(a.view(), b.view());
-        let expect = reference_dot(a.as_slice().unwrap(), b.as_slice().unwrap());
-        assert_eq!(got.to_bits(), expect.to_bits());
-        let summed = sum(a.view());
-        let mut parts = Vec::new();
-        let slice = a.as_slice().unwrap();
-        let mut start = 0;
-        while start < n {
-            let end = (start + REDUCTION_CHUNK).min(n);
-            parts.push(slice[start..end].iter().sum::<f64>());
-            start = end;
-        }
-        fn rec(v: &[f64]) -> f64 {
-            match v.len() {
-                1 => v[0],
-                n => {
-                    let mid = n / 2;
-                    rec(&v[..mid]) + rec(&v[mid..])
-                }
-            }
-        }
-        assert_eq!(summed.to_bits(), rec(&parts).to_bits());
-    }
-
-    #[cfg(feature = "par")]
-    #[test]
-    fn a_long_dot_does_not_change_with_the_thread_count() {
-        let n = 70_000;
-        let a = Array1::from((0..n).map(|i| (i as f64 * 0.01).sin()).collect::<Vec<_>>());
-        let b = Array1::from((0..n).map(|i| (i as f64 * 0.01).cos()).collect::<Vec<_>>());
-        let one = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap()
-            .install(|| dot(a.view(), b.view()));
-        let many = rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .unwrap()
-            .install(|| dot(a.view(), b.view()));
-        assert_eq!(one.to_bits(), many.to_bits());
+        assert!(matches!(
+            err,
+            crate::Error::UnsupportedDevice { device_type }
+                if device_type == dlpk::sys::DLDeviceType::kDLCUDA as i32
+        ));
     }
 }

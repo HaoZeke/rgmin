@@ -3,8 +3,10 @@
 #include "xts/optimize.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 extern "C" int32_t scale_h0(void* user, double const* v, double* out, std::size_t n) {
@@ -151,13 +153,14 @@ int constrained() {
             return 15;
         }
     }
-    // A sideways pull of 3 per atom under a unit step: the old bond
-    // cannot close the gap, so the step throws and leaves x.
+    // A sideways pull of 3 per atom under a unit step with every cap off:
+    // the old bond cannot close the gap, so the step throws and leaves x.
     double const flat[6] = {0.0, 0.0, 0.0, 1.0, 0.0, 0.0};
     auto bond = rgmin::DistanceConstraints::at(pi, pj, 1, flat, 6);
     double pull[6] = {0.0, 3.0, 0.0, 0.0, -3.0, 0.0};
     rgmin::Control unit;
     unit.istep = 1.0;
+    unit.maxmove = -1.0;
     rgmin::Solver steepest(rgmin::Method::Steepest, unit, 6);
     steepest.set_accept(RGMIN_ACCEPT_NONE);
     steepest.set_distance_constraints(bond);
@@ -185,7 +188,10 @@ int constrained() {
     return 0;
 }
 
-rgmin_status_t diag3_hvp(void*, DLManagedTensorVersioned const*,
+}  // namespace
+
+
+rgmin_status_t diag3_hvp(void*, DLManagedTensorVersioned const* /*x*/,
                          DLManagedTensorVersioned const* v, DLManagedTensorVersioned* hv) {
     double const lam[3] = {-3.0, 1.0, 4.0};
     double const* vp = data(v);
@@ -215,12 +221,267 @@ int eigen_block() {
         std::fprintf(stderr, "eigenpairs values %g %g\n", values[0], values[1]);
         return 7;
     }
+    rgmin_eigenpair_ex_t extended[2] = {};
+    double modes_ex[6] = {};
+    double values_ex[2] = {};
+    try {
+        xts::optimize::lowest_eigenpairs_ex(diag3_hvp, nullptr, nullptr, nullptr, x, seed,
+                                            modes_ex, values_ex, 3, 2, nullptr, nullptr, extended);
+    } catch (std::invalid_argument const& err) {
+        std::fprintf(stderr, "eigenpairs ex: %s\n", err.what());
+        return 10;
+    }
+    if (extended[0].converged != 1 || extended[1].converged != 1 || extended[0].residual > 1e-6 ||
+        std::fabs(values_ex[0] - values[0]) > 0.0 || std::fabs(modes_ex[0] - modes[0]) > 0.0) {
+        std::fprintf(stderr, "extended pair residual %g converged %d\n", extended[0].residual,
+                     extended[0].converged);
+        return 11;
+    }
     return 0;
 }
 
-}  // namespace
+/// Fit U on St(4, 2) and S on SPD(2) to a target by gradient steps on
+/// |U - U*|^2 / 2 + |S - S*|^2 / 2. The cost must fall at every step.
+int manifold_fit() {
+    using xts::optimize::Manifold;
+    Manifold const st = Manifold::stiefel(4, 2, RGMIN_STIEFEL_POLAR);
+    Manifold const spd = Manifold::spd(2, RGMIN_SPD_AFFINE_INVARIANT);
+    Manifold const m = Manifold::product(st, spd);
+    if (m.len() != 12) {
+        std::fprintf(stderr, "manifold len %zu\n", m.len());
+        return 10;
+    }
+    double const c = std::cos(0.4);
+    double const s = std::sin(0.4);
+    std::vector<double> const target = {c, s, 0.0, 0.0, -s, c, 0.0, 0.0, 2.0, 0.3, 0.3, 1.0};
+    std::vector<double> x = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0};
+    std::vector<double> g(12), rgrad(12), next(12);
+    auto cost = [&](std::vector<double> const& at) {
+        double f = 0.0;
+        for (std::size_t i = 0; i < at.size(); ++i) {
+            f += 0.5 * (at[i] - target[i]) * (at[i] - target[i]);
+        }
+        return f;
+    };
+    double last = cost(x);
+    for (int step = 0; step < 100; ++step) {
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            g[i] = x[i] - target[i];
+        }
+        m.gradient_step(x.data(), g.data(), 0.1, rgrad.data(), next.data());
+        double const f = cost(next);
+        if (!(f < last)) {
+            std::fprintf(stderr, "manifold step %d: %g after %g\n", step, f, last);
+            return 11;
+        }
+        last = f;
+        x.swap(next);
+    }
+    for (int a = 0; a < 2; ++a) {
+        for (int b = 0; b < 2; ++b) {
+            double dot = 0.0;
+            for (int i = 0; i < 4; ++i) {
+                dot += x[i + 4 * a] * x[i + 4 * b];
+            }
+            if (std::fabs(dot - (a == b ? 1.0 : 0.0)) > 1e-12) {
+                std::fprintf(stderr, "U^T U[%d,%d] = %g\n", a, b, dot);
+                return 12;
+            }
+        }
+    }
+    bool threw = false;
+    try {
+        std::vector<double> y(12);
+        m.log(x.data(), x.data(), y.data());
+    } catch (std::runtime_error const&) {
+        threw = true;
+    }
+    if (!threw) {
+        return 13;
+    }
+    std::printf("manifold ok cost=%g\n", last);
+    return 0;
+}
+
+rgmin_status_t ellipse_eval(void* /*user*/, DLManagedTensorVersioned const* x, double* value) {
+    double const* p = data(x);
+    *value = p[0] * p[0] + 3.0 * p[1] * p[1];
+    return RGMIN_SUCCESS;
+}
+
+rgmin_status_t ellipse_grad(void* /*user*/, DLManagedTensorVersioned const* x,
+                            DLManagedTensorVersioned* g) {
+    double const* p = data(x);
+    double* gp = data(g);
+    gp[0] = 2.0 * p[0];
+    gp[1] = 6.0 * p[1];
+    return RGMIN_SUCCESS;
+}
+
+/// A Euclidean L-BFGS session ignores brent, so the Python binding
+/// rejects it. The sphere L-BFGS arm reads it, so apply() keeps it.
+int sphere_linesearch() {
+    std::vector<std::vector<double>> paths;
+    for (char const* kind : {"brent", "wolfe"}) {
+        rgmin::SolverConfig const cfg = rgmin::SolverConfig::build(
+            "lbfgs", {{"linesearch", kind}, {"accept", "energy"}}, {}, {}, {});
+        bool const brent = std::string(kind) == "brent";
+        if (cfg.ignored_linesearch().empty() == brent) {
+            std::fprintf(stderr, "%s: ignored_linesearch '%s'\n", kind,
+                         cfg.ignored_linesearch().c_str());
+            return 30;
+        }
+        rgmin::Solver solver(cfg.method(), cfg.control(), 2);
+        cfg.apply(solver);
+        solver.set_sphere_complex(1);
+        std::vector<double> x{0.6, 0.8};
+        std::vector<double> path;
+        DLManagedTensorVersioned* t = rgmin::borrow_cpu_f64(x.data(), 2);
+        for (int i = 0; i < 4; ++i) {
+            solver.step(ellipse_eval, ellipse_grad, nullptr, t);
+            path.insert(path.end(), x.begin(), x.end());
+        }
+        rgmin_tensor_free(t);
+        if (std::fabs(std::hypot(x[0], x[1]) - 1.0) > 1e-12) {
+            std::fprintf(stderr, "%s left the sphere: |x| = %.17g\n", kind, std::hypot(x[0], x[1]));
+            return 31;
+        }
+        paths.push_back(path);
+    }
+    if (paths[0] == paths[1]) {
+        std::fprintf(stderr, "the sphere L-BFGS arm ignored the line-search kind\n");
+        return 32;
+    }
+    std::printf("sphere linesearch ok\n");
+    return 0;
+}
+
+double const kCapWeight[6] = {1.0, 2.0, 1.0, 2.0, 1.0, 2.0};
+
+rgmin_status_t cap_eval(void* /*user*/, DLManagedTensorVersioned const* x, double* value) {
+    double const* p = data(x);
+    double acc = 0.0;
+    for (int k = 0; k < 6; ++k) acc += 0.5 * kCapWeight[k] * p[k] * p[k];
+    *value = acc;
+    return RGMIN_SUCCESS;
+}
+
+rgmin_status_t cap_grad(void* /*user*/, DLManagedTensorVersioned const* x,
+                        DLManagedTensorVersioned* g) {
+    double const* p = data(x);
+    double* gp = data(g);
+    for (int k = 0; k < 6; ++k) gp[k] = kCapWeight[k] * p[k];
+    return RGMIN_SUCCESS;
+}
+
+rgmin_status_t cap_hvp(void* /*user*/, DLManagedTensorVersioned const* /*x*/,
+                       DLManagedTensorVersioned const* v, DLManagedTensorVersioned* hv) {
+    double const* vp = data(v);
+    double* out = data(hv);
+    for (int k = 0; k < 6; ++k) out[k] = kCapWeight[k] * vp[k];
+    return RGMIN_SUCCESS;
+}
+
+// Six steps on the weighted bowl: every value, or where a step threw.
+std::string cap_run(rgmin::Solver& solver, bool hvp) {
+    std::vector<double> x{3.0, -4.0, 1.5, 2.5, -2.0, 0.5};
+    std::string seen;
+    char buf[64];
+    for (int it = 0; it < 6; ++it) {
+        DLManagedTensorVersioned* t = rgmin::borrow_cpu_f64(x.data(), 6);
+        try {
+            rgmin::Report r = hvp ? solver.step_hvp(cap_eval, cap_grad, cap_hvp, nullptr, t)
+                                  : solver.step(cap_eval, cap_grad, nullptr, t);
+            std::snprintf(buf, sizeof buf, "%.17g;", r.value);
+            seen += buf;
+        } catch (std::exception const& e) {
+            seen += std::string("threw ") + e.what();
+            rgmin_tensor_free(t);
+            break;
+        }
+        rgmin_tensor_free(t);
+    }
+    return seen;
+}
+
+std::string cap_session(rgmin::Method method, double ctrl_maxmove, bool set_maxmove,
+                        double maxmove, bool set_atom, double atom) {
+    rgmin::Control ctrl;
+    ctrl.maxiter = 6;
+    ctrl.gtol = 1e-14;
+    ctrl.istep = 1.0;
+    ctrl.maxmove = ctrl_maxmove;
+    rgmin::Solver solver(method, ctrl, 6);
+    if (set_maxmove) solver.set_maxmove(maxmove);
+    if (set_atom) solver.set_atom_maxmove(atom);
+    return cap_run(solver, method == rgmin::Method::NewtonCg);
+}
+
+std::string cap_config(char const* method, char const* key, double value) {
+    auto cfg = rgmin::SolverConfig::build(method, {}, {{"gtol", 1e-14}, {"istep", 1.0}, {key, value}},
+                                          {{"maxiter", 6}}, {});
+    rgmin::Solver solver(cfg.method(), cfg.control(), 6);
+    cfg.apply(solver);
+    return cap_run(solver, cfg.method() == rgmin::Method::NewtonCg);
+}
+
+// Zero, -0 and NaN keep the default caps. A negative or infinite
+// maxmove turns every cap off, the default per-atom cap included. A
+// non-positive or non-finite per-atom cap is no per-atom cap.
+int maxmove_off() {
+    double const nan = std::nan("");
+    double const inf = HUGE_VAL;
+    rgmin::Method const methods[] = {rgmin::Method::Fire, rgmin::Method::Fire2,
+                                     rgmin::Method::Lbfgs, rgmin::Method::Steepest,
+                                     rgmin::Method::NewtonCg};
+    for (rgmin::Method method : methods) {
+        int const m = static_cast<int>(method);
+        std::string const keep = cap_session(method, 0.0, false, 0.0, false, 0.0);
+        std::string const off = cap_session(method, -1.0, false, 0.0, false, 0.0);
+        for (double cap : {-0.0, nan}) {
+            if (cap_session(method, cap, false, 0.0, false, 0.0) != keep ||
+                cap_session(method, 0.0, true, cap, false, 0.0) != keep) {
+                std::fprintf(stderr, "method %d maxmove %g did not keep the defaults\n", m, cap);
+                return 40;
+            }
+        }
+        for (double cap : {-1.0, -inf, inf}) {
+            if (cap_session(method, cap, false, 0.0, false, 0.0) != off ||
+                cap_session(method, 0.0, true, cap, false, 0.0) != off) {
+                std::fprintf(stderr, "method %d maxmove %g left a cap on\n", m, cap);
+                return 41;
+            }
+        }
+        std::string const no_atom = cap_session(method, 0.0, false, 0.0, true, 0.0);
+        for (double cap : {-1.0, nan, inf, -inf}) {
+            std::string const got = cap_session(method, 0.0, false, 0.0, true, cap);
+            if (got != no_atom) {
+                std::fprintf(stderr, "method %d set_atom_maxmove(%g): %s\n  vs 0: %s\n", m, cap,
+                             got.c_str(), no_atom.c_str());
+                return 42;
+            }
+        }
+    }
+    for (char const* method : {"fire", "lbfgs", "sd", "newton-cg"}) {
+        std::string const keep = cap_config(method, "maxmove", 0.0);
+        if (cap_config(method, "maxmove", -0.0) != keep) return 43;
+        std::string const off = cap_config(method, "maxmove", -1.0);
+        if (cap_config(method, "maxmove", -1e9) != off) return 44;
+        std::string const cleared = cap_config(method, "maxstep", 0.0);
+        if (cap_config(method, "maxstep", -1.0) != cleared ||
+            cap_config(method, "atom_maxmove", -0.0) != cleared) {
+            return 45;
+        }
+    }
+    std::printf("maxmove off ok\n");
+    return 0;
+}
 
 int main() {
+    int off = maxmove_off();
+    if (off != 0) return off;
+    int block = eigen_block();
+    if (block != 0) return block;
     std::vector<double> x{1.0, 1.0};
     DLManagedTensorVersioned* t = rgmin::borrow_cpu_f64(x.data(), 2);
     if (t == nullptr) {
@@ -243,8 +504,19 @@ int main() {
     int st = solver.set_box(lo, hi, 2);
     int st_ipm = solver.set_highs_solver(RGMIN_HIGHS_IPM);
     int st_x = solver.set_highs_crossover(RGMIN_HIGHS_CROSSOVER_OFF);
-    std::printf("optimize nit=%zu grad=%g set_box=%d ipm=%d xover=%d\n", r.nit,
-                r.grad_norm, st, st_ipm, st_x);
+    solver.set_accept(RGMIN_ACCEPT_STEP);
+    solver.set_fire_variant(RGMIN_FIRE_GUENOLE2020);
+    if (solver.set_linesearch(RGMIN_LINESEARCH_WOLFE, 1e-4, 0.9, 20) != RGMIN_SUCCESS) {
+        std::fprintf(stderr, "linesearch setup failed\n");
+        return 12;
+    }
+    double sdir_s[2] = {1.0, 0.0};
+    double sdir_y[2] = {2.0, 0.0};
+    if (solver.push_pair(sdir_s, sdir_y, 2) != 0) {
+        return 13;
+    }
+    std::printf("optimize nit=%zu grad=%g set_box=%d ipm=%d xover=%d pairs=%zu\n", r.nit,
+                r.grad_norm, st, st_ipm, st_x, solver.pair_count());
 
     // Gradient (0.6, 0.8): two-norm 1, infinity norm 0.8. At gtol 0.9 the
     // infinity-norm session stops at the start.
@@ -316,11 +588,58 @@ int main() {
         power.set_power(RGMIN_MANIFOLD_OBLIQUE, 3, 2) != 1 ||
         power.set_power(RGMIN_MANIFOLD_SO3, 8, 2) != 1) {
         std::fprintf(stderr, "set_power took a shaped token or a bad block\n");
+        return 22;
+    }
+    double s1[2] = {1.0, 0.0};
+    double y1[2] = {2.0, 1.0};
+    if (!pairs.push_rho(s1, y1, 0.5, 2) || pairs.push_rho(s1, y1, -1.0, 2) ||
+        pairs.count() != 1) {
+        std::fprintf(stderr, "push_rho keeps one pair and declines a negative rho\n");
         return 19;
     }
-    int block = eigen_block();
-    if (block != 0) {
-        return block;
+    rgmin::LbfgsPairs by_gate(2, 4);
+    by_gate.push(s1, y1, 2);
+    double from_rho[2] = {0.0, 0.0};
+    double from_gate[2] = {0.0, 0.0};
+    pairs.direction_diagonal(grad, diag, from_rho, 2);
+    by_gate.direction_diagonal(grad, diag, from_gate, 2);
+    if (from_rho[0] != from_gate[0] || from_rho[1] != from_gate[1]) {
+        std::fprintf(stderr, "rho = 1/(s.y) direction (%g, %g) push (%g, %g)\n", from_rho[0],
+                     from_rho[1], from_gate[0], from_gate[1]);
+        return 20;
+    }
+    bool short_refused = false;
+    try {
+        pairs.push_rho(s1, y1, 0.5, 1);
+    } catch (std::runtime_error const&) {
+        short_refused = true;
+    }
+    if (!short_refused || pairs.count() != 1) {
+        std::fprintf(stderr, "push_rho must refuse a short pair\n");
+        return 21;
+    }
+    std::vector<int32_t> z{1, 1};
+    auto precon = rgmin::Precon::lindh(z).cell(10.0, 10.0, 10.0);
+    rgmin::Solver geom(rgmin::Method::Lbfgs, rgmin::Control{}, 6);
+    if (geom.set_precon(precon) != RGMIN_SUCCESS) {
+        return 14;
+    }
+    if (!std::isnan(geom.precon_scale())) {
+        return 15;
+    }
+    geom.clear_precon();
+    auto stamp = xts_abi_stamp();
+    if (stamp.abi_minor != RGMIN_ABI_VERSION_MINOR ||
+        stamp.layout_revision != RGMIN_ABI_LAYOUT_REVISION) {
+        return 16;
+    }
+    int fit = manifold_fit();
+    if (fit != 0) {
+        return fit;
+    }
+    int sphere = sphere_linesearch();
+    if (sphere != 0) {
+        return sphere;
     }
     return constrained();
 }

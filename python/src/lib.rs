@@ -9,13 +9,14 @@
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
-use ndarray::{Array1, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rgmin::{
-    Accept, ApplyHessian, Control, Error, FireConfig, FireKind, FirePreset, LbfgsH0, LbfgsPairs,
-    LbfgsStep, LineSearch, Method, Oracle, SearchStep, Solver, StopNorm, SuppliedSearch,
-    lowest_eigenpairs as solve_lowest_eigenpairs,
+    Accept, ApplyBlockPreconditioner, ApplyHessian, Control, Error, FireConfig, FireKind,
+    FirePreset, LbfgsH0, LbfgsPairs, LbfgsStep, LineSearch, ManifoldFactor, Method, Oracle,
+    RiemannianManifold, SearchStep, Solver, SpdMetric, StiefelRetraction, StopNorm, SuppliedSearch,
+    lowest_eigenpairs as solve_lowest_eigenpairs, lowest_eigenpairs_precond,
 };
 
 #[pyclass]
@@ -24,13 +25,12 @@ struct Session {
 }
 
 fn control(dt: f64) -> Control {
-    Control {
-        maxiter: 1_000_000,
-        gtol: 1e-12,
-        istep: if dt.is_finite() && dt > 0.0 { dt } else { 1.0 },
-        maxmove: None,
-        stop_norm: StopNorm::MaxAtom,
-    }
+    Control::default()
+        .with_maxiter(1_000_000)
+        .with_gtol(1e-12)
+        .with_istep(if dt.is_finite() && dt > 0.0 { dt } else { 1.0 })
+        .with_maxmove(None)
+        .with_stop_norm(StopNorm::MaxAtom)
 }
 
 fn session_method(kind: &str, memory: usize) -> PyResult<Method> {
@@ -38,9 +38,7 @@ fn session_method(kind: &str, memory: usize) -> PyResult<Method> {
         return Ok(Method::polak_ribiere_plus());
     }
     match Method::from_name(kind) {
-        Ok(Method::Lbfgs { .. }) => Ok(Method::Lbfgs {
-            memory: memory.max(1),
-        }),
+        Ok(Method::Lbfgs { .. }) => Ok(Method::lbfgs_with_memory(memory.max(1))),
         Ok(Method::Newton { .. } | Method::Dogleg) => Err(PyValueError::new_err(format!(
             "method {kind} needs a dense Hessian, which a gradient callback does not supply"
         ))),
@@ -70,22 +68,18 @@ fn value_error(err: Error) -> PyErr {
 
 #[pymethods]
 impl Session {
-    /// `kind` is any gradient-only token of `rgmin::Method::from_name`:
-    /// `lbfgs`, `bfgs`, `sr1`, `sr2`, `adam`, `sd`, `bb`, `fire`,
-    /// `fire2`, `newton-cg`, `newton-pcg`, `eon-cg` and the conjugacy
-    /// names (`pr`, `prp`, `fr`, `hs`, `dy`, `cd`, `hz`, `ls`, `fr-pr`).
+    /// `kind` is any gradient-only token of `Method::from_name`.
     /// `cg` is Polak-Ribiere-Plus. `newton`, `rfo`, `dogleg` and `pso`
     /// are refused: they need a Hessian or a box.
     ///
     /// `max_atom` caps the longest per-atom displacement and `maxmove`
     /// the Euclidean length of the whole step; a non-positive value
     /// leaves that cap off. `h0` is the fixed L-BFGS inverse-Hessian
-    /// scale (ASE's `1 / alpha`). `preset="guenole2020"` and `abc`
-    /// select the FIRE 2.0 parameter set and ABC-FIRE. `accept` is
-    /// `none`, `energy` or `nonmonotone`; `downhill` is `energy`.
-    /// `istep` is the step scale of a method other than FIRE, whose
-    /// scale is `dt`: Adam's step size, which bounds each coordinate's
-    /// move, and the unit step of the others. It defaults to 1.
+    /// scale. `preset="guenole2020"` and `abc` select the FIRE 2.0
+    /// parameter set and ABC-FIRE. `accept` is `none`, `energy` or
+    /// `nonmonotone`; `downhill` is `energy`. `istep` is the step scale
+    /// of a method other than FIRE, whose scale is `dt`.
+    #[allow(clippy::too_many_arguments)]
     #[new]
     #[pyo3(signature = (
         kind,
@@ -137,7 +131,13 @@ impl Session {
         }
         let method = session_method(kind, memory)?;
         let fire = matches!(method, Method::Fire { .. });
-        let fire2 = matches!(method, Method::Fire { kind: FireKind::V2 });
+        let fire2 = matches!(
+            method,
+            Method::Fire {
+                kind: FireKind::V2,
+                ..
+            }
+        );
         let lbfgs = matches!(method, Method::Lbfgs { .. });
         let nlcg = matches!(method, Method::Nlcg { .. });
         let istep = match istep {
@@ -161,9 +161,9 @@ impl Session {
             let step = if wolfe {
                 LbfgsStep::Wolfe
             } else if eon_cap {
-                LbfgsStep::Capped { max_atom }
+                LbfgsStep::capped(max_atom)
             } else {
-                LbfgsStep::Scaled { max_atom }
+                LbfgsStep::scaled(max_atom)
             };
             solver.set_lbfgs_step(step).map_err(value_error)?;
             if h0.is_some() {
@@ -206,11 +206,7 @@ impl Session {
             ));
         }
         if nlcg {
-            solver.set_linesearch(LineSearch::Wolfe {
-                c1: 1e-4,
-                c2: 0.1,
-                maxiter: 20,
-            });
+            solver.set_linesearch(LineSearch::wolfe(1e-4, 0.1, 20));
         }
         if accept != Accept::None {
             solver.set_accept(accept);
@@ -229,8 +225,8 @@ impl Session {
     /// curvature gate declines the pair.
     fn push_pair(&mut self, s: Vec<f64>, y: Vec<f64>) -> bool {
         self.solver.push_pair(
-            ArrayView1::from(s.as_slice()),
-            ArrayView1::from(y.as_slice()),
+            ndarray::ArrayView1::from(s.as_slice()),
+            ndarray::ArrayView1::from(y.as_slice()),
         )
     }
 
@@ -307,6 +303,7 @@ struct LineSearchPy {
 #[pymethods]
 impl LineSearchPy {
     /// `kind` is `brent`, `backtracking`, `goldstein`, or `wolfe`.
+    #[allow(clippy::too_many_arguments)]
     #[new]
     #[pyo3(signature = (kind, x, direction, *, istep=1.0, c1=1e-4, c2=0.9, beta=0.5, maxiter=40, tol=1e-10))]
     fn new(
@@ -326,18 +323,10 @@ impl LineSearchPy {
             ));
         }
         let rule = match kind {
-            "brent" => LineSearch::Brent { maxiter, tol },
-            "backtracking" => LineSearch::Backtracking {
-                c: c1,
-                beta,
-                maxiter,
-            },
-            "goldstein" => LineSearch::Goldstein {
-                c: c1,
-                beta,
-                maxiter,
-            },
-            "wolfe" => LineSearch::Wolfe { c1, c2, maxiter },
+            "brent" => LineSearch::brent(maxiter, tol),
+            "backtracking" => LineSearch::backtracking(c1, beta, maxiter),
+            "goldstein" => LineSearch::goldstein(c1, beta, maxiter),
+            "wolfe" => LineSearch::wolfe(c1, c2, maxiter),
             _ => return Err(PyValueError::new_err(format!("unknown line search {kind}"))),
         };
         Ok(Self {
@@ -383,6 +372,10 @@ fn as_f64_vec(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     Err(PyValueError::new_err("expected a sequence of floats"))
 }
 
+fn direction_error(err: Error) -> PyErr {
+    PyValueError::new_err(err.to_string())
+}
+
 #[pymethods]
 impl LbfgsPairsPy {
     /// `capacity` 0 keeps ten pairs.
@@ -391,7 +384,7 @@ impl LbfgsPairsPy {
     fn new(n: usize, capacity: usize) -> PyResult<Self> {
         LbfgsPairs::new(n, capacity)
             .map(|pairs| Self { pairs })
-            .map_err(value_error)
+            .map_err(direction_error)
     }
 
     fn __len__(&self) -> usize {
@@ -403,13 +396,18 @@ impl LbfgsPairsPy {
     }
 
     /// Store one pair. Returns false when the curvature gate declines it.
-    fn push(&mut self, s: Vec<f64>, y: Vec<f64>) -> PyResult<bool> {
-        self.pairs
-            .push(
-                ArrayView1::from(s.as_slice()),
-                ArrayView1::from(y.as_slice()),
-            )
-            .map_err(value_error)
+    ///
+    /// `rho` replaces `1 / (s · y)` for a pair that passes the gate; a
+    /// `rho` that is not finite and positive declines the pair.
+    #[pyo3(signature = (s, y, rho=None))]
+    fn push(&mut self, s: Vec<f64>, y: Vec<f64>, rho: Option<f64>) -> PyResult<bool> {
+        let s = ArrayView1::from(s.as_slice());
+        let y = ArrayView1::from(y.as_slice());
+        match rho {
+            Some(rho) => self.pairs.push_rho(s, y, rho),
+            None => self.pairs.push(s, y),
+        }
+        .map_err(direction_error)
     }
 
     fn clear(&mut self) {
@@ -464,7 +462,7 @@ impl LbfgsPairsPy {
             let diag = Array1::from_vec(as_f64_vec(&h0)?);
             self.pairs.direction(g, LbfgsH0::Diagonal(diag.view()))
         };
-        computed.map(|d| d.to_vec()).map_err(value_error)
+        computed.map(|d| d.to_vec()).map_err(direction_error)
     }
 }
 
@@ -481,6 +479,27 @@ fn call_objective(callback: &PyObject, x: ArrayView1<f64>) -> PyResult<(f64, Arr
             )));
         }
         Ok((value, Array1::from_vec(gradient)))
+    })
+}
+
+fn call_precond(callback: &PyObject, block: ArrayView2<f64>) -> PyResult<Array2<f64>> {
+    Python::with_gil(|py| {
+        let (n, m) = block.dim();
+        let rows: Vec<Vec<f64>> = (0..n).map(|i| block.row(i).to_vec()).collect();
+        let out = callback.call1(py, (rows,))?;
+        let rows: Vec<Vec<f64>> = out.extract(py)?;
+        if rows.len() != n || rows.iter().any(|row| row.len() != m) {
+            return Err(PyValueError::new_err(
+                "preconditioner must return shape (n, m)",
+            ));
+        }
+        let mut image = Array2::zeros((n, m));
+        for (i, row) in rows.iter().enumerate() {
+            for (j, value) in row.iter().enumerate() {
+                image[(i, j)] = *value;
+            }
+        }
+        Ok(image)
     })
 }
 
@@ -506,6 +525,27 @@ struct PyHvp {
     caught: Arc<Mutex<Option<PyErr>>>,
 }
 
+struct PyPrecond {
+    callback: PyObject,
+    caught: Arc<Mutex<Option<PyErr>>>,
+}
+
+impl ApplyBlockPreconditioner for PyPrecond {
+    fn apply_block_preconditioner(&self, block: ArrayView2<f64>) -> Array2<f64> {
+        match call_precond(&self.callback, block) {
+            Ok(image) => image,
+            Err(err) => {
+                if let Ok(mut guard) = self.caught.lock() {
+                    if guard.is_none() {
+                        *guard = Some(err);
+                    }
+                }
+                Array2::from_elem(block.dim(), f64::NAN)
+            }
+        }
+    }
+}
+
 impl ApplyHessian for PyHvp {
     fn apply_hessian(&self, x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
         match call_hvp(&self.callback, x, v) {
@@ -522,13 +562,18 @@ impl ApplyHessian for PyHvp {
     }
 }
 
+type SolvedPairs = (Vec<f64>, Vec<Vec<f64>>, Vec<f64>, Vec<bool>);
+
 /// Lowest eigenpairs of a symmetric product.
 ///
 /// `hvp(x, v)` returns `H(x) v`. `x0_block` is a list of rows, shape
 /// `(n, k)`. Values come back ascending. Each vector is one column.
-/// A pair that misses `tol` raises `RuntimeError`.
+/// The third list is `||Hv − θv||` and the fourth is the converged flag
+/// of each pair. `precond(block)` applies `T` to a row-major `(n, m)`
+/// block. Omitted, `T` is the identity. This function does not raise
+/// when a pair misses `tol`; the flag says so.
 #[pyfunction]
-#[pyo3(signature = (hvp, x0_block, x=None, *, tol=1e-8, max_iter=None))]
+#[pyo3(signature = (hvp, x0_block, x=None, *, tol=1e-8, max_iter=None, precond=None))]
 fn lowest_eigenpairs(
     py: Python<'_>,
     hvp: PyObject,
@@ -536,7 +581,8 @@ fn lowest_eigenpairs(
     x: Option<Vec<f64>>,
     tol: f64,
     max_iter: Option<usize>,
-) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {
+    precond: Option<PyObject>,
+) -> PyResult<SolvedPairs> {
     let n = x0_block.len();
     let k = x0_block.first().map(|row| row.len()).unwrap_or(0);
     if n == 0 || k == 0 || x0_block.iter().any(|row| row.len() != k) {
@@ -567,10 +613,25 @@ fn lowest_eigenpairs(
         callback: hvp.clone_ref(py),
         caught: caught.clone(),
     };
+    let pre_apply = precond.map(|callback| PyPrecond {
+        callback,
+        caught: caught.clone(),
+    });
     let x_arr = Array1::from_vec(point);
     let solved = py.allow_threads(|| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            solve_lowest_eigenpairs(&apply, x_arr.view(), seed.view(), tol, iterations)
+            if let Some(op) = pre_apply.as_ref() {
+                lowest_eigenpairs_precond(
+                    &apply,
+                    Some(op),
+                    x_arr.view(),
+                    seed.view(),
+                    tol,
+                    iterations,
+                )
+            } else {
+                solve_lowest_eigenpairs(&apply, x_arr.view(), seed.view(), tol, iterations)
+            }
         }))
     });
     if let Some(err) = caught.lock().ok().and_then(|mut guard| guard.take()) {
@@ -581,18 +642,154 @@ fn lowest_eigenpairs(
         Ok(Err(err)) => return Err(PyValueError::new_err(err.to_string())),
         Err(_) => return Err(PyRuntimeError::new_err("lowest eigenpairs panicked")),
     };
-    if found.pairs.iter().any(|pair| !pair.converged) {
-        return Err(PyRuntimeError::new_err(
-            "lowest eigenpairs did not meet the residual tolerance",
-        ));
-    }
     let values = found.pairs.iter().map(|pair| pair.value).collect();
     let columns = found
         .pairs
         .iter()
         .map(|pair| pair.vector.to_vec())
         .collect();
-    Ok((values, columns))
+    let residuals = found.pairs.iter().map(|pair| pair.residual).collect();
+    let converged = found.pairs.iter().map(|pair| pair.converged).collect();
+    Ok((values, columns, residuals, converged))
+}
+
+/// Stiefel, SPD or product manifold over flat column-major lists.
+///
+/// `rgmin.manifold` wraps this class with NumPy arrays.
+#[pyclass(name = "RiemannianManifold", frozen)]
+struct ManifoldPy {
+    inner: RiemannianManifold,
+}
+
+fn manifold_error(err: Error) -> PyErr {
+    PyValueError::new_err(err.to_string())
+}
+
+impl ManifoldPy {
+    fn unary(
+        &self,
+        a: &[f64],
+        b: &[f64],
+        op: impl Fn(&RiemannianManifold, &[f64], &[f64], &mut [f64]) -> rgmin::Result<()>,
+    ) -> PyResult<Vec<f64>> {
+        let mut out = vec![0.0; self.inner.packed_len()];
+        op(&self.inner, a, b, &mut out).map_err(manifold_error)?;
+        Ok(out)
+    }
+}
+
+#[pymethods]
+impl ManifoldPy {
+    /// St(n, p). `retraction` is `qr` or `polar`.
+    #[staticmethod]
+    #[pyo3(signature = (n, p, retraction="qr"))]
+    fn stiefel(n: usize, p: usize, retraction: &str) -> PyResult<Self> {
+        let retraction = match retraction {
+            "qr" => StiefelRetraction::Qr,
+            "polar" => StiefelRetraction::Polar,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "retraction must be 'qr' or 'polar', got '{other}'"
+                )));
+            }
+        };
+        RiemannianManifold::stiefel(n, p, retraction)
+            .map(|inner| Self { inner })
+            .map_err(manifold_error)
+    }
+
+    /// SPD(p). `metric` is `affine_invariant` or `log_euclidean`.
+    #[staticmethod]
+    #[pyo3(signature = (p, metric="affine_invariant"))]
+    fn spd(p: usize, metric: &str) -> PyResult<Self> {
+        let metric = match metric {
+            "affine_invariant" => SpdMetric::AffineInvariant,
+            "log_euclidean" => SpdMetric::LogEuclidean,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "metric must be 'affine_invariant' or 'log_euclidean', got '{other}'"
+                )));
+            }
+        };
+        RiemannianManifold::spd(p, metric)
+            .map(|inner| Self { inner })
+            .map_err(manifold_error)
+    }
+
+    /// Product of the factors in order.
+    #[staticmethod]
+    fn product(factors: Vec<PyRef<'_, Self>>) -> PyResult<Self> {
+        RiemannianManifold::product(factors.iter().map(|f| f.inner.clone()))
+            .map(|inner| Self { inner })
+            .map_err(manifold_error)
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.packed_len()
+    }
+
+    /// `(kind, rows, columns)` of each factor; kind is `stiefel` or `spd`.
+    fn factors(&self) -> Vec<(&'static str, usize, usize)> {
+        self.inner
+            .factors()
+            .iter()
+            .map(|f| {
+                let (rows, cols) = f.shape();
+                let kind = match f {
+                    ManifoldFactor::Stiefel { .. } => "stiefel",
+                    ManifoldFactor::Spd { .. } => "spd",
+                };
+                (kind, rows, cols)
+            })
+            .collect()
+    }
+
+    fn project(&self, x: Vec<f64>, v: Vec<f64>) -> PyResult<Vec<f64>> {
+        self.unary(&x, &v, RiemannianManifold::project)
+    }
+
+    fn egrad_to_rgrad(&self, x: Vec<f64>, egrad: Vec<f64>) -> PyResult<Vec<f64>> {
+        self.unary(&x, &egrad, RiemannianManifold::egrad_to_rgrad)
+    }
+
+    fn retract(&self, x: Vec<f64>, v: Vec<f64>) -> PyResult<Vec<f64>> {
+        self.unary(&x, &v, RiemannianManifold::retract)
+    }
+
+    fn exp(&self, x: Vec<f64>, v: Vec<f64>) -> PyResult<Vec<f64>> {
+        self.unary(&x, &v, RiemannianManifold::exp)
+    }
+
+    fn log(&self, x: Vec<f64>, y: Vec<f64>) -> PyResult<Vec<f64>> {
+        self.unary(&x, &y, RiemannianManifold::log)
+    }
+
+    fn transport(&self, x_from: Vec<f64>, x_to: Vec<f64>, v: Vec<f64>) -> PyResult<Vec<f64>> {
+        let mut out = vec![0.0; self.inner.packed_len()];
+        self.inner
+            .transport(&x_from, &x_to, &v, &mut out)
+            .map_err(manifold_error)?;
+        Ok(out)
+    }
+
+    fn inner(&self, x: Vec<f64>, u: Vec<f64>, v: Vec<f64>) -> PyResult<f64> {
+        self.inner.inner(&x, &u, &v).map_err(manifold_error)
+    }
+
+    /// `(rgrad, x_next)` for one step of size `t`.
+    fn gradient_step(
+        &self,
+        x: Vec<f64>,
+        egrad: Vec<f64>,
+        t: f64,
+    ) -> PyResult<(Vec<f64>, Vec<f64>)> {
+        let len = self.inner.packed_len();
+        let (mut rgrad, mut next) = (vec![0.0; len], vec![0.0; len]);
+        self.inner
+            .gradient_step(&x, &egrad, t, &mut rgrad, &mut next)
+            .map_err(manifold_error)?;
+        Ok((rgrad, next))
+    }
 }
 
 #[pymodule]
@@ -600,6 +797,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Session>()?;
     m.add_class::<LineSearchPy>()?;
     m.add_class::<LbfgsPairsPy>()?;
+    m.add_class::<ManifoldPy>()?;
     m.add_function(wrap_pyfunction!(lowest_eigenpairs, m)?)?;
     m.add("version", env!("CARGO_PKG_VERSION"))?;
     Ok(())

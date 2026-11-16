@@ -14,9 +14,12 @@
 //! The buffers live for the whole solve. A step does not allocate.
 
 /// Controls for [`minimize_eon_cg`].
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct EonCg {
-    /// Longest per-atom displacement, eOn `max_move`.
+    /// Longest per-atom displacement, eOn `max_move`. A non-positive or
+    /// non-finite value is no cap; a step along non-positive curvature
+    /// then has length [`crate::EON_MAX_MOVE`].
     pub max_move: f64,
     /// Stop when the selected gradient norm is below this value.
     pub gtol: f64,
@@ -41,6 +44,14 @@ pub struct EonCg {
     pub atom_only: bool,
 }
 
+with_setters!(EonCg {
+    with_max_move => max_move: val f64,
+    with_gtol => gtol: val f64,
+    with_max_iter => max_iter: val usize,
+    with_cluster => cluster: val bool,
+    with_atom_only => atom_only: val bool,
+});
+
 impl Default for EonCg {
     fn default() -> Self {
         Self {
@@ -54,6 +65,7 @@ impl Default for EonCg {
 }
 
 /// Result of [`minimize_eon_cg`].
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct EonCgReport {
     /// Energy at the returned point.
@@ -62,7 +74,8 @@ pub struct EonCgReport {
     pub grad: f64,
     /// Force evaluations, including curvature probes.
     pub evals: usize,
-    /// The gradient test was met.
+    /// The gradient test holds at the returned point, including a start
+    /// that meets it with no iteration and a last iteration that reaches it.
     pub converged: bool,
 }
 
@@ -124,12 +137,11 @@ where
     let mut g_probe = vec![0.0; n];
     let mut energy = fill(x, &mut g);
     let mut evals = 1usize;
-    let mut converged = false;
     let fd = crate::EON_FINITE_DIFFERENCE;
+    let cap = Some(opts.max_move).filter(|&cap| crate::step::binding(cap));
     for _ in 0..opts.max_iter {
         let gnorm = grad_norm(&g, opts.cluster);
         if gnorm < opts.gtol {
-            converged = true;
             break;
         }
         for i in 0..n {
@@ -165,26 +177,32 @@ where
             p2 += -g_probe[i] * u;
         }
         let curv = (p1 - p2) / fd;
-        let mut step = opts.max_move;
-        if curv > 0.0 && curv.is_finite() {
-            step = p1 / curv;
-        }
-        // `std::copysign(max_move, step)`: magnitude of the cap, sign
-        // of the model step. `atom_only` leaves a long positive model
-        // step for the per-atom cap. A negative length is still clipped.
-        if step < -opts.max_move {
-            step = -opts.max_move;
-        } else if step > opts.max_move && !opts.atom_only {
-            step = opts.max_move;
+        let modelled = curv > 0.0 && curv.is_finite();
+        let mut step = if modelled {
+            p1 / curv
+        } else {
+            cap.unwrap_or(crate::EON_MAX_MOVE)
+        };
+        if let Some(cap) = cap {
+            // `std::copysign(max_move, step)`: magnitude of the cap, sign
+            // of the model step. `atom_only` leaves a long positive model
+            // step for the per-atom cap. A negative length is still clipped.
+            if step < -cap {
+                step = -cap;
+            } else if step > cap && !opts.atom_only {
+                step = cap;
+            }
         }
         for d in &mut direction {
             *d *= inv * step;
         }
-        let motion = max_atom(&direction);
-        if motion > opts.max_move && motion > 0.0 {
-            let s = opts.max_move / motion;
-            for v in &mut direction {
-                *v *= s;
+        if let Some(cap) = cap {
+            let motion = max_atom(&direction);
+            if motion > cap && motion > 0.0 {
+                let s = cap / motion;
+                for v in &mut direction {
+                    *v *= s;
+                }
             }
         }
         for i in 0..n {
@@ -192,16 +210,17 @@ where
         }
         energy = fill(x, &mut g);
         evals += 1;
-        if step >= opts.max_move {
+        if cap.map_or(!modelled, |cap| step >= cap) {
             direction_old.fill(0.0);
             force_old.fill(0.0);
         }
     }
+    let grad = grad_norm(&g, opts.cluster);
     EonCgReport {
         energy,
-        grad: grad_norm(&g, opts.cluster),
+        grad,
         evals,
-        converged,
+        converged: grad < opts.gtol,
     }
 }
 
@@ -343,5 +362,43 @@ mod tests {
         let rep = minimize_eon_cg(&mut x, rosen, &opts);
         assert!(rep.converged, "{rep:?} x {x:?}");
         assert_eq!(rep.evals, 297, "evals {}", rep.evals);
+    }
+
+    fn spring(x: &[f64], g: &mut [f64]) -> f64 {
+        g.copy_from_slice(x);
+        0.5 * dot(x, x)
+    }
+
+    /// The report reads the gradient it returns. A stationary start with
+    /// no iteration, and a last iteration that lands on the minimum,
+    /// both meet the test; before, only a test at the top of a further
+    /// iteration set `converged`.
+    #[test]
+    fn converged_reads_the_returned_gradient() {
+        let mut x = [0.0, 0.0, 0.0];
+        let opts = EonCg {
+            max_iter: 0,
+            gtol: 1e-8,
+            ..EonCg::default()
+        };
+        let rep = minimize_eon_cg(&mut x, spring, &opts);
+        assert_eq!(rep.grad, 0.0);
+        assert!(rep.converged, "{rep:?}");
+
+        let mut x = [0.1, 0.0, 0.0];
+        let opts = EonCg {
+            max_iter: 1,
+            gtol: 1e-8,
+            max_move: 0.2,
+            ..EonCg::default()
+        };
+        let rep = minimize_eon_cg(&mut x, spring, &opts);
+        assert!(rep.grad < 1e-8, "{rep:?} x {x:?}");
+        assert!(rep.converged, "{rep:?}");
+
+        let mut x = [1.0, 0.0, 0.0];
+        let rep = minimize_eon_cg(&mut x, spring, &opts);
+        assert!(rep.grad >= 1e-8, "{rep:?}");
+        assert!(!rep.converged, "{rep:?}");
     }
 }

@@ -501,11 +501,7 @@ fn recentring_the_pivot_moves_the_representation_not_the_plane() {
 #[test]
 fn a_session_moves_to_the_gauge_between_steps() {
     let energy = PlaneEnergy::new();
-    let control = Control {
-        maxiter: 500,
-        gtol: 1e-7,
-        ..Default::default()
-    };
+    let control = Control::default().with_maxiter(500).with_gtol(1e-7);
     let mut solver = Solver::new(Method::lbfgs(), control, D + 1);
     solver
         .set_product(weighted_factors(block_weight()))

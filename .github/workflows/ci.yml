@@ -2,9 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches:
+      - main
+      - develop
+      - "feat/**"
+      - "fix/**"
+      - "ci/**"
+      - "perf/**"
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,12 +40,26 @@ jobs:
         include:
           - name: default
             args: ""
+            readcon: "0"
           - name: capi
             args: --features capi
+            readcon: "0"
           - name: highs
             args: --features highs
+            readcon: "0"
+          # The C session waist with HiGHS: rgmin_solver_set_highs_callback
+          # and the other highs-gated C entries compile only here.
+          - name: capi-highs
+            args: --features capi,highs
+            readcon: "0"
+          # Named features, not `--all-features`. The `readcon` feature
+          # is a separate row so this staticlib does not link it.
           - name: all-features
-            args: --all-features
+            args: --features capi,par,highs,slepc,primme,chase,libkrylov
+            readcon: "0"
+          - name: readcon
+            args: --features readcon
+            readcon: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -47,7 +68,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Python reference dependencies
         run: python -m pip install -q numpy scipy
-      - run: cargo build --locked ${{ matrix.args }}
+      - name: Build the libraries the C header tests link
+        run: cargo build --locked ${{ matrix.args }}
+      - name: Staticlib readcon link
+        run: |
+          lib=target/debug/librgmin.a
+          # `readcon_core` is the crate. A bare `readcon` match also hits
+          # `ThreadConfig` inside matrixmultiply.
+          if [ "${{ matrix.readcon }}" = "1" ]; then
+            nm -a "$lib" | grep -q readcon_core
+          elif nm -a "$lib" | grep -E 'readcon_core|readcon-core'; then
+            echo "this row links readcon"
+            exit 1
+          fi
       - run: cargo test --locked ${{ matrix.args }}
       - name: Public docs and C ABI names
         if: matrix.name == 'default'
@@ -60,6 +93,40 @@ jobs:
           for ex in tutorial_lbfgs tutorial_fire tutorial_cg tutorial_bfgs tutorial_newton tutorial_scg tutorial_linesearch tutorial_lbfgs_direction; do
             cargo run --locked --quiet --example "$ex"
           done
+
+  # rustc 1.93 and 1.94 ship LLVM 21, whose loop vectorizer segfaulted on
+  # an f64::max reduction in session/drive.rs. Debug builds skip it.
+  # `--all-features` on this line links SLEPc, PRIMME, ChASE and libkrylov,
+  # so the job builds the default feature set, which contains scale_cap.
+  release:
+    name: cargo build and test --release (${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [1.93.0, 1.94.1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Python reference dependencies
+        run: python -m pip install -q numpy scipy
+      - run: cargo build --locked --release
+      - run: cargo test --locked --release --lib
+
+  changelog:
+    name: towncrier fragments
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -q towncrier
+      - run: python3 scripts/check_changelog.py
+      - run: towncrier build --draft --version 0.0.0
 
   python:
     name: ASE drop-in
@@ -81,6 +148,8 @@ jobs:
       - run: python -m pytest python/tests -q --import-mode=importlib
       - name: Tutorial example
         run: python examples/tutorial_lowest_eigenpairs.py
+      - name: Manifold tutorial
+        run: python examples/tutorial_manifold_fit.py
 
   strong-scale:
     name: strong_scale smoke
@@ -100,7 +169,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [1.88.0, stable]
-        name: [default, capi, highs, all-features]
+        name: [default, capi, highs, capi-highs, all-features]
         include:
           - name: default
             args: ""
@@ -108,8 +177,10 @@ jobs:
             args: --features capi
           - name: highs
             args: --features highs
+          - name: capi-highs
+            args: --features capi,highs
           - name: all-features
-            args: --all-features
+            args: --features capi,par,highs,slepc,primme,chase,libkrylov
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -118,6 +189,179 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --locked --all-targets ${{ matrix.args }} -- -D warnings
+
+  # The all-features rows above find no backend libraries, so each
+  # eigensolver backend there is the EigenUnavailable stub. This row links
+  # SLEPc from conda-forge and PRIMME, ChASE and libkrylov built from
+  # source, and fails when any of them stays a stub. The login shell
+  # activates the environment, so its python3 runs the NumPy and SciPy
+  # reference scripts that the tests spawn.
+  backends:
+    name: real backends (SLEPc, PRIMME, ChASE, libkrylov)
+    runs-on: ubuntu-latest
+    env:
+      FEATURES: capi,par,highs,slepc,primme,chase,libkrylov
+      BACKENDS_PREFIX: ${{ github.workspace }}/.backends
+      OMPI_MCA_rmaps_base_oversubscribe: "1"
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: backends
+          create-args: >-
+            petsc=3.26.1=real_*
+            slepc=3.26.1=real_*
+            openmpi=5.0.11
+            scalapack=2.2.0
+            openblas=0.3.34
+            libblas=*=*openblas
+            liblapack=*=*openblas
+            gcc=16.2.0
+            gxx=16.2.0
+            gfortran=16.2.0
+            cmake=4.5.0
+            make=4.4.1
+            pkg-config=0.29.2
+            python=3.12
+            numpy=2.5.4
+            scipy=1.18.1
+          condarc: |
+            channels:
+              - conda-forge
+            channel_priority: strict
+          cache-environment: true
+      - uses: actions/cache@v4
+        id: source-backends
+        with:
+          path: .backends
+          key: backends-${{ runner.os }}-primme3.2.3-chase1.7.4-libkrylov1.1.0-gfortran12.4.0-openmpi5.0.11-${{ hashFiles('scripts/build_ci_backends.sh') }}
+      - name: gfortran 12 for libkrylov
+        if: steps.source-backends.outputs.cache-hit != 'true'
+        run: >-
+          micromamba create -y -q -p "$RUNNER_TEMP/gf12" -c conda-forge --override-channels
+          gfortran=12.4.0 gcc=12.4.0 cmake=4.5.0 make=4.4.1 openblas=0.3.34
+          "libblas=*=*openblas" "liblapack=*=*openblas"
+      - name: Build PRIMME, ChASE and libkrylov
+        if: steps.source-backends.outputs.cache-hit != 'true'
+        run: GF12_PREFIX="$RUNNER_TEMP/gf12" scripts/build_ci_backends.sh "$BACKENDS_PREFIX" "$RUNNER_TEMP/backend-src"
+      - name: Backend search paths
+        run: |
+          {
+            echo "PRIMME_DIR=$BACKENDS_PREFIX"
+            echo "CHASE_DIR=$BACKENDS_PREFIX"
+            echo "LIBKRYLOV_DIR=$BACKENDS_PREFIX"
+            echo "PKG_CONFIG_PATH=$BACKENDS_PREFIX/lib/pkgconfig:$CONDA_PREFIX/lib/pkgconfig"
+            echo "LD_LIBRARY_PATH=$BACKENDS_PREFIX/lib:$CONDA_PREFIX/lib"
+          } >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          components: clippy
+      - name: Stable clippy
+        run: rustup toolchain install stable --profile minimal --component clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and require every backend
+        run: |
+          cargo build --locked --features "$FEATURES" --message-format=json > build.json
+          id=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "rgmin") | .id')
+          cfgs=$(jq -r --arg id "$id" 'select(.reason == "build-script-executed" and .package_id == $id) | .cfgs[]' build.json)
+          echo "$cfgs"
+          for backend in slepc primme chase libkrylov; do
+            grep -qx "rgmin_has_$backend" <<< "$cfgs" || { echo "rgmin_has_$backend is not set"; exit 1; }
+          done
+      - run: cargo test --locked --features "$FEATURES"
+      - run: cargo clippy --locked --all-targets --features "$FEATURES" -- -D warnings
+      - run: cargo +stable clippy --locked --all-targets --features "$FEATURES" -- -D warnings
+
+  # Forcing tests. A clone this runner cannot execute is "not exercised"
+  # in the test log. The scalar path is always forced.
+  isa:
+    name: isa forcing (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-x86_64-1.88
+            os: ubuntu-latest
+            toolchain: 1.88.0
+          - name: ubuntu-x86_64-1.89
+            os: ubuntu-latest
+            toolchain: 1.89.0
+          - name: ubuntu-arm64-1.88
+            os: ubuntu-24.04-arm
+            toolchain: 1.88.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+      - name: CPU flags
+        run: |
+          grep -m1 flags /proc/cpuinfo || true
+          lscpu || true
+          sysctl -n machdep.cpu.brand_string || true
+      - name: Force every compiled clone, serial
+        run: cargo test --locked --features simd --test vecops_isa -- --nocapture
+      - name: Force every compiled clone, par
+        run: cargo test --locked --features simd,par --test vecops_isa -- --nocapture
+
+  # Unstripped simd libraries for the static ISA audit.
+  # LTO is off so each multiversion clone keeps its own symbol.
+  # 1.89 emits the avx512f clone. That is not a target-cpu flag.
+  isa-build:
+    name: unstripped simd libs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          targets: aarch64-unknown-linux-gnu
+      - name: aarch64 linker
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: CPU flags
+        run: |
+          grep -m1 flags /proc/cpuinfo || true
+          lscpu || true
+      - name: x86_64 release library
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "off"
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+          CARGO_PROFILE_RELEASE_STRIP: none
+        run: cargo build --release --locked --features simd
+      - name: aarch64 release library
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "off"
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+          CARGO_PROFILE_RELEASE_STRIP: none
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --locked --features simd --target aarch64-unknown-linux-gnu
+      - name: Stage the rgmin object files
+        run: |
+          mkdir -p isa-staging/x86_64 isa-staging/aarch64
+          rm -rf isa-extract
+          mkdir -p isa-extract/x86 isa-extract/arm
+          (cd isa-extract/x86 && ar x "$GITHUB_WORKSPACE/target/release/librgmin.a")
+          (cd isa-extract/arm && ar x "$GITHUB_WORKSPACE/target/aarch64-unknown-linux-gnu/release/librgmin.a")
+          cp isa-extract/x86/rgmin*.o isa-staging/x86_64/
+          cp isa-extract/arm/rgmin*.o isa-staging/aarch64/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unstripped-libs
+          path: isa-staging/
+
+  isa-audit:
+    name: isa audit
+    needs: isa-build
+    uses: OmniPotentRPC/rgpot/.github/workflows/isa-audit.yml@06638f2ece83b12731b387ba819b67dc2151556b
+    with:
+      artifact-name: unstripped-libs
+      allow-file: isa-allow.toml
 
   cinstall:
     name: cargo cinstall
@@ -136,3 +380,51 @@ jobs:
           cargo +1.89.0 install cargo-c --locked --version 0.10.17+cargo-0.92.0
       - name: Install into a prefix and compile C and C++
         run: tests/cinstall/smoke.sh
+
+  # Dispatch only. Records the Pt7 EMT digest that PT7_EMT_WINDOWS pins:
+  # the wheel tests compare it on Windows, and no other runner can
+  # produce it. The pin is the "observed" field of the uploaded record.
+  windows-pt7-digest:
+    name: Windows Pt7 digest (Python ${{ matrix.python }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.14t"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build and install the wheel
+        run: python -m pip install ".[test]"
+      - name: Pt7 golden
+        env:
+          RGMIN_PT7_DIGEST_OUT: ${{ runner.temp }}/pt7-digest.json
+        working-directory: ${{ runner.temp }}
+        run: python -m pytest -q "$GITHUB_WORKSPACE/tests/python/test_invariance.py" -k test_pt7_emt_golden --timeout=900
+      - name: Digest summary
+        if: always()
+        run: |
+          record="$RUNNER_TEMP/pt7-digest.json"
+          if [ -f "$record" ]; then
+            {
+              echo "### Pt7 EMT digest, Python ${{ matrix.python }}"
+              echo '```json'
+              cat "$record"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pt7-digest-windows-py${{ matrix.python }}
+          path: ${{ runner.temp }}/pt7-digest.json
+          if-no-files-found: error

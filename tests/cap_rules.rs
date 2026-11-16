@@ -17,15 +17,9 @@ fn spring(x: ArrayView1<f64>, g: &mut Array1<f64>) -> f64 {
 }
 
 fn one_step(euclidean: bool) -> Array1<f64> {
-    let control = Control {
-        maxiter: 1,
-        gtol: 1e-18,
-        ..Control::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: 8 }, control, 6);
-    solver
-        .set_lbfgs_step(LbfgsStep::Capped { max_atom: 0.2 })
-        .unwrap();
+    let control = Control::default().with_maxiter(1).with_gtol(1e-18);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(8), control, 6);
+    solver.set_lbfgs_step(LbfgsStep::capped(0.2)).unwrap();
     solver.set_lbfgs_euclidean_cap(euclidean).unwrap();
     let mut x = array![1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     solver.run_fill(&mut x, |v, buf| spring(v, buf)).unwrap();
@@ -48,15 +42,9 @@ fn the_euclidean_cap_bounds_the_whole_step() {
 
 #[test]
 fn the_trust_radius_still_descends_a_quadratic() {
-    let control = Control {
-        maxiter: 40,
-        gtol: 1e-8,
-        ..Control::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: 8 }, control, 3);
-    solver
-        .set_lbfgs_step(LbfgsStep::Capped { max_atom: 0.2 })
-        .unwrap();
+    let control = Control::default().with_maxiter(40).with_gtol(1e-8);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(8), control, 3);
+    solver.set_lbfgs_step(LbfgsStep::capped(0.2)).unwrap();
     solver.set_lbfgs_trust(true).unwrap();
     let mut x = array![1.0, 1.0, 1.0];
     let mut energy = 0.0;

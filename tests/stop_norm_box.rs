@@ -17,14 +17,12 @@ fn box_stop_measures_the_projected_gradient() {
         (StopNorm::Inf, Some(0.4)),
     ] {
         let obj = Oracle::unbounded(9, |x: ArrayView1<f64>| (0.5 * x.dot(&x), x.to_owned()));
-        let control = Control {
-            maxiter: 10,
-            gtol: 0.55,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        };
-        let mut s = Solver::new(Method::Lbfgs { memory: 5 }, control, 9);
+        let control = Control::default()
+            .with_maxiter(10)
+            .with_gtol(0.55)
+            .with_istep(0.1)
+            .with_maxmove(None);
+        let mut s = Solver::new(Method::lbfgs_with_memory(5), control, 9);
         s.set_highs(true);
         assert!(s.set_box(Some(lo.clone()), None));
         s.set_stop_norm(norm);

@@ -7,65 +7,12 @@ Unreleased
 
 ~~~~~~~~~~
 
-``ManifoldKind::Product`` is the weighted Riemannian product of other kinds, with the metric ``g = sum_i w_i g_i`` for weights ``w_i > 0``.
-``ManifoldKind::product`` builds it from ``ProductFactor`` values, each a kind, a packed length and a weight, and ``ManifoldKind::power`` is manopt's ``powermanifold``; ``Solver::set_product`` and ``Solver::set_power`` select them.
-Projection, retraction, transport, exponential, logarithm and parallel transport act per factor, a factor's gradient and Hessian are divided by its weight, and the distance is ``sqrt(sum_i w_i d_i^2)``.
-A session steps a weighted product in the chart ``z_i = sqrt(w_i) x_i``, so steepest descent, L-BFGS and the Newton-CG trust region run on it unchanged, and the iterates do not depend on the unit of a factor whose weight carries that unit.
-The exponential preconditioner, the Lindh model, ``set_project_rigid`` and the HiGHS box read raw coordinates and return ``Error::ProductChart`` on such a product.
-``MwRigid`` and ``RigidQuotient`` factors project with the session's masses and periodic flag.
-``explanation/product-manifold`` derives the geometry and compares it with manopt, Manopt.jl and Manifolds.jl, pymanopt and geomstats.
+.. Unreleased notes live in docs/newsfragments/.
+   towncrier build writes them into CHANGELOG.md.
+   This section stays empty so an entry is not listed twice.
 
-``Manifold`` gains manopt's ``inner``, ``norm``, ``ehess2rhess``, ``exp``, ``log``, ``dist``, ``parallel_transport``, ``parallel_transport_along``, ``transport_is_isometric`` and ``typical_dist``.
-Their defaults keep every kind as it was: the Euclidean metric, and ``None`` where no closed form is supplied.
-Every kind but the multinomial and rigid kinds supplies its Riemannian Hessian, the sphere family, SO(3), SE(3), ``Positive`` and the linear kinds also their geodesics, and ``Positive`` and the doubly stochastic kinds expose the metrics their ``egrad2rgrad`` already used.
-``reference/product-manifold`` lists what each kind supplies.
-
-``rtr::minimize_rtr`` is the Riemannian trust region of Absil, Baker and Gallivan with Steihaug-Toint truncated CG, measured in ``Manifold::inner``.
-Its Hessian action is ``ehess2rhess``, Weingarten term included, where the kind supplies one, and the projected Euclidean action otherwise.
-``RtrOptions`` takes the defaults of manopt's ``trustregions``, and ``RtrMin`` returns the point, the value, the gradient norm and the outer, accepted and inner iteration counts.
-``rtr::truncated_cg_riemannian`` is one inner solve in the manifold metric, for a caller that accepts or rejects steps itself with ``RtrRadius``.
-``truncated_cg_projected`` keeps the Euclidean inner product.
-
-``ManifoldKind::sphere_within(basis)`` is the unit sphere of the span of the rows of ``basis``, and ``ManifoldKind::sphere_excluding(basis)`` the unit sphere orthogonal to them, such as a unit normal that leaves a centre of mass in place.
-Both are ``SubspaceSphere``, with the projection ``P_U - x x^T``, the metric-projection retraction, and the sphere's exponential, logarithm, distance, parallel transport and Hessian.
-``Error::SubspaceBasis`` reports an empty, non-finite or dependent basis, or excluded rows that span the whole space.
-
-``ProductFactor::with_metric`` gives a factor a caller's ``TangentMetric`` ``G_x``, self-adjoint and positive definite on each tangent space, so that its part of the product metric is ``w g(u, G_x v)``.
-``egrad2rgrad`` returns the factor's gradient times ``(w G_x)^{-1}``, and ``minimize_rtr`` then has the iterates of manopt's truncated CG preconditioned by ``(w G_x)^{-1}``.
-Such a product has no exponential, logarithm, distance or parallel transport, and sessions refuse it with ``Error::ProductTangentMetric``.
-
-``rtr::minimize_rtr_gauged`` calls a gauge after every accepted step: a map to another representation of the same point, such as the pivot of a plane moved along the plane.
-The step is accepted on the value before the move, and the moved point is evaluated afresh.
-``Solver::run_gauged`` calls the gauge before every session step but the first and rebases the session when it moves the point.
-
-``rgmin_solver_set_power(solver, factor, block, count)`` is ``Solver::set_power`` for the manifold tokens without shape parameters.
-``xts.h`` aliases it and ``rgmin::Solver::set_power`` wraps it. ``abi_minor`` 41.
-Weighted products, subspace spheres, tangent metrics and gauges stay Rust only.
-
-``ManifoldKind`` is no longer ``Copy``, since a product and a subspace sphere share their geometry through an ``Arc``; clone it where a copy was implied.
-``stiefel_p`` and ``as_str`` take ``&self``, and the new ``Product`` and ``SubspaceSphere`` variants extend exhaustive matches on the kind.
-
-An unconstrained Newton-CG or Newton-PCG ``Solver::run`` ends with the Riemannian gradient in its report.
-It reported the Euclidean gradient that its difference products keep, so on a curved manifold a run that stopped on a vanishing Riemannian gradient reported the normal part of the Euclidean one.
-
-The documentation of ``ManifoldKind::Spd`` and ``Spd`` names the Frobenius metric that the kind measures in.
-It said affine-invariant, the metric of manopt's ``sympositivedefinitefactory``, whose retraction the kind keeps.
-
-``Lbfgs::minimize_on`` and ``Lbfgs::minimize_box_on`` offer each accepted iterate to a callback as the iteration, the value and the coordinates.
-Returning false ends the run at that point, as ``minimize_watched`` does.
-A caller can project those coordinates, a bond length or a height above a slab, without the solver storing that map.
-``minimize_watched`` and ``minimize_box_watched`` keep their two-argument callbacks and call these methods.
-A start outside the box is clipped before the first ``minimize_box_on`` call.
-
-``rgmin.optimize`` is a drop-in for ``ase.optimize``.
-``BFGS``, ``LBFGS``, ``LBFGSLineSearch``, ``FIRE`` and ``FIRE2`` take ASE 3.29's constructors and drive ``self.optimizable``, so ASE's cell filters and constraints work.
-On the same start ``BFGS``, ``LBFGS`` and ``FIRE`` reproduce ASE's steps, force calls, log lines and trajectory frames.
-Restart files replay the recorded evaluations without calling the calculator.
-``SR1``, ``SR2``, ``SteepestDescent``, ``BarzilaiBorwein``, ``Adam``, the nonlinear CG family, ``EonCG``, ``NewtonCG`` and ``NewtonPCG`` cover the other session methods.
-``howto/ase-migration`` lists the differences from ASE, each with a test, and ``benches/ase_optimize.py`` compares both packages on EMT clusters and slabs, LJ38 and a ``FrechetCellFilter`` vacancy cell.
-
-``rgmin.optimize.BFGS`` starts from ASE's ``alpha * I`` instead of the identity, ``LBFGS`` keeps ASE's fixed ``H0 = I / alpha`` instead of the Nocedal-Wright scale, and ``FIRE`` is ASE's Euler step with a Euclidean ``maxstep`` instead of a per-atom cap.
-``LBFGS(eon_cap=True)`` still selects the crate's default step.
+0.6.0 (2026-11-13)
+~~~~~~~~~~~~~~~~~~
 
 ``lowest_eigenpairs`` is block LOBPCG for the k lowest eigenpairs of a symmetric product (Knyazev 2001).
 The seed is an n-by-k block, and each pair reports its residual.
@@ -77,42 +24,12 @@ Opt-in ``Lbfgs::minimize_box`` and ``Lbfgs::minimize_box_watched`` relax inside 
 Each direction ends at the subspace minimizer from the Cauchy point, and the strong Wolfe search stops at the box.
 ``Lbfgs::minimize`` keeps the eOn cap. ``LbfgsStep::Wolfe`` remains opt-in.
 
-Opt-in ``Lbfgs::approx_wolfe`` stops the strong Wolfe search of ``Lbfgs::minimize_box``, and of ``minimize`` when ``LbfgsStep::Wolfe`` is selected, at the rounding floor of the value.
-With a positive value the search accepts a trial at most ``approx_wolfe`` times abs(f) above the start when the trial meets the strong curvature test, the approximate Wolfe stop of Hager and Zhang 2005.
-Otherwise it places that trial by the sign of its slope.
-At the default of zero the search is strict. The eOn cap does not consult it.
-On LJ75, with the Wolfe search, ``approx_wolfe = 1e-12`` ends all 400 relaxations on the ``gtol`` test, against 6 without it, and they need 278.6 evaluations per relaxation against 371.2.
-A reused solver can then take a much too long first step after a large perturbation, so the test stays off by default.
-
-The L-BFGS two-loop reuses its length-n buffers after the first use.
-The curvature pairs and the line-search trial do the same.
-A warm ``Lbfgs::minimize`` iteration allocates only inside the objective.
-The arithmetic is unchanged.
-
-A steady ``Solver::step`` reuses its coordinate and gradient buffers.
-This holds for L-BFGS with ``Accept::Energy`` and for FIRE 2.0.
-The first step at a length still allocates the scratch.
-Later steps do not.
-The flat FIRE step writes the velocity update in one pass.
-It writes the mix and the displacement in one pass each.
-Guenole FIRE 2.0 does the same with or without the per-atom cap.
-It does the same with or without ABC.
-The recycle pool keeps ``2 * max_pairs`` buffers of one length.
-A dot at n of at least 65536 is a fixed-chunk pairwise sum.
-That sum is the same on every thread count.
-Each two-loop direction is one team sweep.
-The final negation is folded into the last update.
-
 An interior point skips the bounds clip, and a Euclidean session keeps the gradient it already owns.
 Polak-Ribiere forms ``g · (g - g_old)`` in the dot product.
 A backtracking line search keeps its lowest trial without copying that vector.
 FIRE 2.0 does not build the post-step force, which only FIRE 1.0 mixes.
 L-BFGS reuses the curvature dots stored with each pair.
 The Morse-chain iterates are unchanged.
-
-Opt-in ``Solver::set_lbfgs_trust_radius`` truncates the session L-BFGS ray at a Burdakov radius (Algorithm 1 of Burdakov, Gong, Zikrin and Yuan 2017).
-It is off by default. ``Solver::set_lbfgs_trust`` remains the eOn Newton-model radius, also off by default.
-The capped step stays the default. C: ``rgmin_solver_set_lbfgs_trust`` and ``rgmin_solver_lbfgs_trust_radius``. ``abi_minor`` 40.
 
 ``Lbfgs::ftol`` is the opt-in relative-decrease stop of L-BFGS-B, and its default of zero turns it off.
 A line-search step from ``f_k`` to ``f_{k+1}`` ends ``minimize``, ``minimize_watched`` and ``minimize_recognized`` when ``f_k - f_{k+1} <= ftol * max(|f_k|, |f_{k+1}|, 1)``.

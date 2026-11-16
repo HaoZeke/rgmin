@@ -22,12 +22,23 @@ The curvature condition demands abs(phi'(a)) <= c2 abs(phi'(0)) with
 c1 < c2 < 1: the slope must have flattened enough that the quasi-Newton
 update built from this step carries curvature information. Nocedal and
 Wright's algorithms 3.5 and 3.6 (the bracket and the zoom) find a point
-satisfying both, and ~src/linesearch/zoom.rs~ is a direct
-implementation.
+satisfying both.
+
+Near a minimum the decrease test can fail on rounding alone. ~Lbfgs::approx_wolfe~,
+zero by default, is a fraction of abs(f) at the start of a strong Wolfe search.
+A positive value accepts a trial inside that band when the strong curvature
+test holds (Hager and Zhang 2005, stop T2) and places a trial inside the band
+that fails the curvature test by the sign of its slope. The eOn cap does not
+consult it. ~LbfgsStep::Wolfe~ and ~Lbfgs::minimize_box~ do. ~src/linesearch/known.rs~ implements them from a
+point whose value and gradient the caller already holds: the start is
+never re-evaluated, the accepted point comes back with its gradient,
+and a displacement cap bounds every trial (~alpha_max~).
+~src/linesearch/zoom.rs~ keeps a standalone bisection zoom.
 
 * The bracket and the zoom
 
-The outer loop (~wolfe_search~) expands a trial step until it either
+The outer loop (~known.rs::wolfe~) expands a trial step, within
+More-Thuente's bounds of 1.1 to 4 times the last increment, until it either
 satisfies both conditions, overshoots (value above the Armijo line, or
 above the previous trial), or the slope turns nonnegative. Overshoot
 and slope-reversal both certify that a Wolfe point lies between the
@@ -81,6 +92,27 @@ requested tolerance regardless of what the cubic does. The Rust test
 ~tests/lbfgs_state.rs~ holds the crate to that budget on a quadratic
 bowl.
 
+* When the interpolant is not used
+
+The cubic and the quadratic model the objective on the bracket
+$[\ell, h]$ from $\varphi(\ell)$, $\varphi'(\ell)$, $\varphi(h)$ and
+$\varphi'(h)$. They carry information about the minimizer only when
+$\varphi(h)$ is on the scale of the data at $\ell$. The zoom
+interpolates when
+
+$$|\varphi(h) - \varphi(\ell)| \le 10^3 \left(1 + |\varphi(\ell)| + |\varphi'(\ell)|\,(h - \ell)\right),$$
+
+with $\varphi(h)$ finite, and takes the midpoint otherwise. The right
+side adds the value magnitude to the change a model with unit
+curvature predicts from the slope over the bracket; the factor
+$10^3$ admits curvature three orders above that. A first trial worth
+$4\cdot 10^{45}$ against $\varphi(\ell) = -24.6$ and
+$\varphi'(\ell) \approx -5\cdot 10^3$ fails the test by forty
+orders, and the fit through it returns the clamp of the bracket
+rather than a point chosen by the objective. Bisection halves the
+bracket until the values become comparable, after which the
+interpolant resumes.
+
 * What the accept layer adds
 
 Above the line search, ~src/accept.rs~ offers three policies: take the
@@ -104,34 +136,3 @@ evaluations (the C entry ~rgmin_linesearch~, the Python class
 makes on the same answers. ~examples/tutorial_linesearch.rs~ is that
 comparison, and ~tests/supplied_linesearch.rs~ checks Wolfe,
 backtracking, Goldstein and Brent one trial at a time.
-
-* At the rounding floor
-
-The decrease test compares two values of f.
-Near a minimum they differ by less than the rounding error of f, and the test then passes or fails on rounding alone.
-On the 75-atom Lennard-Jones cluster of @@rst::doc:`../reference/sota`@@, with the energy near -380, the last ten values that the strict strong Wolfe search tries after its last accepted iterate differ from the value there by up to 1.6e-12, or 4.2e-15 relative.
-The slope phi'(a) is still accurate there.
-Nocedal and Wright end the search after about ten trials that fail to lower f.
-This caps the cost, and x stays at the last point the search accepted (/Numerical Optimization/, 2nd edition, [[https://doi.org/10.1007/978-0-387-40065-5][Springer 2006]], section 3.5; @@rst::cite:`nocedalNumericalOptimization2006`@@).
-Hager and Zhang instead accept a trial with phi(a) <= phi(0) + eps abs(f) that meets the approximate Wolfe conditions (2 c1 - 1) phi'(0) >= phi'(a) >= c2 phi'(0).
-These conditions use only the slope.
-They report that a Wolfe search reaches an accuracy near the square root of the machine epsilon, and one with the approximate conditions an accuracy near the machine epsilon itself.
-Their paper is /A new conjugate gradient method with guaranteed descent and an efficient line search/, Society for Industrial and Applied Mathematics (SIAM) Journal on Optimization 16, 170 (2005), section 4 ([[https://doi.org/10.1137/030601880][10.1137/030601880]]; @@rst::cite:`hagerNewConjugateGradient2005`@@).
-
-With a positive ~approx_wolfe~, ~Lbfgs::minimize_box~ and a ~minimize~ that has opted into ~LbfgsStep::Wolfe~ use that stop in strong form.
-The eOn cap is the default and does not consult ~approx_wolfe~.
-The value error is ~approx_wolfe~ times abs(f), and a trial at most that far above the start is within it.
-Such a trial is accepted when abs(phi'(a)) <= c2 abs(phi'(0)).
-Since c2 = 0.9 is below 1 - 2 c1, both approximate Wolfe inequalities follow, and the new pair keeps y^T s >= (1 - c2) a abs(phi'(0)) > 0.
-A trial within the error that fails the curvature test is placed by the sign of its slope, as in their interval update: the bracket grows while phi'(a) < 0, and the zoom moves its low end to a trial whose slope still points down toward the high end.
-On that cluster ~approx_wolfe = 1e-12~ brings the Wolfe search level with SciPy.
-
-The default, ~approx_wolfe = 0~, keeps the strict search, because of what a relaxation leaves for the next call.
-On that cluster 394 of the 400 strict runs end with a failed search from steepest descent and no pairs left.
-So the next call starts cold, with a first trial step of length at most 1.
-With the test on, all 400 end on the ~gtol~ test and keep their pairs.
-On the next call the first trial is a full step along the direction they give.
-After a large perturbation of a cluster that step can throw the atoms apart.
-The search accepts it there, since the energy falls and the slope is near zero.
-Call ~Lbfgs::forget~ before reusing a solver after a large change.
-~LineSearch::Wolfe~, the search of the ~Solver~ sessions, does not change.

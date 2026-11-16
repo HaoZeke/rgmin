@@ -12,11 +12,11 @@
 //! Arms: `lbfgs` is `Lbfgs::minimize` with `LbfgsStep::Wolfe` (8 pairs,
 //! `||g||_inf < 1e-6`). The crate default is the eOn cap, so this arm
 //! opts into the strong Wolfe search the recorded table measured.
-//! `lbfgs-box` is `Lbfgs::minimize_box`, the generalized Cauchy point
+//! `lbfgs-approx` and `lbfgs-box-approx` repeat those arms with
+//! `approx_wolfe = 1e-12`. `lbfgs-box` is `Lbfgs::minimize_box`, the generalized Cauchy point
 //! and subspace step, with the same settings on `lj75` and with 5 pairs
-//! and `1e-5` on `driver1`, the values of the L-BFGS-B driver.
-//! `lbfgs-approx` and `lbfgs-box-approx` repeat them with
-//! `approx_wolfe = 1e-12`. The iteration cap is 3000 per run.
+//! and `1e-5` on `driver1`, the values of the L-BFGS-B driver. The
+//! iteration cap is 3000 per run.
 //!
 //! The starts go to the file named by the first argument as
 //! `problem x_1 ... x_n`, one per line, so that
@@ -228,14 +228,12 @@ fn main() {
         Array1::from_elem(25, 100.0),
     );
     println!("problem,arm,start,eval,f,ginf,accepted");
-    for arm in ["lbfgs", "lbfgs-approx", "lbfgs-box", "lbfgs-box-approx"] {
+    for arm in ["lbfgs", "lbfgs-box", "lbfgs-approx", "lbfgs-box-approx"] {
         for (k, p) in lj75.iter().enumerate() {
             trace("lj75", arm, k, p, lj, &free);
         }
     }
-    for arm in ["lbfgs-box", "lbfgs-box-approx"] {
-        for (k, p) in drv.iter().enumerate() {
-            trace("driver1", arm, k, p, driver1, &boxed);
-        }
+    for (k, p) in drv.iter().enumerate() {
+        trace("driver1", "lbfgs-box", k, p, driver1, &boxed);
     }
 }

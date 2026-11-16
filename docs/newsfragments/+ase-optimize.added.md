@@ -1,6 +1,6 @@
-`rgmin.optimize` is a drop-in for `ase.optimize`.
-`BFGS`, `LBFGS`, `LBFGSLineSearch`, `FIRE` and `FIRE2` take ASE 3.29's constructors and drive `self.optimizable`, so ASE's cell filters and constraints work.
-On the same start `BFGS`, `LBFGS` and `FIRE` reproduce ASE's steps, force calls, log lines and trajectory frames.
-Restart files replay the recorded evaluations without calling the calculator.
-`SR1`, `SR2`, `SteepestDescent`, `BarzilaiBorwein`, `Adam`, the nonlinear CG family, `EonCG`, `NewtonCG` and `NewtonPCG` cover the other session methods.
-`howto/ase-migration` lists the differences from ASE, each with a test, and `benches/ase_optimize.py` compares both packages on EMT clusters and slabs, LJ38 and a `FrechetCellFilter` vacancy cell.
+`rgmin.optimize` is a drop-in for `ase.optimize` on the maturin session.
+`BFGS`, `LBFGS`, `LBFGSLineSearch`, `FIRE` and `FIRE2` take ASE's constructor arguments and drive `self.optimizable`, so cell filters and `FixAtoms`, `FixedLine`, `FixCartesian` and `FixedPlane` work.
+The other gradient methods of `Session` have ASE-style classes. Importing `rgmin` does not import ASE.
+`Session` takes `h0`, `maxmove`, `preset`, `abc`, `accept` and `istep`, and can `push_pair`, `forget` and report `pair_count` and `steps`.
+`Adam` takes `learning_rate` (default 0.02) as its step scale.
+A restart file replays the recorded evaluations into a fresh session.

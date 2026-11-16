@@ -307,13 +307,11 @@ struct Run {
 }
 
 fn control(gtol: f64, maxiter: usize) -> Control {
-    Control {
-        maxiter,
-        gtol,
-        istep: 0.1,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(maxiter)
+        .with_gtol(gtol)
+        .with_istep(0.1)
+        .with_maxmove(None)
 }
 
 fn run_dense(
@@ -804,9 +802,7 @@ fn benchmark_morse_newton_cg_campaign() {
                             ("dogleg", Method::Dogleg),
                             (
                                 "newton",
-                                Method::Newton {
-                                    kind: NewtonKind::Shifted,
-                                },
+                                Method::newton(NewtonKind::Shifted),
                             ),
                         ] {
                             let run = run_dense(method, coords, cap, gtol, 60, fg, hs);
@@ -916,12 +912,7 @@ fn benchmark_lj38_newton_cg_campaign() {
                     let mut three = Vec::new();
                     for (method_name, method) in [
                         ("dogleg", Method::Dogleg),
-                        (
-                            "newton",
-                            Method::Newton {
-                                kind: NewtonKind::Shifted,
-                            },
-                        ),
+                        ("newton", Method::newton(NewtonKind::Shifted)),
                     ] {
                         let run = run_dense(
                             method,

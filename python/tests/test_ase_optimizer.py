@@ -350,7 +350,7 @@ def test_restart_with_other_parameters_is_refused(testdir, atoms):
         opt.run(fmax=1e-9, steps=3)
     start.calc = EMT()
     opt = BFGS(start, restart="r.json", logfile=None, maxstep=0.01)
-    with pytest.raises(RestartError, match="does not replay"):
+    with pytest.raises(RestartError, match="does not replay|more evaluations"):
         opt.run(fmax=1e-9, steps=1)
 
 

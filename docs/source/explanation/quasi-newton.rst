@@ -184,11 +184,6 @@ lifecycle hooks whose safety arguments are one sentence each:
   stops early when asked. Stopping early returns an accepted iterate,
   so every property of the trajectory up to that point stands.
 
-- ``minimize_on`` and ``minimize_box_on`` pass the accepted coordinates
-  with the index and the value, so the caller can project them.
-  Returning false stops at that point. The tests in
-  ``tests/lbfgs_position.rs`` record a coordinate gap along the path.
-
 - ``minimize_recognized`` additionally lets the caller substitute a
   known result (energy and coordinates) when it recognizes the basin
   mid-descent, returning a flag that says the substitution happened.

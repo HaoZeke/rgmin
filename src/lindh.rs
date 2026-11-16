@@ -49,6 +49,7 @@ pub const SOLVE_RTOL: f64 = 1.0e-2;
 const SOLVE_MAXIT: usize = 32;
 
 /// Atomic numbers and the ridge used to build the model.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct LindhSpec {
     /// Length `N`. Empty means every atom is period 1 (H, He).
@@ -58,6 +59,19 @@ pub struct LindhSpec {
     /// Periodic lengths. A non-positive entry is open.
     pub cell: [f64; 3],
 }
+
+impl LindhSpec {
+    /// Atomic numbers `z`, ridge `c_stab`, and periodic lengths `cell`.
+    pub fn new(z: Vec<u8>, c_stab: f64, cell: [f64; 3]) -> Self {
+        Self { z, c_stab, cell }
+    }
+}
+
+with_setters!(LindhSpec {
+    with_z => z: val Vec<u8>,
+    with_c_stab => c_stab: val f64,
+    with_cell => cell: val [f64; 3],
+});
 
 /// Block-sparse model. `diag[i]` is the 3×3 diagonal block of atom `i`.
 #[derive(Clone, Debug)]

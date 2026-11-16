@@ -22,24 +22,26 @@
 //! run over all repeats, `efficiency` the speedup over 1 thread divided
 //! by the thread count. The harness is CPU only; the `gpu` column stays
 //! empty. After the timed L-BFGS repeats on each pool, one untimed solve
-//! counts the steps that ran the line search, seen as a second oracle
-//! call at the step's start, and the accepted steps that meet the strong
-//! Wolfe conditions, and reports both on stderr. It exits non-zero when a
-//! run does not converge or an L-BFGS step fails either count.
+//! counts the steps that ran the line search, and the accepted steps that
+//! meet the strong Wolfe conditions, and reports both on stderr. A step
+//! ran the search when its oracle calls are the trials a
+//! [`SuppliedSearch`] replay of the strong Wolfe search asks for, in
+//! order, and the replay accepts the session's point. It exits non-zero
+//! when a run does not converge or an L-BFGS step fails either count.
 //!
 //! `cargo run --release --features par --example strong_scale -- \
 //!   --cells 20 --repeats 5 [--max-threads T] [--hardware NAME]`
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use ndarray::{Array1, ArrayView1};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
 use rgmin::{
-    Accept, Control, FireKind, FirePreset, LineSearch, Method, Oracle, Solver, StopNorm,
-    phase_enable, phase_reset, phase_times, take_gradient,
+    Accept, Control, FireKind, FirePreset, LineSearch, Method, Oracle, SearchStep, Solver,
+    StopNorm, SuppliedSearch,
 };
 
 /// Pt Morse parameters of tests/newton_cg_morse.rs: eV, 1/Angstrom, Angstrom.
@@ -57,6 +59,7 @@ const BUDGET: usize = 2000;
 /// Strong Wolfe constants of the L-BFGS search, the `Solver::new` default.
 const C1: f64 = 1e-4;
 const C2: f64 = 0.9;
+const WOLFE: LineSearch = LineSearch::wolfe(C1, C2, 40);
 
 /// Half-lattice offsets of the 12 FCC nearest neighbours.
 const NN: [[i64; 3]; 12] = [
@@ -116,32 +119,11 @@ fn fcc(cells: usize) -> System {
     }
 }
 
-static PHASES: AtomicBool = AtomicBool::new(false);
-static OBJ_NS: AtomicU64 = AtomicU64::new(0);
-static ALLOC_NS: AtomicU64 = AtomicU64::new(0);
-static FORCE_NS: AtomicU64 = AtomicU64::new(0);
-static SUM_NS: AtomicU64 = AtomicU64::new(0);
-
-fn phase_add(slot: &AtomicU64, t0: Instant) {
-    if PHASES.load(Ordering::Relaxed) {
-        slot.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-    }
-}
-
 /// Morse energy and gradient over the fixed bonds, one atom per task.
 fn morse(sys: &System, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
     let x = x.as_slice().expect("contiguous");
-    let phases = PHASES.load(Ordering::Relaxed);
-    let t_alloc = phases.then(Instant::now);
-    let mut g = take_gradient(x.len());
-    g.fill(0.0);
-    if let Some(t0) = t_alloc {
-        phase_add(&ALLOC_NS, t0);
-    }
-    let t_force = phases.then(Instant::now);
+    let mut g = vec![0.0; x.len()];
     let e: f64 = g
-        .as_slice_mut()
-        .expect("contiguous")
         .par_chunks_mut(3)
         .enumerate()
         .map(|(i, gi)| {
@@ -163,10 +145,7 @@ fn morse(sys: &System, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
             ei
         })
         .sum();
-    if let Some(t0) = t_force {
-        phase_add(&FORCE_NS, t0);
-    }
-    (e, g)
+    (e, Array1::from(g))
 }
 
 struct Run {
@@ -175,7 +154,8 @@ struct Run {
     steps: usize,
     fmax: f64,
     x: Array1<f64>,
-    /// Steps that ran the line search; counted only on an audited run.
+    /// Steps whose oracle calls are the strong Wolfe search's trials;
+    /// counted only on an audited run.
     searched: usize,
     /// Accepted steps that meet the strong Wolfe conditions; counted only
     /// on an audited run.
@@ -193,39 +173,56 @@ fn strong_wolfe(
     d0 < 0.0 && f1 <= f0 + C1 * d0 && d1.abs() <= -C2 * d0
 }
 
+type Answer = (f64, Array1<f64>);
+
+/// Whether the strong Wolfe search from `(x0, f0, g0)` along `dir`,
+/// opening at `open`, asks for exactly the points in `trials`, in order,
+/// and accepts `x1`. [`SuppliedSearch`] makes the trials
+/// [`LineSearch::search`] makes on the same answers, with no step cap.
+fn replays(
+    (x0, f0, g0): (&Array1<f64>, f64, &Array1<f64>),
+    dir: &Array1<f64>,
+    open: f64,
+    trials: &[(Array1<f64>, Answer)],
+    x1: &Array1<f64>,
+) -> bool {
+    let mut search = SuppliedSearch::new(WOLFE, x0.view(), dir.view(), open);
+    let mut next = search.offer(f0, g0.view());
+    for (x, (f, g)) in trials {
+        match next {
+            SearchStep::Evaluate { x: ask, .. } if ask == *x => next = search.offer(*f, g.view()),
+            _ => return false,
+        }
+    }
+    matches!(next, SearchStep::Accepted { x, .. } if x == *x1)
+}
+
 fn relax(sys: &System, name: &str, audit: bool) -> Run {
     let n = sys.x0.len();
     let (method, istep) = match name {
-        "lbfgs" => (Method::Lbfgs { memory: 10 }, 0.2),
-        _ => (Method::Fire { kind: FireKind::V2 }, 0.1),
+        "lbfgs" => (Method::lbfgs_with_memory(10), 0.2),
+        _ => (Method::fire(FireKind::V2), 0.1),
     };
-    let control = Control {
-        maxiter: BUDGET,
-        gtol: FMAX,
-        istep,
-        maxmove: None,
-        stop_norm: StopNorm::MaxAtom,
-    };
-    if PHASES.load(Ordering::Relaxed) {
-        for slot in [&OBJ_NS, &ALLOC_NS, &FORCE_NS, &SUM_NS] {
-            slot.store(0, Ordering::Relaxed);
-        }
-        phase_reset();
-    }
+    let control = Control::default()
+        .with_maxiter(BUDGET)
+        .with_gtol(FMAX)
+        .with_istep(istep)
+        .with_maxmove(None)
+        .with_stop_norm(StopNorm::MaxAtom)
+        .with_ftol_rel(None)
+        .with_noise_floor(None);
     let calls = AtomicUsize::new(0);
-    let origin = Mutex::new(Array1::zeros(0));
-    let at_origin = AtomicUsize::new(0);
+    let trials: Mutex<Vec<(Array1<f64>, Answer)>> = Mutex::new(Vec::new());
     let obj = Oracle::unbounded(n, |x: ArrayView1<f64>| {
         calls.fetch_add(1, Ordering::Relaxed);
-        if audit && *origin.lock().expect("origin") == x {
-            at_origin.fetch_add(1, Ordering::Relaxed);
+        let answer = morse(sys, x);
+        if audit {
+            trials
+                .lock()
+                .expect("trials")
+                .push((x.to_owned(), answer.clone()));
         }
-        let t0 = PHASES.load(Ordering::Relaxed).then(Instant::now);
-        let ev = morse(sys, x);
-        if let Some(t0) = t0 {
-            phase_add(&OBJ_NS, t0);
-        }
-        ev
+        answer
     });
     let start = Instant::now();
     let mut solver = Solver::new(method, control, n);
@@ -237,11 +234,10 @@ fn relax(sys: &System, name: &str, audit: bool) -> Run {
                 .set_lbfgs_step(rgmin::LbfgsStep::Wolfe)
                 .expect("wolfe");
             solver.set_accept(Accept::Energy);
-            solver.set_linesearch(LineSearch::Wolfe {
-                c1: C1,
-                c2: C2,
-                maxiter: 40,
-            });
+            solver.set_linesearch(WOLFE);
+            // A Cartesian session installs a 0.2 per-atom cap unless one
+            // is set; a non-positive cap clears it.
+            solver.set_atom_maxmove(0.0);
         }
         _ => {
             solver.set_atom_maxmove(0.2);
@@ -251,54 +247,41 @@ fn relax(sys: &System, name: &str, audit: bool) -> Run {
         }
     }
     let mut x = sys.x0.clone();
-    let mut last = audit.then(|| morse(sys, x.view()));
+    // The value and gradient the session holds at the start of a step.
+    // Before the first step that is the oracle's answer at `x0`.
+    let mut held: Option<Answer> = audit.then(|| morse(sys, x.view()));
     let (mut steps, mut fmax) = (0, f64::INFINITY);
     let (mut searched, mut wolfe) = (0, 0);
     while steps < BUDGET && fmax >= FMAX {
-        if audit {
-            *origin.lock().expect("origin") = x.clone();
-            at_origin.store(0, Ordering::Relaxed);
-        }
+        let before = held.take().map(|(f0, g0)| {
+            let dir = solver.search_direction(g0.view()).expect("direction");
+            // The two-loop direction carries its step length once pairs
+            // exist; the first, steepest direction opens at `istep`.
+            let open = if solver.pair_count() == 0 { istep } else { 1.0 };
+            (x.clone(), f0, g0, dir, open)
+        });
         let report = solver.step(&obj, &mut x).expect("step");
         fmax = report.grad_norm;
-        if let Some((f0, g0)) = last.take() {
-            // The session evaluates the start of its first step itself.
-            // LineSearch::search takes no start value, so it evaluates the
-            // start of every step again; the capped geometry step and the
-            // Accept::None trial reuse the value the session holds.
-            let own = usize::from(steps == 0);
-            searched += usize::from(at_origin.load(Ordering::Relaxed) > own);
-            let x0 = std::mem::take(&mut *origin.lock().expect("origin"));
-            let g1 = report.grad.clone().expect("session gradient");
+        if let Some((x0, mut f0, g0, dir, open)) = before {
+            let mut seen = std::mem::take(&mut *trials.lock().expect("trials"));
+            // The session evaluates the start of its first step itself and
+            // reuses the answer it holds on every later step.
+            if steps == 0
+                && seen
+                    .first()
+                    .is_some_and(|(at, (_, g))| *at == x0 && *g == g0)
+            {
+                f0 = seen.remove(0).1.0;
+            }
+            searched += usize::from(replays((&x0, f0, &g0), &dir, open, &seen, &x));
+            let g1 = report.grad.expect("session gradient");
             wolfe += usize::from(strong_wolfe(&(&x - &x0), (f0, &g0), (report.value, &g1)));
-            last = Some((report.value, g1));
+            held = Some((report.value, g1));
         }
         steps += 1;
     }
-    let wall = start.elapsed().as_secs_f64();
-    if PHASES.load(Ordering::Relaxed) {
-        let p = phase_times();
-        eprintln!(
-            "phases method={name} wall_ns={} obj_ns={} alloc_ns={} force_ns={} sum_ns={} two_loop_ns={} line_search_ns={} dot_ns={} axpy_ns={} rayon_ns={} dot_calls={} axpy_calls={} rayon_calls={} copy_ns={} elem_ns={}",
-            (wall * 1.0e9) as u64,
-            OBJ_NS.load(Ordering::Relaxed),
-            ALLOC_NS.load(Ordering::Relaxed),
-            FORCE_NS.load(Ordering::Relaxed),
-            SUM_NS.load(Ordering::Relaxed),
-            p.two_loop_ns,
-            p.line_search_ns,
-            p.dot_ns,
-            p.axpy_ns,
-            p.rayon_ns,
-            p.dot_calls,
-            p.axpy_calls,
-            p.rayon_calls,
-            p.copy_ns,
-            p.elem_ns,
-        );
-    }
     Run {
-        wall,
+        wall: start.elapsed().as_secs_f64(),
         calls: calls.load(Ordering::Relaxed),
         steps,
         fmax,
@@ -344,10 +327,6 @@ fn main() {
             .and_then(|i| args.get(i + 1).cloned())
     };
     let num = |key: &str, default: usize| arg(key).map_or(default, |v| v.parse().expect(key));
-    if args.iter().any(|a| a == "--phases") {
-        PHASES.store(true, Ordering::Relaxed);
-        phase_enable();
-    }
     let (model, physical) = host();
     let hardware = arg("--hardware").unwrap_or(model);
     let max_threads = num("--max-threads", physical).max(1);

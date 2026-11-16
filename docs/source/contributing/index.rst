@@ -9,7 +9,10 @@ Everyone who takes part follows the `code of conduct <https://github.com/OmniPot
 
 Pull requests go to the ``develop`` branch.
 Commit subjects take the form ``type(scope): summary``, as in ``fix(session): report a stall when the energy test refuses a restart``.
-A change that users can see adds a fragment to ``docs/newsfragments/`` and a line under Unreleased in ``docs/orgmode/changelog.org``.
+A change that users can see adds a fragment to ``docs/newsfragments/`` and nowhere else.
+The Unreleased sections of ``CHANGELOG.md`` and ``docs/orgmode/changelog.org`` stay empty, so ``towncrier build`` does not list an entry twice.
+The release commit copies the notes into the org page under a heading for the version.
+``python3 scripts/check_changelog.py`` fails when a fragment is paired with an Unreleased line.
 Name the fragment ``<issue>.<type>.md``, or ``+<name>.<type>.md`` for a change with no issue.
 The type is ``added``, ``changed``, ``deprecated``, ``removed``, ``fixed`` or ``security``, the sections of ``CHANGELOG.md``.
 Write it as one sentence per line, the way ``CHANGELOG.md`` reads.
@@ -66,6 +69,18 @@ CI also runs clippy with warnings denied, on Rust 1.88.0 and on the latest stabl
    #skip_lint_end
 
 Run the same four commands with ``+stable`` for the second toolchain.
+
+CI also builds and tests in release with Rust 1.93.0 and 1.94.1, which ship LLVM 21.
+Its loop vectorizer once crashed on rgmin, and the debug builds above never run it:
+
+.. code-block:: bash
+
+   rustup toolchain install 1.93.0 --profile minimal
+   cargo +1.93.0 build --locked --release
+   cargo +1.93.0 test --locked --release --lib
+
+Install 1.94.1 the same way and run the two ``cargo`` commands with ``+1.94.1``.
+The default feature set is enough: ``--all-features`` on this line also links SLEPc, PRIMME, ChASE and libkrylov.
 
 These checks need network access on their first run, since cargo fetches two git dependencies pinned to a commit: ``eindir-core`` and, for the tests, ``rgpot-core``.
 The ``highs`` tests check against SciPy through ``python3``, or through the interpreter that ``PYTHON`` names.

@@ -22,6 +22,7 @@ pub fn sqrt_masses_3n(masses: &[f64]) -> Array1<f64> {
 }
 
 /// Restricted step onto \(\|(s+d_1)\odot\sqrt{m}\| = dx\).
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct IrcTrust {
     /// Displacement already taken from the last accepted IRC point.
@@ -32,7 +33,19 @@ pub struct IrcTrust {
     pub dx: f64,
 }
 
+with_setters!(IrcTrust {
+    with_d1 => d1: val Array1<f64>,
+    with_sqrtm => sqrtm: val Array1<f64>,
+    with_dx => dx: val f64,
+});
+
 impl IrcTrust {
+    /// Build from the displacement `d1`, the length-3N square-root masses
+    /// `sqrtm`, and the mass-weighted radius `dx`, each taken as given.
+    pub fn new(d1: Array1<f64>, sqrtm: Array1<f64>, dx: f64) -> Self {
+        Self { d1, sqrtm, dx }
+    }
+
     /// Build from per-atom masses (length N).
     pub fn from_atom_masses(d1: Array1<f64>, masses: &[f64], dx: f64) -> Self {
         Self {

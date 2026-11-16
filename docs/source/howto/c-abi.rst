@@ -84,6 +84,11 @@ SCG is the same one-shot shape. Conjugacy is a field on
 solver for the k lowest pairs (Knyazev 2001). ``seed`` and ``modes_out``
 are row-major n-by-k. ``rgmin_lowest_eigenpairs`` is ``abi_minor`` 39. The same call is
 ``rgmin::lowest_eigenpairs`` and ``xts_lowest_eigenpairs``.
+``rgmin_manifold_handle_t`` is a Stiefel, SPD or product manifold with
+column-major point buffers, ``abi_minor`` 41; see :doc:`../reference/manifold`.
+``rgmin_lowest_eigenpairs_ex`` adds each residual and a converged flag, and an
+optional preconditioner (null is the identity). It is ``abi_minor`` 42.
+``rgmin_eigenpair_t`` is unchanged.
 
 .. code:: c
 
@@ -103,6 +108,50 @@ are row-major n-by-k. ``rgmin_lowest_eigenpairs`` is ``abi_minor`` 39. The same 
 
 A non-CPU tensor returns ``RGMIN_UNSUPPORTED_DEVICE``. The ABI does not
 change when a CUDA path lands.
+
+L-BFGS direction with a caller ``H0``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A host that keeps its own step and wants only the two-loop direction
+holds an ``rgmin_lbfgs_pairs_t``. The handle stores ``(s, y)`` pairs, oldest
+first, and never evaluates an objective.
+
+.. code:: c
+
+    rgmin_lbfgs_pairs_t *pairs = rgmin_lbfgs_pairs_create(n, 10);
+    int32_t stored = 0;
+    rgmin_lbfgs_pairs_push(pairs, s, y, n, &stored);          /* rho = 1 / (s . y) */
+    rgmin_lbfgs_pairs_push_rho(pairs, s, y, rho, n, &stored); /* the caller's rho */
+    rgmin_lbfgs_direction(pairs, grad, h0_diag, NULL, NULL, dir, n); /* dir = -H g */
+    rgmin_lbfgs_direction(pairs, grad, NULL, apply_h0, user, dir, n);
+    rgmin_lbfgs_pairs_free(pairs);
+
+Pass the diagonal of ``H0`` or a callback, not both and not neither. A
+diagonal whose entries are all ``gamma`` is ``H0 = gamma I``. An empty
+memory writes ``-H0 g``. ``apply_h0(user, v, out, n)`` writes ``H0 v`` and
+returns 0; any other value fails the call with
+``RGMIN_INVALID_PARAMETER``. It runs once per direction, on the residual
+of the backward loop that starts from ``grad``, so the direction is
+``-H g`` when the map is linear. It must not call back into the handle.
+
+``rgmin_lbfgs_pairs_push`` declines a pair whose ``s . y`` is not finite or
+is at most ``1e-8 ||s|| ||y||``, the test ``Lbfgs::record`` applies. It
+returns ``RGMIN_SUCCESS`` with ``*stored`` 0. ``rgmin_lbfgs_pairs_push_rho``
+applies the same test and also declines a ``rho`` that is not finite and
+positive, so a pair with non-positive curvature never enters the
+two-loop. A length other than the handle's ``n`` is
+``RGMIN_INVALID_PARAMETER``, and ``rgmin_last_error`` names it.
+``capacity`` 0 keeps ten pairs; a full memory drops the oldest.
+
+The direction is the Rust ``LbfgsPairs::direction`` and runs the
+recursion of the session step. The pairs a capped L-BFGS session holds,
+with a scalar ``H0`` equal to the session's, give that session's eOn step
+bit for bit. ``rgmin_lbfgs_pairs_push`` and ``rgmin_lbfgs_direction`` are
+``abi_minor`` 38; ``rgmin_lbfgs_pairs_push_rho`` is ``abi_minor`` 43, so check
+``rgmin_abi_stamp().abi_minor >= 43`` before calling it. C++ wraps the
+handle in ``rgmin::LbfgsPairs`` (``push``, ``push_rho``, ``direction_diagonal``,
+``direction_apply``), ``xts.h`` aliases each entry as ``xts_lbfgs_*``, and
+Python takes ``rgmin.LbfgsPairs.push(s, y, rho=None)``.
 
 C++
 ~~~
@@ -142,7 +191,7 @@ Tokens 7-10 stay reserved. See
 :doc:`retract onto an embedded manifold <manifolds>`.
 ``rgmin_solver_set_masses`` supplies N atomic masses for ``MW_RIGID``.
 
-``rgmin_solver_set_power(s, factor, block, count)`` (``abi_minor`` 41) selects ``count`` unit-weight copies of a token without shape parameters, each of packed length ``block``, as manopt's ``powermanifold`` does.
+``rgmin_solver_set_power(s, factor, block, count)`` (``abi_minor`` 44) selects ``count`` unit-weight copies of a token without shape parameters, each of packed length ``block``, as manopt's ``powermanifold`` does.
 It returns 1 and keeps the manifold for a null session, a token with shape parameters, a block the token cannot hold, or a count of zero.
 ``MW_RIGID`` copies read ``rgmin_solver_set_masses`` as one molecule reused on every copy or as every copy's masses in order.
 Weighted products of arbitrary factors are Rust only; :doc:`../reference/product-manifold` lists them.

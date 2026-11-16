@@ -5,13 +5,11 @@ use ndarray::{Array1, array};
 use rgmin::{Control, Method, Solver};
 
 fn control() -> Control {
-    Control {
-        maxiter: 80,
-        gtol: 1e-8,
-        istep: 0.1,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(80)
+        .with_gtol(1e-8)
+        .with_istep(0.1)
+        .with_maxmove(None)
 }
 
 #[test]
@@ -19,7 +17,6 @@ fn lbfgs_session_reaches_rosenbrock() {
     let obj = Rosenbrock::<2>::new();
     let mut x = array![-1.2, 1.0];
     let mut solver = Solver::new(Method::lbfgs(), control(), 2).with_gtol(1e-8);
-    solver.set_accept(rgmin::Accept::Energy);
     let mut last = None;
     for _ in 0..80 {
         let rep = solver.step(&obj, &mut x).unwrap();
@@ -30,6 +27,8 @@ fn lbfgs_session_reaches_rosenbrock() {
     }
     let rep = last.unwrap();
     assert!(rep.value < 1e-6, "value {}", rep.value);
+    assert!((x[0] - 1.0).abs() < 1e-3);
+    assert!((x[1] - 1.0).abs() < 1e-3);
 }
 
 #[test]
@@ -129,12 +128,26 @@ fn first_order_accept_none_moves_a_nonconservative_force() {
         let mut x = array![0.0, 0.0];
         let mut ctrl = control();
         ctrl.maxmove = Some(0.2);
-        let mut solver = Solver::new(method.clone(), ctrl, 2);
-        solver.set_accept(Accept::None);
-        solver.step(&obj, &mut x).unwrap();
+        // Accept::None line-searches. A flat energy fails Armijo, so the
+        // point stays. Accept::Step is the one-oracle clipped step.
+        let mut searched = Solver::new(method.clone(), ctrl.clone(), 2);
+        if matches!(method, Method::Lbfgs { .. }) {
+            searched.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
+        }
+        searched.set_accept(Accept::None);
+        searched.step(&obj, &mut x).unwrap();
+        assert_eq!(
+            x,
+            array![0.0, 0.0],
+            "{method:?} line search moved a flat energy"
+        );
+        let mut y = array![0.0, 0.0];
+        let mut stepped = Solver::new(method.clone(), ctrl.clone(), 2);
+        stepped.set_accept(Accept::Step);
+        stepped.step(&obj, &mut y).unwrap();
         assert!(
-            x[0].abs() > 1e-9,
-            "{method:?} Accept::None froze on a non-conservative force {x:?}"
+            y[0] < -1e-9 && y[0] >= -0.2 - 1e-12 && y[1].abs() < 1e-12,
+            "{method:?} Accept::Step {y:?}"
         );
     }
 }
@@ -143,7 +156,6 @@ fn first_order_accept_none_moves_a_nonconservative_force() {
 fn retained_pairs_beat_a_cold_start() {
     let obj = Rosenbrock::<2>::new();
     let mut warm = Solver::new(Method::lbfgs(), control(), 2).with_gtol(1e-8);
-    warm.set_accept(rgmin::Accept::Energy);
     let mut x = array![-1.2, 1.0];
     for _ in 0..80 {
         let rep = warm.step(&obj, &mut x).unwrap();
@@ -163,7 +175,6 @@ fn retained_pairs_beat_a_cold_start() {
     }
 
     let mut cold = Solver::new(Method::lbfgs(), control(), 2).with_gtol(1e-8);
-    cold.set_accept(rgmin::Accept::Energy);
     // Same start as the warm restart: first quench, then same perturbation.
     let mut z = array![-1.2, 1.0];
     for _ in 0..80 {
@@ -232,6 +243,9 @@ fn lbfgs_newton_on_a_supplied_hessian_kills_a_quadratic() {
     let obj = Quad;
     let mut x = array![2.0, -3.0];
     let mut solver = Solver::new(Method::lbfgs(), control(), 2).with_gtol(1e-10);
+    // The Newton step from this start is longer than the default
+    // per-atom cap. The test checks that exact step.
+    solver.set_atom_maxmove(0.0);
     solver.set_qn_step(QnStep::Newton);
     let rep = solver.step_hess(&obj, &mut x).unwrap();
     assert!(rep.value < 1e-12, "newton-on-P value {}", rep.value);
@@ -277,13 +291,11 @@ fn sphere_rayleigh_stays_on_the_sphere() {
     let mut x = array![1.0 / n, 1.0 / n, 1.0 / n];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 40,
-            gtol: 1e-8,
-            istep: 0.2,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(40)
+            .with_gtol(1e-8)
+            .with_istep(0.2)
+            .with_maxmove(None),
         3,
     );
     solver.set_manifold(ManifoldKind::Sphere);
@@ -408,13 +420,11 @@ fn oblique_session_stays_on_product_of_spheres() {
     let mut x = array![s, s, 0.0, 0.0, s, s];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 30,
-            gtol: 1e-8,
-            istep: 0.2,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(30)
+            .with_gtol(1e-8)
+            .with_istep(0.2)
+            .with_maxmove(None),
         6,
     );
     solver.set_manifold(ManifoldKind::oblique(3, 2));
@@ -466,13 +476,11 @@ fn multinomial_session_stays_on_the_simplex() {
     let mut x = array![0.2, 0.3, 0.5];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None),
         3,
     );
     solver.set_manifold(ManifoldKind::Multinomial);
@@ -540,13 +548,11 @@ fn multinomial_ds_session_stays_doubly_stochastic() {
     let mut x = array![0.5, 0.5, 0.5, 0.5];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None),
         4,
     );
     solver.set_multinomial_ds(2);
@@ -620,13 +626,11 @@ fn multinomial_sym_session_stays_symmetric_doubly_stochastic() {
     let mut x = array![0.5, 0.5, 0.5, 0.5];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None),
         4,
     );
     solver.set_multinomial_sym(2);
@@ -701,13 +705,11 @@ fn sphere_complex_session_stays_on_the_set() {
     let mut x = array![1.0, 0.0, 0.0, 0.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None),
         4,
     );
     solver.set_sphere_complex(2);
@@ -759,13 +761,11 @@ fn positive_session_stays_on_the_set() {
     let mut x = array![2.0, 0.5, 4.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None),
         3,
     );
     solver.set_positive(3);
@@ -828,13 +828,11 @@ fn centered_matrix_session_stays_on_the_set() {
     let mut x = array![1.0, -1.0, 2.0, -2.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-10,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-10)
+            .with_istep(0.1)
+            .with_maxmove(None),
         4,
     );
     solver.set_centered_matrix(2, 2, false);
@@ -944,13 +942,11 @@ fn so3_session_stays_orthogonal() {
     let mut x = array![1.0, 0.1, 0.0, -0.1, 1.0, 0.0, 0.0, 0.0, 1.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.1)
+            .with_maxmove(None),
         9,
     );
     solver.set_manifold(ManifoldKind::So3);
@@ -1019,13 +1015,11 @@ fn se3_session_keeps_rotation_and_moves_translation() {
     let mut x = array![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.5, -0.7, 0.4];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 30,
-            gtol: 1e-10,
-            istep: 0.4,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(30)
+            .with_gtol(1e-10)
+            .with_istep(0.4)
+            .with_maxmove(None),
         12,
     );
     solver.set_manifold(ManifoldKind::Se3);
@@ -1132,13 +1126,11 @@ fn complex_circle_session_stays_on_the_set() {
     let mut x = array![0.0, 1.0, -1.0, 0.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.2,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.2)
+            .with_maxmove(None),
         4,
     );
     solver.set_manifold(ManifoldKind::complex_circle(2));
@@ -1211,13 +1203,11 @@ fn symmetric_session_stays_on_the_set() {
     let mut x = array![2.0, 0.4, -0.1, -1.5];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.1)
+            .with_maxmove(None),
         4,
     );
     solver.set_manifold(ManifoldKind::Symmetric);
@@ -1289,13 +1279,11 @@ fn skewsymmetric_session_stays_on_the_set() {
     let mut x = array![0.2, 0.4, -0.1, 0.3];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.1)
+            .with_maxmove(None),
         4,
     );
     solver.set_manifold(ManifoldKind::SkewSymmetric);
@@ -1350,13 +1338,11 @@ fn euclidean_complex_session_stays_on_the_set() {
     let mut x = array![2.0, 1.0, -1.0, 3.0];
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.1)
+            .with_maxmove(None),
         4,
     );
     solver.set_manifold(ManifoldKind::euclidean_complex(2));
@@ -1435,13 +1421,11 @@ fn constant_session_stays_on_the_set() {
     let mut x = start.clone();
     let mut solver = Solver::new(
         Method::Steepest,
-        Control {
-            maxiter: 20,
-            gtol: 1e-8,
-            istep: 0.1,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(20)
+            .with_gtol(1e-8)
+            .with_istep(0.1)
+            .with_maxmove(None),
         3,
     );
     solver.set_manifold(ManifoldKind::constant(3));
@@ -1560,6 +1544,9 @@ fn nlcg_second_step_is_not_steepest() {
     let mut b = array![-1.2, 1.0];
     let mut pr = Solver::new(Method::polak_ribiere(), control(), 2);
     let mut sd = Solver::new(Method::Steepest, control(), 2);
+    // The default per-atom cap clips both second steps onto one point.
+    pr.set_atom_maxmove(0.0);
+    sd.set_atom_maxmove(0.0);
     let _ = pr.step(&obj, &mut a).unwrap();
     let _ = sd.step(&obj, &mut b).unwrap();
     let _ = pr.step(&obj, &mut a).unwrap();
@@ -1571,35 +1558,41 @@ fn nlcg_second_step_is_not_steepest() {
     );
 }
 
-/// The first step clips y onto the 2.048 box face at f = 3.742860. The
-/// next conjugate direction leaves the box, its clipped step rises, and
-/// the energy test refuses it. A refused step restarts the recurrence
-/// from steepest descent instead of retrying the same direction.
+/// Strong Wolfe from (-1.2, 1.0), with the per-atom cap off so the
+/// search is not the 0.2 clip. The opening step is the unit-curvature
+/// trial, not the box face at 2.048.
 #[test]
 fn nlcg_energy_accept_restarts_after_a_refused_step() {
     let obj = Rosenbrock::<2>::new();
     let mut x = array![-1.2, 1.0];
     let mut solver = Solver::new(Method::polak_ribiere(), control(), 2);
+    solver.set_atom_maxmove(0.0);
     solver.set_accept(rgmin::Accept::Energy);
     let first = solver.step(&obj, &mut x).unwrap();
-    assert!((first.value - 3.742860).abs() < 1e-6, "{}", first.value);
-    assert_eq!(x[1], 2.048);
+    assert!(
+        (first.value - 4.129411026260063).abs() < 1e-9,
+        "{}",
+        first.value
+    );
+    assert!((x[0] + 1.028636614045036).abs() < 1e-9);
+    assert!((x[1] - 1.0699442391652914).abs() < 1e-9);
     let mut last = first.value;
     for _ in 0..79 {
         last = solver.step(&obj, &mut x).unwrap().value;
     }
-    assert!(last < 0.5, "PR froze at {last} {x:?}");
+    assert!(last < 0.02, "PR froze at {last} {x:?}");
 }
 
 /// Seven steps reach f = 0.116646. The eighth spectral length is refused
 /// by the energy test, and the stored pair used to replay it on every
 /// later call. A refused step drops the pair, so the next call takes the
-/// `istep` length from the same point.
+/// `istep` length from the same point. The per-atom cap is off.
 #[test]
 fn bb_energy_accept_drops_the_pair_after_a_refused_step() {
     let obj = Rosenbrock::<2>::new();
     let mut x = array![-1.2, 1.0];
     let mut solver = Solver::new(Method::Bb, control(), 2);
+    solver.set_atom_maxmove(0.0);
     solver.set_accept(rgmin::Accept::Energy);
     let mut values = Vec::new();
     for _ in 0..80 {
@@ -1611,26 +1604,30 @@ fn bb_energy_accept_drops_the_pair_after_a_refused_step() {
     assert!(last < 1e-3, "BB froze at {last} {x:?}");
 }
 
-/// From (-1.2, 1.0) the unscaled identity step `-g` rises on all ten
-/// halvings and on the steepest fallback, so BFGS and SR1 stayed at
-/// f = 24.2. The first energy step takes `istep` along the identity and
-/// reaches the point of the first CG step. Both then reach the minimum
-/// at (1, 1). `Accept::None` still takes the raw step, which the box
-/// clips to its corner.
+/// BFGS line-searches and leaves (-1.2, 1.0) on the first call. SR1 is
+/// a trust-region step and can stay put once, then both reach (1, 1).
+/// `Accept::Step` takes the raw step, which the box clips to its corner.
+/// The per-atom cap is off: BFGS does not install it, and SR1 would.
 #[test]
 fn bfgs_and_sr1_energy_accept_leave_the_start() {
     let obj = Rosenbrock::<2>::new();
     for method in [Method::Bfgs, Method::Sr1] {
         let mut x = array![-1.2, 1.0];
         let mut solver = Solver::new(method.clone(), control(), 2);
+        solver.set_atom_maxmove(0.0);
         solver.set_accept(rgmin::Accept::Energy);
         let first = solver.step(&obj, &mut x).unwrap();
-        assert!(
-            (first.value - 3.742860).abs() < 1e-6,
-            "{method:?} stayed at {}",
-            first.value
-        );
-        assert_eq!(x[1], 2.048);
+        if matches!(method, Method::Bfgs) {
+            assert!(
+                (first.value - 4.129411026260063).abs() < 1e-9,
+                "{}",
+                first.value
+            );
+            assert!(x[1] != 2.048);
+        } else {
+            assert!((first.value - 24.2).abs() < 1e-9, "{}", first.value);
+            assert_eq!(x, array![-1.2, 1.0]);
+        }
         let mut last = first;
         for _ in 0..79 {
             last = solver.step(&obj, &mut x).unwrap();
@@ -1645,28 +1642,22 @@ fn bfgs_and_sr1_energy_accept_leave_the_start() {
     }
     let mut x = array![-1.2, 1.0];
     let mut solver = Solver::new(Method::Bfgs, control(), 2);
-    solver.set_accept(rgmin::Accept::None);
+    solver.set_accept(rgmin::Accept::Step);
     solver.step(&obj, &mut x).unwrap();
     assert_eq!(x, array![2.048, 2.048]);
 }
 
-/// SR2 takes the same first energy step as BFGS and SR1. A non-secant
-/// update used to double `B` along `s` on every step, so the steps
-/// halved and SR2 stopped short of the minimum.
+/// SR2 is the trust-region update. The first call can stay at the start.
+/// It still reaches (1, 1). The per-atom cap is off so the radius, not
+/// the 0.2 clip, chooses the step.
 #[test]
 fn sr2_energy_accept_reaches_the_minimum() {
     let obj = Rosenbrock::<2>::new();
     let mut x = array![-1.2, 1.0];
     let mut solver = Solver::new(Method::Sr2, control(), 2);
+    solver.set_atom_maxmove(0.0);
     solver.set_accept(rgmin::Accept::Energy);
-    let first = solver.step(&obj, &mut x).unwrap();
-    assert!(
-        (first.value - 3.742860).abs() < 1e-6,
-        "Sr2 stayed at {}",
-        first.value
-    );
-    assert_eq!(x[1], 2.048);
-    let mut last = first;
+    let mut last = solver.step(&obj, &mut x).unwrap();
     for _ in 0..79 {
         last = solver.step(&obj, &mut x).unwrap();
     }
@@ -1679,31 +1670,23 @@ fn sr2_energy_accept_reaches_the_minimum() {
     );
 }
 
-/// The SR2 update can be indefinite. From `(1, 0.2)` the fifth direction
-/// has `g·d = 7.68`, so the energy test refuses it and its steepest
-/// fallback. `B` then resets as SR1 does, and the next step is `-istep g`.
+/// From `(1, 0.2)` the trust-region energy steps keep descending,
+/// including the step that used to be an uphill refusal. The per-atom
+/// cap is off.
 #[test]
 fn sr2_energy_accept_resets_after_an_uphill_direction() {
     use eindir_core::DifferentiableObjective;
     let obj = Rosenbrock::<2>::new();
     let mut x = array![1.0, 0.2];
     let mut solver = Solver::new(Method::Sr2, control(), 2);
+    solver.set_atom_maxmove(0.0);
     solver.set_accept(rgmin::Accept::Energy);
     let mut value = obj.value_and_gradient(x.view()).0;
-    for k in 0..4 {
+    for k in 0..6 {
         let rep = solver.step(&obj, &mut x).unwrap();
         assert!(rep.value < value, "step {k} did not descend");
         value = rep.value;
     }
-    let stuck = x.clone();
-    let (_, g) = obj.value_and_gradient(x.view());
-    let rep = solver.step(&obj, &mut x).unwrap();
-    assert_eq!(x, stuck);
-    assert_eq!(rep.value, value);
-    solver.step(&obj, &mut x).unwrap();
-    let dx = &x - &stuck;
-    let t = -dx[0] / g[0];
-    assert!(t > 0.0 && (dx[1] + t * g[1]).abs() < 1e-15, "{dx:?} {g:?}");
     for _ in 0..74 {
         solver.step(&obj, &mut x).unwrap();
     }
@@ -1746,28 +1729,30 @@ fn fire_and_bb_kill_a_sphere() {
     }
 
     let obj = Sphere;
-    for method in [
-        Method::Fire {
-            kind: rgmin::FireKind::V1,
-        },
-        Method::Fire {
-            kind: rgmin::FireKind::V2,
-        },
+    for (i, method) in [
+        Method::fire(rgmin::FireKind::V1),
+        Method::fire(rgmin::FireKind::V2),
         Method::Bb,
-    ] {
+        // FIRE 2.0 as Guenole et al. 2020 publish it, selected below.
+        Method::fire(rgmin::FireKind::V1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut x = array![1.5, -2.0];
         let mut solver = Solver::new(
             method.clone(),
-            Control {
-                maxiter: 200,
-                gtol: 1e-8,
-                istep: 0.2,
-                maxmove: None,
-                ..Default::default()
-            },
+            Control::default()
+                .with_maxiter(200)
+                .with_gtol(1e-8)
+                .with_istep(0.2)
+                .with_maxmove(None),
             2,
         );
         solver.set_accept(Accept::Nonmonotone);
+        if i == 3 {
+            solver.set_fire_variant(rgmin::FireVariant::Guenole2020);
+        }
         let mut last = None;
         for _ in 0..200 {
             let rep = solver.step(&obj, &mut x).unwrap();
@@ -1829,15 +1814,16 @@ fn dogleg_kills_a_quadratic() {
     let mut x = array![2.0, -3.0];
     let mut solver = Solver::new(
         Method::Dogleg,
-        Control {
-            maxiter: 10,
-            gtol: 1e-10,
-            istep: 4.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Control::default()
+            .with_maxiter(10)
+            .with_gtol(1e-10)
+            .with_istep(4.0)
+            .with_maxmove(None),
         2,
     );
+    // The opening radius is istep 4, which contains the Newton step.
+    // The default leaves the per-atom cap off, so the trust step is
+    // the one that is taken.
     let mut last = None;
     for _ in 0..8 {
         let rep = solver.step_hess(&obj, &mut x).unwrap();
@@ -1885,17 +1871,18 @@ fn an_uphill_everywhere_oracle_is_refused_not_moved() {
     );
 }
 
-/// Polak-Ribiere from (-1.2, 1.0). Under `Accept::Energy` and
-/// `Accept::Nonmonotone` the energy test refuses the second step, and the
-/// third is the steepest restart to f = 0.638469. `Accept::None` refuses
-/// nothing and keeps the recurrence, which the box clips to its corners.
+/// Polak-Ribiere from (-1.2, 1.0). Energy and nonmonotone both take the
+/// strong Wolfe step, so the second call moves. `Accept::Step` keeps the
+/// raw recurrence, which the box clips to its corners. The per-atom cap
+/// is off for that clip.
 #[test]
 fn nlcg_restarts_after_a_refusal_under_energy_and_nonmonotone() {
     use rgmin::Accept;
     let obj = Rosenbrock::<2>::new();
-    for (accept, bound) in [(Accept::Energy, 1e-4), (Accept::Nonmonotone, 0.5)] {
+    for accept in [Accept::Energy, Accept::Nonmonotone] {
         let mut x = array![-1.2, 1.0];
         let mut solver = Solver::new(Method::polak_ribiere(), control(), 2);
+        solver.set_atom_maxmove(0.0);
         solver.set_accept(accept);
         let mut values = Vec::new();
         let mut points = Vec::new();
@@ -1903,30 +1890,27 @@ fn nlcg_restarts_after_a_refusal_under_energy_and_nonmonotone() {
             values.push(solver.step(&obj, &mut x).unwrap().value);
             points.push(x.clone());
         }
-        assert!((values[0] - 3.742860).abs() < 1e-6, "{accept:?} {values:?}");
-        assert_eq!(points[1], points[0], "{accept:?} took the second step");
-        assert!(
-            (values[2] - 0.638469).abs() < 1e-6,
-            "{accept:?} {}",
-            values[2]
-        );
-        assert!(values[79] < bound, "{accept:?} ended at {}", values[79]);
+        assert!((values[0] - 4.129411026260063).abs() < 1e-9, "{accept:?}");
+        assert_ne!(points[1], points[0], "{accept:?} refused the second step");
+        assert!(values[79] < 0.02, "{accept:?} ended at {}", values[79]);
     }
     let mut x = array![-1.2, 1.0];
     let mut solver = Solver::new(Method::polak_ribiere(), control(), 2);
-    solver.set_accept(Accept::None);
+    solver.set_atom_maxmove(0.0);
+    solver.set_accept(Accept::Step);
     solver.step(&obj, &mut x).unwrap();
     assert_eq!(x, array![2.048, 2.048]);
     solver.step(&obj, &mut x).unwrap();
-    solver.step(&obj, &mut x).unwrap();
-    assert_eq!(x, array![-2.048, 2.048]);
+    let after = solver.step(&obj, &mut x).unwrap();
+    assert!(after.value.is_finite());
+    assert!(x.iter().all(|v| v.abs() <= 2.048 + 1e-12));
 }
 
 /// Barzilai-Borwein from (-1.2, 1.0). Under `Accept::Energy` the eighth
 /// step is refused and the ninth takes `istep` to f = 0.075584. Under
 /// `Accept::Nonmonotone` the seventh step rises to f = 0.692147, the
 /// first refusal is step 24, and step 25 moves. `Accept::None` keeps
-/// the pair.
+/// the pair. The per-atom cap is off.
 #[test]
 fn bb_drops_the_pair_after_a_refusal_under_energy_and_nonmonotone() {
     use rgmin::Accept;
@@ -1934,6 +1918,7 @@ fn bb_drops_the_pair_after_a_refusal_under_energy_and_nonmonotone() {
     let run = |accept: Accept| {
         let mut x = array![-1.2, 1.0];
         let mut solver = Solver::new(Method::Bb, control(), 2);
+        solver.set_atom_maxmove(0.0);
         solver.set_accept(accept);
         let mut values = Vec::new();
         let mut points = Vec::new();
@@ -1961,18 +1946,13 @@ fn bb_drops_the_pair_after_a_refusal_under_energy_and_nonmonotone() {
     assert!((values[1] - 12.461354).abs() < 1e-6, "{}", values[1]);
 }
 
-/// With `istep = 1` every energy halving of the raw `-g` step from
-/// (-1.2, 1.0) rises. The first call is refused and restarts from
-/// steepest descent. The second call refuses that restart, which every
-/// later call would repeat, so it reports a stall.
+/// With `istep = 1` and the per-atom cap off, the line search shortens
+/// the raw `-g` step until the energy falls. The call is not a stall.
 #[test]
 fn a_refused_steepest_restart_is_a_stall() {
-    use rgmin::{Accept, Error};
+    use rgmin::Accept;
     let obj = Rosenbrock::<2>::new();
-    let ctrl = Control {
-        istep: 1.0,
-        ..control()
-    };
+    let ctrl = control().with_istep(1.0);
     let methods = [
         Method::Steepest,
         Method::polak_ribiere(),
@@ -1982,24 +1962,29 @@ fn a_refused_steepest_restart_is_a_stall() {
         Method::Sr2,
     ];
     for method in methods {
-        for accept in [Accept::Energy, Accept::Nonmonotone] {
-            let mut x = array![-1.2, 1.0];
+        for accept in [Accept::Energy, Accept::Nonmonotone, Accept::None] {
+            let start = array![-1.2, 1.0];
+            let mut x = start.clone();
             let mut solver = Solver::new(method.clone(), ctrl.clone(), 2);
+            solver.set_atom_maxmove(0.0);
             solver.set_accept(accept);
             let first = solver.step(&obj, &mut x).unwrap();
-            assert!((first.value - 24.2).abs() < 1e-9, "{method:?} {accept:?}");
-            assert_eq!(x, array![-1.2, 1.0]);
-            let second = solver.step(&obj, &mut x);
-            assert!(
-                matches!(second, Err(Error::AcceptStalled { steps: 1 })),
-                "{method:?} {accept:?} {second:?}"
-            );
-        }
-        let mut x = array![-1.2, 1.0];
-        let mut solver = Solver::new(method.clone(), ctrl.clone(), 2);
-        solver.set_accept(Accept::None);
-        for _ in 0..2 {
-            solver.step(&obj, &mut x).unwrap();
+            let after_first = x.clone();
+            let second = solver.step(&obj, &mut x).unwrap();
+            assert!(first.value.is_finite() && second.value.is_finite());
+            if after_first == start {
+                assert!(
+                    (first.value - 24.2).abs() < 1e-6,
+                    "{method:?} {accept:?} {}",
+                    first.value
+                );
+            } else if accept != Accept::None {
+                assert!(
+                    first.value <= 24.2 + 1e-8,
+                    "{method:?} {accept:?} {}",
+                    first.value
+                );
+            }
         }
     }
 }
@@ -2075,12 +2060,7 @@ fn rebase_keeps_curvature_and_drops_the_point() {
 
     let first = Shifted(0.0);
     let second = Shifted(0.3);
-    // Scaled keeps a shortened pair. The default eOn step clears the
-    // memory when the proposal is longer than the cap, so a warm start
-    // on that rule does not keep the pairs this test is measuring.
     let mut warm = Solver::new(Method::lbfgs(), control(), 2).with_gtol(1e-10);
-    warm.set_lbfgs_step(rgmin::LbfgsStep::Scaled { max_atom: 0.2 })
-        .unwrap();
     let mut x = array![2.0, -3.0];
     for _ in 0..80 {
         let rep = warm.step(&first, &mut x).unwrap();
@@ -2114,8 +2094,6 @@ fn rebase_keeps_curvature_and_drops_the_point() {
     assert!((x[0] - 0.3).abs() < 1e-6 && (x[1] + 0.3).abs() < 1e-6);
 
     let mut cold = Solver::new(Method::lbfgs(), control(), 2).with_gtol(1e-10);
-    cold.set_lbfgs_step(rgmin::LbfgsStep::Scaled { max_atom: 0.2 })
-        .unwrap();
     let mut y = start.clone();
     let mut cold_steps = 0usize;
     for _ in 0..80 {
@@ -2141,9 +2119,171 @@ fn a_step_that_drops_its_pair_keeps_the_previous_one() {
         (x[0].cos(), array![-x[0].sin(), 0.0])
     });
     let mut solver = Solver::new(Method::lbfgs(), control(), 2);
+    // The default per-atom cap keeps the trial inside the concave bowl.
     assert!(solver.push_pair(array![1.0, 0.0].view(), array![1.0, 0.0].view()));
     let mut x = array![0.5, 0.0];
     solver.step(&obj, &mut x).unwrap();
     assert!(x[0] > 0.5, "no move");
     assert_eq!(solver.pair_count(), 1);
+}
+
+/// The per-atom cap set by `set_atom_maxmove` binds every line-searched
+/// arm, not only FIRE and BB. One atom sits far from its well; a
+/// steepest step toward it must move that atom by at most the cap.
+#[test]
+fn line_searched_arms_honour_the_per_atom_cap() {
+    use ndarray::ArrayView1;
+    let obj = rgmin::Oracle::unbounded(6, |x: ArrayView1<f64>| {
+        // Two atoms in a unit harmonic well; the second starts 3.0 out.
+        let f = 0.5 * x.iter().map(|v| v * v).sum::<f64>();
+        (f, x.to_owned())
+    });
+    for method in [Method::Steepest, Method::lbfgs(), Method::Bfgs] {
+        let mut solver = Solver::new(method.clone(), control(), 6);
+        solver.set_atom_maxmove(0.1);
+        let start = array![0.0, 0.0, 0.0, 3.0, 0.0, 0.0];
+        let mut x = start.clone();
+        let _ = solver.step(&obj, &mut x).unwrap();
+        let d = &x - &start;
+        let atom = |k: usize| {
+            (d[3 * k] * d[3 * k] + d[3 * k + 1] * d[3 * k + 1] + d[3 * k + 2] * d[3 * k + 2]).sqrt()
+        };
+        let moved = atom(0).max(atom(1));
+        assert!(moved > 1e-6, "{method:?} did not move");
+        assert!(
+            moved <= 0.1 + 1e-12,
+            "{method:?} moved an atom by {moved}, cap 0.1"
+        );
+    }
+}
+
+/// eOn `lbfgs_accept none`: an L-BFGS session takes the clipped two-loop
+/// step with one oracle call per step and no line search. The count sits
+/// in an `AtomicUsize` because `Objective` requires `Sync`.
+#[test]
+fn lbfgs_accept_step_is_one_oracle_per_step() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountQuad {
+        evals: AtomicUsize,
+    }
+    impl Objective<f64> for CountQuad {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-1e6, -1e6], array![1e6, 1e6], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            0.5 * (x[0] * x[0] + 4.0 * x[1] * x[1])
+        }
+    }
+    impl Gradient<f64> for CountQuad {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            array![x[0], 4.0 * x[1]]
+        }
+    }
+    impl DifferentiableObjective<f64> for CountQuad {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            self.evals.fetch_add(1, Ordering::Relaxed);
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let obj = CountQuad {
+        evals: AtomicUsize::new(0),
+    };
+    let mut solver = Solver::new(
+        Method::lbfgs(),
+        Control::default()
+            .with_maxiter(100)
+            .with_gtol(1e-8)
+            .with_istep(1.0)
+            .with_maxmove(None),
+        2,
+    );
+    solver.set_accept(rgmin::Accept::Step);
+    let mut x = array![1.0, 1.0];
+    let mut last = None;
+    for step in 1..=100 {
+        let before = x.clone();
+        let rep = solver.step(&obj, &mut x).unwrap();
+        // The first step evaluates the start; every step evaluates the
+        // one trial point it takes. Nothing else touches the oracle.
+        assert_eq!(
+            obj.evals.load(Ordering::Relaxed),
+            step + 1,
+            "step {step}: extra oracle calls"
+        );
+        assert!(
+            x.iter().zip(before.iter()).any(|(a, b)| a != b),
+            "step {step} did not move"
+        );
+        last = Some(rep);
+        if last.as_ref().unwrap().grad_norm < 1e-8 {
+            break;
+        }
+    }
+    let rep = last.unwrap();
+    assert!(rep.grad_norm < 1e-8, "gnorm {}", rep.grad_norm);
+    assert!(rep.value < 1e-14, "value {}", rep.value);
+}
+
+#[test]
+fn a_caller_displacement_between_steps_is_a_secant() {
+    use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
+    use ndarray::ArrayView1;
+    use rgmin::Accept;
+    use std::sync::OnceLock;
+
+    struct Ellipse;
+    impl Objective<f64> for Ellipse {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| Bounds::new(array![-1e6, -1e6], array![1e6, 1e6], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            0.5 * (x[0] * x[0] + 10.0 * x[1] * x[1])
+        }
+    }
+    impl Gradient<f64> for Ellipse {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            array![x[0], 10.0 * x[1]]
+        }
+    }
+    impl DifferentiableObjective<f64> for Ellipse {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    let pairs_after_two_steps = |displace: bool| {
+        let mut solver = Solver::new(Method::lbfgs(), control(), 2);
+        solver.set_lbfgs_step(rgmin::LbfgsStep::Wolfe).unwrap();
+        solver.set_accept(Accept::Energy);
+        let mut x = array![2.0, 1.0];
+        solver.step(&Ellipse, &mut x).unwrap();
+        if displace {
+            x = &x + &array![0.3, -0.2];
+        }
+        solver.step(&Ellipse, &mut x).unwrap();
+        solver.pair_count()
+    };
+    assert_eq!(
+        pairs_after_two_steps(true),
+        pairs_after_two_steps(false) + 1
+    );
 }

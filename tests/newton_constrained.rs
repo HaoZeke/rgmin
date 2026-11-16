@@ -16,19 +16,17 @@ fn constrained_newton_preserves_cross_curvature() {
         |_x: ArrayView1<f64>| array![[4.0, -3.0], [-3.0, 4.0]],
     );
     let mut solver = Solver::new(
-        Method::Newton {
-            kind: NewtonKind::Shifted,
-        },
-        Control {
-            maxiter: 1,
-            gtol: 1e-12,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Method::newton(NewtonKind::Shifted),
+        Control::default()
+            .with_maxiter(1)
+            .with_gtol(1e-12)
+            .with_istep(1.0)
+            .with_maxmove(None),
         2,
     );
     solver.set_highs(true);
+    // The Newton point sits past the default per-atom cap.
+    solver.set_atom_maxmove(0.0);
     assert!(solver.set_box(Some(vec![0.0, -1.0]), Some(vec![1.0, 1.0])));
     let report = solver.step_hess(&objective, &mut array![0.0, 0.0]).unwrap();
     assert!(

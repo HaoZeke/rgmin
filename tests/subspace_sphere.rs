@@ -353,11 +353,7 @@ fn rayleigh_start() -> Array1<f64> {
 }
 
 fn solve(method: Method, kind: ManifoldKind, problem: &Rayleigh) -> (Array1<f64>, Report) {
-    let control = Control {
-        maxiter: 500,
-        gtol: 1e-10,
-        ..Default::default()
-    };
+    let control = Control::default().with_maxiter(500).with_gtol(1e-10);
     let mut solver = Solver::new(method, control, D);
     solver.set_manifold(kind);
     let mut x = rayleigh_start();
@@ -406,11 +402,7 @@ fn the_drivers_find_the_lowest_mode_inside_the_subspace() {
 /// Gradient norms of session Newton-CG steps down to `1e-7`, above the
 /// level where the decrease of `f` is lost to rounding.
 fn newton_cg_gradients(problem: &Rayleigh, what: &str) -> Vec<f64> {
-    let control = Control {
-        maxiter: 100,
-        gtol: 1e-7,
-        ..Default::default()
-    };
+    let control = Control::default().with_maxiter(100).with_gtol(1e-7);
     let mut solver = Solver::new(Method::NewtonCg, control, D);
     solver.set_manifold(ManifoldKind::sphere_excluding(excluded()).unwrap());
     let mut x = rayleigh_start();

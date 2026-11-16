@@ -12,18 +12,16 @@ use ndarray::{Array1, Array2, ArrayView1};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
-#[cfg(feature = "highs")]
-use crate::accept::accept_step_with_fallback;
 use crate::accept::{Accept, Acceptance, Trial, accept_step, retract_within_cap, single_trial};
-use crate::adam::adam_direction;
+use crate::adam::{adam_direction, scale_to_unit_atom};
 use crate::bb::bb_direction;
 use crate::control::{Control, StopNorm};
+use crate::diis::{DiisState, gdiis_point};
 use crate::error::{Error, Result};
 use crate::fire::{
-    FireConfig, FireKind, FireMix, FirePreparation, FirePreset, FireState, Prepared, fire_after_v1,
-    fire_after_v1_metric, fire_clip_components, fire_clip_velocity, fire_displacement,
-    fire_displacement_into, fire_displacement_metric, fire_prepare_v2, fire_prepare_v2_into,
-    project_box_tangent,
+    Fire2Extras, FireConfig, FireKind, FireMix, FirePreparation, FirePreset, FireState,
+    FireVariant, fire_after_v1_metric, fire_clip_components, fire_displacement_into,
+    fire_prepare_v2, fire_rescale_velocity, fire2_displacement_metric, guenole2020,
 };
 use crate::holonomic::DistanceConstraints;
 use crate::hvp::{
@@ -32,55 +30,45 @@ use crate::hvp::{
 };
 use crate::lbfgs::{GradNorm, Lbfgs, LbfgsStep};
 use crate::lindh::LindhSpec;
-use crate::linesearch::LineSearch;
-use crate::lowest_mode::{ApplyHessian, lowest_eigenpair};
+use crate::linesearch::{LineSearch, LineSearchOptions};
+use crate::lowest_mode::ApplyHessian;
 use crate::manifold::{Manifold, ManifoldKind};
 use crate::method::Method;
 use crate::newton::{HessianObjective, NewtonKind, rfo_direction, shifted_newton};
 use crate::nlcg::{Conjugacy, ConjugacyContext, Restart};
-use crate::precon::{ExpParams, ExpState, Neighbours};
+use crate::precon::{
+    ExpParams, FfParams, FfTerms, Ghost, LindhParams, Neighbours, PreconSpec, Slot,
+};
 use crate::pso::{Particle, RNG_SEED, random_velocity, update_swarm};
 use crate::qn::{
-    bfgs_inverse_update, secant_scale, solve_dense, sr1_inverse_update, sr2_hessian_update,
+    bfgs_inverse_update, sr_trust_direction, sr_trust_limits, sr1_hessian_update,
+    sr2_hessian_update,
 };
 use crate::qn_step::QnStep;
-use crate::report::Report;
-use crate::rigid::{project_horizontal, project_out_rot_trans};
+use crate::quickmin::{
+    QuickMinOptions, QuickMinSession, QuickMinState, quickmin_rescale_velocity,
+    quickmin_session_step,
+};
+use crate::report::{Report, Status};
+use crate::rigid::{RigidMode, RigidWorkspace, project_out_rot_trans};
 use crate::step::{
-    cap_displacement_atom, clip_mut, clip_owned, finite, l2, max_atom_displacement,
-    max_atom_motion, non_finite, scale_displacement_to_atom_cap, scale_step, scale_step_atom,
+    Taken, cap_alpha, cap_displacement_atom, l2, max_atom_displacement, nlcg_opening_alpha,
+    qn_istep, scale_displacement_to_atom_cap, scale_step, scale_step_atom, take_step_with_options,
 };
 use crate::trust::{
     accept_ratio, burdakov_radius, dogleg_direction, predicted_reduction, reduction_ratio,
     update_radius,
 };
 
-/// Projects the rigid modes out of `dir` at `x`. True when more than
-/// rounding left the direction.
-fn strip_rigid(dir: &mut Array1<f64>, x: &Array1<f64>) -> bool {
-    let before = dir.clone();
-    project_out_rot_trans(dir, x.view());
-    l2(&(&before - &*dir)) > 1e-12 * l2(&before)
-}
-
-/// The smallest initial trust radius, taken when `istep` is smaller.
-const RADIUS_START: f64 = 1e-8;
-/// The largest trust radius, in units of the current one, when no
-/// `maxmove` caps it.
-const RADIUS_GROWTH: f64 = 8.0;
-/// Saddle-escape kicks from one stationary point.
-const SADDLE_KICKS: u8 = 4;
-
-/// A length-n vector from the recycle pool, filled with `src`.
-fn copied(src: &Array1<f64>) -> Array1<f64> {
-    let mut dst = crate::workspace::take_array(src.len());
-    if let (Some(d), Some(s)) = (dst.as_slice_mut(), src.as_slice()) {
-        d.copy_from_slice(s);
-    } else {
-        dst.assign(src);
-    }
-    dst
-}
+/// The session's line search until [`Solver::set_linesearch`]: strong
+/// Wolfe with `c1 = 1e-4`, `c2 = 0.9`. On the atomistic benchmark it
+/// takes the quasi-Newton unit step at about 1.1 oracle calls per
+/// iteration where Brent's exact search spends about 25.
+const SESSION_LINESEARCH: LineSearch = LineSearch::Wolfe {
+    c1: 1e-4,
+    c2: 0.9,
+    maxiter: 20,
+};
 
 /// Why a capped trial did not move.
 enum CappedMiss {
@@ -90,22 +78,104 @@ enum CappedMiss {
     Stop(Error),
 }
 
-/// `P^{-1} v` when an exponential metric is installed, otherwise `v`.
-fn metric_vector(exp: &Option<ExpState>, v: &Array1<f64>) -> Array1<f64> {
-    match exp.as_ref().and_then(ExpState::matrix) {
-        Some(p) => p.solve(v.view()).unwrap_or_else(|| v.clone()),
-        None => v.clone(),
+/// Smallest initial trust radius. The constrained stepper reads this.
+const RADIUS_START: f64 = 1e-8;
+/// Largest trust-radius growth, in units of the current radius, with no `maxmove`.
+const RADIUS_GROWTH: f64 = 8.0;
+/// Saddle-escape kicks from one stationary point.
+const SADDLE_KICKS: u8 = 4;
+
+/// `P^{-1} v` when a geometry metric is installed, otherwise `v`.
+///
+/// A failed solve is an error. Substituting `v` would mix `P^{-1} g` and
+/// `g` inside one CG recurrence or one FIRE mix.
+fn metric_vector(precon: &Option<Slot>, v: &Array1<f64>) -> Result<Array1<f64>> {
+    match precon {
+        None => Ok(v.clone()),
+        Some(state) => {
+            let p = state.metric().ok_or(Error::Precon {
+                what: "metric is not assembled",
+            })?;
+            p.solve(v.view()).ok_or(Error::Precon {
+                what: "linear solve failed",
+            })
+        }
+    }
+}
+
+/// Remove rigid motion at the anchor stored on `ws`.
+#[allow(clippy::too_many_arguments)]
+fn eckart(
+    ws: &mut RigidWorkspace,
+    mode: RigidMode,
+    masses: Option<&[f64]>,
+    frozen: Option<&[u8]>,
+    weighted: bool,
+    metric: bool,
+    pbc: [bool; 3],
+    broken_translation: [bool; 3],
+    broken_rotation: [bool; 3],
+    v: &mut Array1<f64>,
+) {
+    if mode == RigidMode::Off {
+        return;
+    }
+    let Some(vs) = v.as_slice_mut() else {
+        return;
+    };
+    ws.project_at_anchor(
+        vs,
+        masses,
+        frozen,
+        weighted,
+        metric,
+        mode,
+        pbc,
+        broken_translation,
+        broken_rotation,
+    );
+}
+
+/// Puts a taken [`RigidWorkspace`] back if a stepper returns early.
+struct WsHold<'a> {
+    slot: &'a mut RigidWorkspace,
+    ws: RigidWorkspace,
+}
+
+impl<'a> WsHold<'a> {
+    fn take(slot: &'a mut RigidWorkspace) -> Self {
+        let mut hold = WsHold {
+            slot,
+            ws: RigidWorkspace::new(),
+        };
+        std::mem::swap(hold.slot, &mut hold.ws);
+        hold
+    }
+}
+
+impl Drop for WsHold<'_> {
+    fn drop(&mut self) {
+        std::mem::swap(self.slot, &mut self.ws);
+    }
+}
+
+/// Steepest direction in the metric, `-z`, with the `Accept::Step` scale.
+fn nlcg_steepest(z: &Array1<f64>, accept: Accept, istep: f64) -> Array1<f64> {
+    if accept == Accept::Step {
+        z.mapv(|v| -v * istep)
+    } else {
+        z.mapv(|v| -v)
     }
 }
 
 /// P-norms for the FIRE mix: `sqrt(v^T P v)` and `sqrt(F · P^{-1} F)`.
 fn fire_mix(
-    exp: &Option<ExpState>,
+    precon: &Option<Slot>,
     vel: &Array1<f64>,
     raw: &Array1<f64>,
     steepest: &Array1<f64>,
 ) -> Option<FireMix> {
-    let p = exp.as_ref().and_then(ExpState::matrix)?;
+    let p = precon.as_ref().and_then(Slot::metric)?;
     let pv = p.apply(vel.view());
     let vel_n = vel.dot(&pv).max(0.0).sqrt();
     let dir_n = raw.dot(steepest).max(0.0).sqrt();
@@ -125,67 +195,59 @@ struct TangentModel {
     basis: Array2<f64>,
 }
 
-/// Scratch for one Euclidean eOn or FIRE step. Sized in [`Solver::new`].
-struct StepScratch {
-    /// Gradient at the point the step starts from.
-    gold: Array1<f64>,
-    /// Gradient at the trial.
-    grad: Array1<f64>,
-    /// Accepted trial coordinates.
-    trial: Array1<f64>,
-    /// Point the FIRE displacement is measured from.
-    fwd: Array1<f64>,
-    /// Uncapped FIRE trial, kept to see whether a cap moved it.
-    free: Array1<f64>,
-    /// FIRE rollback, or a scratch displacement.
-    corr: Array1<f64>,
-}
-
-impl StepScratch {
-    fn new(n: usize) -> Self {
-        Self {
-            gold: Array1::zeros(n),
-            grad: Array1::zeros(n),
-            trial: Array1::zeros(n),
-            fwd: Array1::zeros(n),
-            free: Array1::zeros(n),
-            corr: Array1::zeros(n),
-        }
-    }
-}
-
 /// Long-lived solver. Algorithm memory lives here; `x` stays with the caller.
 pub struct Solver {
     dim: usize,
     control: Control,
     linesearch: LineSearch,
+    line_options: LineSearchOptions,
     istep: f64,
-    /// Scale raw gradient steps to unit length at the first step after
-    /// construction, `forget`, or `rebase`. The C default.
-    unit_first_step: bool,
     steps: usize,
     qn_step: QnStep,
     accept: Accept,
     e_hist: VecDeque<f64>,
-    /// The acceptance test refused the last first-order step.
-    refused: bool,
-    /// Dogleg model on a curved kind, rewritten in place at each step.
-    tangent: TangentModel,
+    /// Per-atom cap in force. `None` is no per-atom cap.
     atom_maxmove: Option<f64>,
-    /// Whether geometry L-BFGS needs a finite-difference stiffness probe.
-    geometry_lbfgs_stiff: Option<bool>,
+    /// `set_atom_maxmove` has been called. The default cap is then left alone.
+    atom_maxmove_set: bool,
     project_rigid: bool,
+    /// `Auto` until a host declares a molecule. See [`Self::removal_mode`].
+    rigid_mode: RigidMode,
+    /// Periodic axes, masses, a freeze, a field, or an explicit mode.
+    rigid_declared: bool,
+    /// `set_project_rigid(false)` / `set_rigid_mode(Off)` on a Euclidean session.
+    rigid_forced_off: bool,
+    /// The rigid settings before periodic axes declared the molecule.
+    /// Clearing the axes puts them back; any other declaration drops them.
+    rigid_before_pbc: Option<(RigidMode, bool, bool, bool)>,
+    /// Periodic axes. Any true axis drops rotations under Auto.
+    pbc: [bool; 3],
+    /// Translations the host says are not symmetries.
+    broken_translation: [bool; 3],
+    /// Rotations the host says are not symmetries.
+    broken_rotation: [bool; 3],
+    /// Length `3N`. Nonzero freezes that coordinate.
+    frozen: Option<Vec<u8>>,
+    /// Cartesian mass inner product. Not the `MwRigid` chart.
+    mass_metric: bool,
+    /// `x` stores `q_i = sqrt(m_i) x_i`.
+    mass_weighted_coords: bool,
+    rigid_ws: RigidWorkspace,
     /// Sella `proj_rot`: false under PBC. Rotation is not a symmetry of the cell.
     periodic: bool,
     manifold: ManifoldKind,
     /// Per-atom masses for [`ManifoldKind::MwRigid`]. Length N, not 3N.
     masses: Option<Array1<f64>>,
+    /// Optional Gr(n,p) shape for the Grassmann selector.
+    factor_shape: Option<(usize, usize)>,
     /// Scales `d` of the metric chart `z = d * x` of a weighted product.
     chart: Option<Arc<Array1<f64>>>,
     /// Natural point last written back from the chart, and its chart point.
     chart_seen: Option<(Array1<f64>, Array1<f64>)>,
     #[cfg(feature = "highs")]
     highs: bool,
+    #[cfg(feature = "highs")]
+    highs_options: crate::HighsOptions,
     #[cfg(feature = "highs")]
     box_lo: Option<Vec<f64>>,
     #[cfg(feature = "highs")]
@@ -194,57 +256,81 @@ pub struct Solver {
     highs_trust: Option<f64>,
     #[cfg(feature = "highs")]
     equalities: Vec<(Vec<(usize, f64)>, f64)>,
-    #[cfg(feature = "highs")]
-    highs_solver: crate::HighsSolverKind,
-    #[cfg(feature = "highs")]
-    highs_crossover: crate::HighsCrossover,
-    #[cfg(feature = "highs")]
-    highs_callback: Option<crate::HighsCCallback>,
-    #[cfg(feature = "highs")]
-    highs_callback_user: *mut std::os::raw::c_void,
     last_pos: Option<Array1<f64>>,
     last_value: f64,
     last_grad: Array1<f64>,
-    /// When set, [`Self::report`] skips the coordinate and gradient copies.
-    brief: bool,
-    /// Optional trace of the eOn fill step, for the cap and reset study.
-    eon_log: Option<Vec<crate::session::drive::EonFeat>>,
-    /// Ratio test on the capped two-loop step. Off by default.
-    trust: bool,
-    /// Starting Burdakov radius. Zero leaves that radius off.
-    lbfgs_burdakov_init: f64,
-    /// Current Burdakov radius.
-    lbfgs_burdakov: f64,
-    /// Current trust radius, in the same length as the cap.
-    trust_delta: f64,
-    /// Largest trust radius. The cap selected at construction.
-    trust_max: f64,
-    /// Reused buffers for the Euclidean FIRE and L-BFGS steps.
-    scratch: Array1<f64>,
-    scratch_b: Array1<f64>,
-    saved_x: Array1<f64>,
-    /// Trial, gradient and FIRE buffers for a steady [`Self::step`].
-    reuse: StepScratch,
+    /// Unlimited L-BFGS plateau. Unused by every other method, and unused
+    /// when the iteration budget is positive.
+    lbfgs_plateau: crate::lbfgs_plateau::RepeatedAcceptedStep,
     /// Objective gradients. A finite-difference product is an
     /// [`Self::hvp_calls`] entry, not a gradient.
     gradient_calls: usize,
-    /// Packwood exponential metric. `None` leaves every method unchanged.
-    exp: Option<ExpState>,
-    /// Lindh model Hessian. `None` leaves the scalar initial scale.
-    lindh_spec: Option<LindhSpec>,
-    /// Rayleigh scale of the Lindh matrix, from one force probe.
-    lindh_mu: Option<f64>,
     /// Analytic or finite-difference Hessian-vector products.
     hvp_calls: usize,
     /// Negative-curvature kicks already taken in this solve.
     saddle_kicks: u8,
+    /// Whether geometry L-BFGS needs a finite-difference stiffness probe.
+    geometry_lbfgs_stiff: Option<bool>,
+    /// Capped Cartesian L-BFGS takes the geometry step. `None` leaves
+    /// a Wolfe session with an explicit per-atom cap on it.
+    geometry_step: Option<bool>,
+    /// Geometry metric. `None` leaves every method unchanged.
+    precon: Option<Slot>,
+    /// Bumped when `P` is installed, cleared, or rebuilt.
+    metric_epoch: u64,
+    /// Times NLCG replaced a non-descent direction with steepest descent.
+    nlcg_descent_fallbacks: u64,
+    /// First-step scale used by the constrained stepper. Off unless the C API asks.
+    unit_first_step: bool,
+    /// The constrained acceptance test refused the previous step.
+    refused: bool,
+    /// Dogleg model on a curved kind, rewritten in place at each step.
+    tangent: TangentModel,
+    /// Norm compared with [`Control::gtol`]. Starts as [`Control::stop_norm`].
     stop_norm: StopNorm,
-    /// Holonomic distance constraints. With a set, `last_grad` is the
-    /// raw gradient, whose multipliers the Hessian steps need.
+    /// Holonomic distance constraints. `None` is the unconstrained step.
     constraints: Option<Arc<DistanceConstraints>>,
+    /// [`Self::run`] skips the coordinate copy on intermediate reports.
+    brief: bool,
+    /// Optional trace of the eOn fill step.
+    eon_log: Option<Vec<drive::EonFeat>>,
+    /// Ratio test on a capped two-loop fill. Off by default.
+    trust: bool,
+    trust_delta: f64,
+    trust_max: f64,
+    /// Starting Burdakov radius. Zero leaves that radius off.
+    lbfgs_burdakov_init: f64,
+    /// Current Burdakov radius.
+    lbfgs_burdakov: f64,
+    scratch: Array1<f64>,
+    scratch_b: Array1<f64>,
+    saved_x: Array1<f64>,
+    /// `Some` when the exponential preconditioner is the installed metric.
+    exp: Option<()>,
+    lindh_spec: Option<LindhSpec>,
+    lindh_mu: Option<f64>,
+    /// SR1/SR2 trust radius. The matrix itself lives on [`Inner`].
+    sr_radius: f64,
+    /// Published FIRE 2.0 schedule. `None` is the rgmin integrator.
+    fire2: Option<Fire2Extras>,
+    /// Quick-min, ODE12r, or DIIS. [`Inner`] stays a method the constraint
+    /// stepper already matches; this overlay runs instead of that arm.
+    overlay: Overlay,
+    /// Objective bounds noted at the start of a step, for the box norm.
+    bound_low: Option<Array1<f64>>,
+    bound_high: Option<Array1<f64>>,
     inner: Inner,
 }
 
+/// Methods added after the constraint stepper's match was written.
+enum Overlay {
+    None,
+    QuickMin(QuickMinState, QuickMinSession),
+    Ode12r(crate::ode12r::Ode12rState),
+    Diis(DiisState),
+}
+
+#[allow(clippy::large_enum_variant)]
 enum Inner {
     Lbfgs(Lbfgs),
     Nlcg {
@@ -253,13 +339,19 @@ enum Inner {
         dir: Array1<f64>,
         g_old: Array1<f64>,
         /// `P^{-1} g` at the previous accepted point. Equals `g_old` when
-        /// no exponential metric is installed.
+        /// no geometry metric is installed.
         z_old: Array1<f64>,
         d_old: Array1<f64>,
         initialized: bool,
+        /// `metric_epoch` at the moment `z_old` and `dir` were formed.
+        z_epoch: u64,
+        /// Accepted line-search step `α_{k-1}`. Zero before the first move.
+        prev_alpha: f64,
+        /// `g_{k-1} · d_{k-1}` for Nocedal-Wright equation 3.60.
+        prev_gd: f64,
     },
     /// `fresh`: no secant pair has reached the matrix since construction,
-    /// `forget`, or a refused energy step.
+    /// `forget`, or a refused constrained step.
     Bfgs {
         h: Array2<f64>,
         fresh: bool,
@@ -315,43 +407,54 @@ struct PsoState {
     rng: StdRng,
 }
 
+/// Projects the rigid modes out of `dir` at `x`. True when more than
+/// rounding left the direction.
+fn strip_rigid(dir: &mut Array1<f64>, x: &Array1<f64>) -> bool {
+    let before = dir.clone();
+    project_out_rot_trans(dir, x.view());
+    l2(&(&before - &*dir)) > 1e-12 * l2(&before)
+}
+
 impl Solver {
     /// Fresh session for `method` in dimension `dim`.
     pub fn new(method: Method, control: Control, dim: usize) -> Self {
         let istep = control.istep;
         let stop_norm = control.stop_norm;
         let inner = Inner::from_method(&method, dim, istep);
-        let linesearch = if matches!(&inner, Inner::Lbfgs(_)) {
-            LineSearch::Wolfe {
-                c1: 1e-4,
-                c2: 0.9,
-                maxiter: 40,
-            }
-        } else {
-            LineSearch::default()
-        };
-        Self {
+        let mut solver = Self {
             dim,
             control,
-            linesearch,
+            linesearch: SESSION_LINESEARCH,
+            line_options: LineSearchOptions::default(),
             istep,
-            unit_first_step: false,
             steps: 0,
             qn_step: QnStep::TwoLoop,
             accept: Accept::None,
             e_hist: VecDeque::new(),
-            refused: false,
-            tangent: TangentModel::default(),
             atom_maxmove: None,
-            geometry_lbfgs_stiff: None,
+            atom_maxmove_set: false,
             project_rigid: false,
+            rigid_mode: RigidMode::Auto,
+            rigid_declared: false,
+            rigid_forced_off: false,
+            rigid_before_pbc: None,
+            pbc: [false; 3],
+            broken_translation: [false; 3],
+            broken_rotation: [false; 3],
+            frozen: None,
+            mass_metric: false,
+            mass_weighted_coords: false,
+            rigid_ws: RigidWorkspace::new(),
             periodic: false,
             manifold: ManifoldKind::Euclidean,
             masses: None,
+            factor_shape: None,
             chart: None,
             chart_seen: None,
             #[cfg(feature = "highs")]
             highs: false,
+            #[cfg(feature = "highs")]
+            highs_options: crate::HighsOptions::default(),
             #[cfg(feature = "highs")]
             box_lo: None,
             #[cfg(feature = "highs")]
@@ -360,105 +463,283 @@ impl Solver {
             highs_trust: None,
             #[cfg(feature = "highs")]
             equalities: Vec::new(),
-            #[cfg(feature = "highs")]
-            highs_solver: crate::HighsSolverKind::Ipm,
-            #[cfg(feature = "highs")]
-            highs_crossover: crate::HighsCrossover::Off,
-            #[cfg(feature = "highs")]
-            highs_callback: None,
-            #[cfg(feature = "highs")]
-            highs_callback_user: std::ptr::null_mut(),
             last_pos: None,
             last_value: 0.0,
             last_grad: Array1::zeros(dim),
+            lbfgs_plateau: crate::lbfgs_plateau::RepeatedAcceptedStep::new(),
+            gradient_calls: 0,
+            hvp_calls: 0,
+            saddle_kicks: 0,
+            geometry_lbfgs_stiff: None,
+            geometry_step: None,
+            precon: None,
+            metric_epoch: 0,
+            nlcg_descent_fallbacks: 0,
+            unit_first_step: false,
+            refused: false,
+            tangent: TangentModel::default(),
+            stop_norm,
+            constraints: None,
             brief: false,
             eon_log: None,
             trust: false,
-            lbfgs_burdakov_init: 0.0,
-            lbfgs_burdakov: 0.0,
             trust_delta: 0.0,
             trust_max: 0.0,
+            lbfgs_burdakov_init: 0.0,
+            lbfgs_burdakov: 0.0,
             scratch: Array1::zeros(dim),
             scratch_b: Array1::zeros(dim),
             saved_x: Array1::zeros(dim),
-            reuse: StepScratch::new(dim),
-            gradient_calls: 0,
-            hvp_calls: 0,
             exp: None,
             lindh_spec: None,
             lindh_mu: None,
-            saddle_kicks: 0,
-            stop_norm,
-            constraints: None,
+            sr_radius: 0.0,
+            fire2: None,
+            overlay: Overlay::None,
+            bound_low: None,
+            bound_high: None,
             inner,
+        };
+        solver.overlay = match &method {
+            Method::QuickMin => {
+                Overlay::QuickMin(QuickMinState::new(dim, istep), QuickMinSession::new(istep))
+            }
+            Method::Ode12r => Overlay::Ode12r(crate::ode12r::Ode12rState::new(istep)),
+            Method::Diis { memory } => Overlay::Diis(DiisState::new(*memory)),
+            _ => Overlay::None,
+        };
+        solver.apply_default_atom_cap();
+        solver
+    }
+
+    /// [`Method::installs_default_atom_cap`] for the arm this session runs.
+    fn installs_default_atom_cap(&self) -> bool {
+        match &self.inner {
+            Inner::Bfgs { .. } => Method::Bfgs.installs_default_atom_cap(),
+            Inner::Dogleg { .. } => Method::Dogleg.installs_default_atom_cap(),
+            Inner::Fire(state) => Method::Fire { kind: state.kind }.installs_default_atom_cap(),
+            // The remaining arms install the cap. A method added to the
+            // exception list in [`Method::installs_default_atom_cap`]
+            // needs an arm here.
+            _ => true,
+        }
+    }
+
+    /// Install [`crate::DEFAULT_ATOM_MAXMOVE`] on a Cartesian session whose
+    /// method has no step control of its own, when the caller has set
+    /// neither a per-atom cap nor a positive Euclidean cap.
+    ///
+    /// BFGS, dogleg, and FIRE 2.0 leave the default off. Dogleg would
+    /// otherwise clip the trust step and feed that shorter length to
+    /// the radius update, so a step on the trust boundary looks
+    /// interior and the radius stays put.
+    fn apply_default_atom_cap(&mut self) {
+        if self.atom_maxmove_set {
+            return;
+        }
+        // A negative Euclidean cap is the caller's request for no cap at
+        // all, including this default. Zero was stored as `None` and keeps it.
+        self.atom_maxmove = if matches!(self.control.maxmove, Some(cap) if cap < 0.0) {
+            None
+        } else if self.installs_default_atom_cap() && self.manifold.retract_is_translation() {
+            crate::step::implicit_atom_cap(&self.control)
+        } else {
+            None
+        };
+        if self.steps == 0 {
+            self.reset_sr_radius();
+        }
+    }
+
+    /// Family used by [`crate::select_precon`] when the caller asks for auto.
+    ///
+    /// FIRE is the identity. Nonlinear CG is the metric rule. Every
+    /// other method is the quasi-Newton rule, which installs `P^{-1}`
+    /// as `H0` when the geometry asks for a matrix.
+    #[must_use]
+    pub fn optimizer_family(&self) -> crate::OptimizerFamily {
+        if matches!(self.overlay, Overlay::Ode12r(_)) || matches!(self.inner, Inner::Fire(_)) {
+            crate::OptimizerFamily::Fire
+        } else if matches!(self.inner, Inner::Nlcg { .. }) {
+            crate::OptimizerFamily::Cg
+        } else {
+            crate::OptimizerFamily::QuasiNewton
+        }
+    }
+
+    /// Install one geometry preconditioner.
+    ///
+    /// L-BFGS takes \(H_0 = P^{-1}\). FIRE and nonlinear CG take `P`
+    /// as the metric. An index outside `0..dim/3` fails here.
+    /// [`ExpParams::mu`] `None`, and the same field on Lindh and FF,
+    /// defers the energy scale to the next [`Self::step`].
+    pub fn set_precon(&mut self, spec: PreconSpec<'_>) -> Result<()> {
+        let slot = match spec {
+            PreconSpec::Exp {
+                positions,
+                neighbours,
+                params,
+            } => {
+                self.require_precon_dim(positions.len())?;
+                Slot::Exp(crate::precon::ExpState::new(positions, neighbours, params)?)
+            }
+            PreconSpec::Lindh {
+                positions,
+                z,
+                ghosts,
+                params,
+            } => {
+                self.require_precon_dim(positions.len())?;
+                Slot::Lindh(crate::precon::LindhState::new(
+                    positions, z, ghosts, params,
+                )?)
+            }
+            PreconSpec::Ff {
+                positions,
+                terms,
+                params,
+            } => {
+                self.require_precon_dim(positions.len())?;
+                Slot::Ff(crate::precon::FfState::new(positions, terms, params)?)
+            }
+        };
+        self.install_slot(slot);
+        Ok(())
+    }
+
+    fn require_precon_dim(&self, got: usize) -> Result<()> {
+        if got != self.dim {
+            return Err(Error::Dim { got, dim: self.dim });
+        }
+        Ok(())
+    }
+
+    fn install_slot(&mut self, slot: Slot) {
+        let is_exp = matches!(&slot, Slot::Exp(_));
+        let matrix = slot.metric().cloned();
+        self.precon = Some(slot);
+        self.exp = if is_exp { Some(()) } else { None };
+        self.metric_epoch = self.metric_epoch.wrapping_add(1);
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_h0(matrix);
         }
     }
 
     /// Install the exponential preconditioner at `positions`.
     ///
     /// `positions` has length [`Self::dim`] and is `3 N` coordinates in
-    /// C order. [`ExpParams::mu`] `None` defers the energy scale to the
-    /// next [`Self::step`], which estimates it from the objective.
-    /// L-BFGS then takes \(H_0 = P^{-1}\), including the capped geometry
-    /// step selected by [`Self::set_atom_maxmove`]. FIRE and nonlinear CG
-    /// take `P` as the metric. A dense pair or Lindh matrix supplied to the
-    /// two-loop still wins over this factor.
+    /// C order. See [`Self::set_precon`].
     pub fn set_exp(
         &mut self,
         positions: ArrayView1<f64>,
         neighbours: &Neighbours,
         params: &ExpParams,
     ) -> Result<()> {
-        if positions.len() != self.dim {
-            return Err(Error::Dim {
-                got: positions.len(),
-                dim: self.dim,
-            });
-        }
-        let state = ExpState::new(positions, neighbours, params)?;
-        let matrix = state.matrix().cloned();
-        self.exp = Some(state);
-        if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.set_h0(matrix);
-        }
-        Ok(())
+        self.set_precon(PreconSpec::Exp {
+            positions,
+            neighbours,
+            params,
+        })
+    }
+
+    /// Install the Lindh model Hessian at `positions`.
+    ///
+    /// `z` has one atomic number per free atom. `ghosts` are frozen
+    /// atoms. The matrix is held until the largest atomic move exceeds
+    /// half the nearest-neighbour distance, the same rule as
+    /// [`Self::set_exp`].
+    pub fn set_lindh(
+        &mut self,
+        positions: ArrayView1<f64>,
+        z: &[i32],
+        ghosts: &[Ghost],
+        params: &LindhParams,
+    ) -> Result<()> {
+        self.set_precon(PreconSpec::Lindh {
+            positions,
+            z,
+            ghosts,
+            params,
+        })
+    }
+
+    /// Install the bonded metric at `positions`.
+    ///
+    /// The terms are harmonic bonds and angles, Morse bonds, and
+    /// harmonic torsions. Unit force constants are a geometric metric.
+    /// The hold rule is the one used by [`Self::set_exp`].
+    pub fn set_ff(
+        &mut self,
+        positions: ArrayView1<f64>,
+        terms: FfTerms<'_>,
+        params: &FfParams,
+    ) -> Result<()> {
+        self.set_precon(PreconSpec::Ff {
+            positions,
+            terms,
+            params,
+        })
     }
 
     /// Install a neighbour list whose geometry arrives on the next step.
     #[cfg(feature = "capi")]
-    pub(crate) fn set_exp_deferred(&mut self, state: ExpState) {
-        self.exp = Some(state);
-        if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.set_h0(None);
-        }
+    pub(crate) fn set_exp_deferred(&mut self, state: crate::precon::ExpState) {
+        self.install_slot(Slot::Exp(state));
     }
 
-    /// Drop the exponential preconditioner.
-    pub fn clear_exp(&mut self) {
+    /// Install a Lindh list whose geometry arrives on the next step.
+    #[cfg(feature = "capi")]
+    pub(crate) fn set_lindh_deferred(&mut self, state: crate::precon::LindhState) {
+        self.install_slot(Slot::Lindh(state));
+    }
+
+    /// Install an FF list whose geometry arrives on the next step.
+    #[cfg(feature = "capi")]
+    pub(crate) fn set_ff_deferred(&mut self, state: crate::precon::FfState) {
+        self.install_slot(Slot::Ff(state));
+    }
+
+    /// Drop the installed geometry preconditioner.
+    pub fn clear_precon(&mut self) {
+        self.precon = None;
         self.exp = None;
+        self.metric_epoch = self.metric_epoch.wrapping_add(1);
         if let Inner::Lbfgs(solver) = &mut self.inner {
             solver.set_h0(None);
         }
     }
 
-    /// Energy scale of the installed preconditioner, after estimation.
+    /// Times nonlinear CG replaced a non-descent direction with `-P^{-1} g`
+    /// (or `-g` when no metric is installed).
     #[must_use]
-    pub fn exp_mu(&self) -> Option<f64> {
-        self.exp.as_ref().and_then(ExpState::mu)
+    pub fn nlcg_descent_fallbacks(&self) -> u64 {
+        self.nlcg_descent_fallbacks
+    }
+
+    /// Energy scale of the installed geometry preconditioner, after
+    /// estimation. `None` when no preconditioner is installed or the
+    /// scale has not been estimated yet.
+    #[must_use]
+    pub fn precon_scale(&self) -> Option<f64> {
+        self.precon.as_ref().and_then(Slot::scale)
     }
 
     fn refresh_exp<O>(&mut self, obj: &O, x: &Array1<f64>, grad: &Array1<f64>) -> Result<()>
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
-        if self.exp.is_none() {
+        if self.precon.is_none() {
             return Ok(());
         }
         let grad_fn = |p: ArrayView1<f64>| obj.grad(p);
-        if let Some(state) = &mut self.exp {
-            state.refresh(x.view(), grad, grad_fn)?;
+        let mut rebuilt = false;
+        if let Some(state) = &mut self.precon {
+            rebuilt = state.refresh(x.view(), grad, grad_fn)?;
         }
-        let matrix = self.exp.as_ref().and_then(|s| s.matrix().cloned());
+        if rebuilt {
+            self.metric_epoch = self.metric_epoch.wrapping_add(1);
+        }
+        let matrix = self.precon.as_ref().and_then(|s| s.metric().cloned());
         if let Inner::Lbfgs(solver) = &mut self.inner {
             solver.set_h0(matrix);
         }
@@ -475,192 +756,40 @@ impl Solver {
         self.accept = accept;
     }
 
-    /// Step-length rule for an L-BFGS session.
-    ///
-    /// [`LbfgsStep::Capped`] at [`crate::EON_MAX_MOVE`] is the default:
-    /// the eOn step, no line search. The first step probes curvature.
-    /// A proposal at least as long as the cap clears the memory and
-    /// steps along `H0` times the force. [`LbfgsStep::Scaled`] shortens
-    /// the two-loop step and keeps the pairs. [`LbfgsStep::Wolfe`] opts
-    /// into the strong Wolfe search.
-    /// A non-positive `max_atom` restores [`crate::EON_MAX_MOVE`] on
-    /// that same rule. [`Self::set_atom_maxmove`] replaces the cap
-    /// while the step is line-search-free. A non-finite `max_atom`, a
-    /// session that is not L-BFGS, a non-Euclidean manifold, a
-    /// distance-constraint set, or a HiGHS feasible set is an error
-    /// when selecting a cap.
-    pub fn set_lbfgs_step(&mut self, step: LbfgsStep) -> Result<()> {
-        let step = match step {
-            LbfgsStep::Capped { max_atom } | LbfgsStep::Scaled { max_atom }
-                if !max_atom.is_finite() =>
-            {
-                return Err(Error::LbfgsCap {
-                    what: "max_atom is not finite",
-                });
-            }
-            LbfgsStep::Capped { max_atom } if max_atom <= 0.0 => LbfgsStep::Capped {
-                max_atom: crate::lbfgs::EON_MAX_MOVE,
-            },
-            LbfgsStep::Scaled { max_atom } if max_atom <= 0.0 => LbfgsStep::Scaled {
-                max_atom: crate::lbfgs::EON_MAX_MOVE,
-            },
-            other => other,
-        };
-        if !matches!(self.inner, Inner::Lbfgs(_)) {
-            return Err(Error::LbfgsCap {
-                what: "requires an L-BFGS session",
-            });
-        }
-        if matches!(step, LbfgsStep::Capped { .. } | LbfgsStep::Scaled { .. }) {
-            if !matches!(self.manifold, ManifoldKind::Euclidean) {
-                return Err(Error::LbfgsCap {
-                    what: "requires Euclidean coordinates",
-                });
-            }
-            if self.constraints.is_some() {
-                return Err(Error::LbfgsCap {
-                    what: "distance constraints are set",
-                });
-            }
-            #[cfg(feature = "highs")]
-            if self.highs {
-                return Err(Error::LbfgsCap {
-                    what: "HiGHS projection is set",
-                });
-            }
-        }
-        match &mut self.inner {
-            Inner::Lbfgs(solver) => solver.step = step,
-            _ => {
-                return Err(Error::LbfgsCap {
-                    what: "requires an L-BFGS session",
-                });
-            }
-        }
-        Ok(())
-    }
-
-    /// Step-length rule stored on an L-BFGS session.
-    /// Other methods report [`LbfgsStep::Wolfe`].
-    pub fn lbfgs_step(&self) -> LbfgsStep {
-        match &self.inner {
-            Inner::Lbfgs(solver) => solver.step,
-            _ => LbfgsStep::Wolfe,
-        }
-    }
-
-    /// Under `Accept::Energy` or `Accept::Nonmonotone`, set the step
-    /// scale of steepest descent, BFGS, SR1, SR2, BB, and unpreconditioned CG
-    /// to `min(istep, 1 / ||g||)` at the first step after construction,
-    /// `forget`, or `rebase`. The scale stays until the next `forget` or
-    /// `rebase`. SciPy BFGS and L-BFGS-B begin at about unit length.
-    #[cfg(feature = "capi")]
-    pub(crate) fn set_unit_first_step(&mut self) {
-        self.unit_first_step = true;
-    }
-
-    /// Norm that every stop test and [`Report::grad_norm`] apply to the
-    /// gradient. The session starts with [`Control::stop_norm`].
-    pub fn set_stop_norm(&mut self, norm: StopNorm) {
-        self.stop_norm = norm;
-    }
-
-    /// Norm selected by [`Self::set_stop_norm`].
-    pub fn stop_norm(&self) -> StopNorm {
-        self.stop_norm
-    }
-
-    /// Parameter set of a FIRE 2.0 session. The integrator restarts
-    /// from [`Control::istep`]. [`FirePreset::Default`] is what a new
-    /// session runs. Any other method returns [`Error::NeedFire2`].
-    pub fn set_fire_preset(&mut self, preset: FirePreset) -> Result<()> {
-        match &mut self.inner {
-            Inner::Fire(state) if state.kind == FireKind::V2 => {
-                state.set_preset(preset);
-                Ok(())
-            }
-            _ => Err(Error::NeedFire2),
-        }
-    }
-
-    /// Integrator parameters of a FIRE or FIRE 2.0 session.
-    ///
-    /// The velocity is cleared. Any other method returns
-    /// [`Error::NeedFire`]. [`FireConfig::ase`] is the ASE `FIRE`
-    /// constructor; a new session uses [`FireState::new`], whose
-    /// `dt_max` is `2.5` times the start step rather than ASE's `1`.
-    pub fn set_fire_config(&mut self, config: FireConfig) -> Result<()> {
-        match &mut self.inner {
-            Inner::Fire(state) => {
-                state.apply_config(&config);
-                if config.dt.is_finite() && config.dt > 0.0 {
-                    self.control.istep = config.dt;
-                    self.istep = config.dt;
-                }
-                Ok(())
-            }
-            _ => Err(Error::NeedFire),
-        }
-    }
-
-    /// ABC-FIRE on a FIRE 2.0 session, off by default. The per-atom cap,
-    /// else [`Control::maxmove`], then bounds each displacement component
-    /// in place of the norm cap. Any other method returns
-    /// [`Error::NeedFire2`].
-    pub fn set_fire_abc(&mut self, on: bool) -> Result<()> {
-        match &mut self.inner {
-            Inner::Fire(state) if state.kind == FireKind::V2 => {
-                state.abc = on;
-                Ok(())
-            }
-            _ => Err(Error::NeedFire2),
-        }
-    }
-
-    /// Line search stored on the session. First-order `step` uses
-    /// [`Accept`]; Riemannian solvers that need a Wolfe/Armijo search
-    /// read this.
+    /// Line search for the line-searched arms on the next [`Self::step`].
+    /// A Euclidean session reads it on steepest descent, NLCG, BFGS, Adam,
+    /// DIIS, and L-BFGS after [`LbfgsStep::Wolfe`], unless the acceptance
+    /// is [`Accept::Step`]. The sphere and Stiefel L-BFGS arm reads it
+    /// under [`Accept::Energy`] or [`Accept::Nonmonotone`], and so does the
+    /// constrained L-BFGS search. The default eOn L-BFGS step and the
+    /// other methods ignore it. Default is strong Wolfe (`c1 = 1e-4`,
+    /// `c2 = 0.9`, 20 trials), not [`LineSearch::default`] (Brent).
     pub fn set_linesearch(&mut self, linesearch: LineSearch) {
         self.linesearch = linesearch;
     }
 
-    /// Current line-search policy.
+    /// Set the relative value window of the session's Euclidean line searches.
+    /// It replaces the default four-epsilon window under every [`Accept`]
+    /// policy. Manifold searches keep their own acceptance, and the
+    /// [`Accept::Energy`] / [`Accept::Nonmonotone`] backtracking of a
+    /// step that is not line-searched keeps its absolute `1e-8` rise.
+    /// Invalid values leave the session unchanged. Zero permits no objective rise.
+    pub fn set_objective_roundoff(&mut self, relative: f64) -> bool {
+        let Some(options) = LineSearchOptions::with_objective_roundoff(relative) else {
+            return false;
+        };
+        self.line_options = options;
+        true
+    }
+
+    /// The configured line search.
     pub fn linesearch(&self) -> LineSearch {
         self.linesearch
     }
 
-    /// Packed length of `x` this session was created with.
+    /// Dimension of the session's coordinate vector.
     pub fn dim(&self) -> usize {
         self.dim
-    }
-
-    /// Length-n vectors the session is holding for scratch and history.
-    pub fn retained_vectors(&self) -> usize {
-        let mut n = 0;
-        for buf in [
-            &self.scratch,
-            &self.scratch_b,
-            &self.saved_x,
-            &self.reuse.gold,
-            &self.reuse.grad,
-            &self.reuse.trial,
-            &self.reuse.fwd,
-            &self.reuse.free,
-            &self.reuse.corr,
-        ] {
-            if !buf.is_empty() {
-                n += 1;
-            }
-        }
-        if let Inner::Lbfgs(solver) = &self.inner {
-            n += solver.vector_slots();
-        }
-        n
-    }
-
-    /// Outer steps completed on this session.
-    pub fn steps(&self) -> usize {
-        self.steps
     }
 
     /// Gradient evaluations charged to this session.
@@ -684,21 +813,33 @@ impl Solver {
     }
 
     /// Euclidean cap applied on the next [`Self::step`].
+    ///
+    /// A positive finite value is the step limit and the per-atom default
+    /// stays off, unless [`Self::set_atom_maxmove`] was called. Zero and
+    /// NaN keep the defaults. A negative or infinite value turns every cap
+    /// off, the per-atom default included.
     pub fn set_maxmove(&mut self, maxmove: f64) {
-        self.control.maxmove = if maxmove > 0.0 { Some(maxmove) } else { None };
-        #[cfg(feature = "highs")]
-        self.apply_highs_opts();
+        // A negative or infinite value is stored so that the per-atom
+        // default stays off; every length read takes only a positive
+        // finite cap. NaN is not a length and keeps the defaults.
+        self.control.maxmove = if maxmove == 0.0 || maxmove.is_nan() {
+            None
+        } else {
+            Some(maxmove)
+        };
+        self.apply_default_atom_cap();
     }
 
     /// eOn `maxAtomMotionAppliedV`. Preferred over the Euclidean cap.
-    /// While the L-BFGS step is the default cap, this replaces that cap.
-    /// After [`Self::set_lbfgs_step`]`(Wolfe)`, and without a distance
-    /// constraint set, Euclidean L-BFGS takes the geometry step and
-    /// ignores [`Self::set_accept`]. With a set it keeps the two-loop
-    /// step under the acceptance mode, and the cap scales each trial
-    /// before it returns to the set.
+    ///
+    /// A fresh Cartesian session holds [`crate::DEFAULT_ATOM_MAXMOVE`]
+    /// when [`Method::installs_default_atom_cap`] is set. BFGS, dogleg,
+    /// and FIRE 2.0 start without that cap. A positive `maxmove`
+    /// replaces the value in force. A non-positive or non-finite value
+    /// clears the cap.
     pub fn set_atom_maxmove(&mut self, maxmove: f64) {
-        self.atom_maxmove = if maxmove > 0.0 { Some(maxmove) } else { None };
+        self.atom_maxmove_set = true;
+        self.atom_maxmove = Some(maxmove).filter(|&cap| crate::step::binding(cap));
         if let Inner::Lbfgs(solver) = &mut self.inner {
             let cap = self.atom_maxmove.unwrap_or(crate::lbfgs::EON_MAX_MOVE);
             match &mut solver.step {
@@ -708,302 +849,150 @@ impl Solver {
                 LbfgsStep::Wolfe => {}
             }
         }
-        #[cfg(feature = "highs")]
-        self.apply_highs_opts();
-    }
-
-    /// ASE's fixed inverse-Hessian scale. `None` keeps the Nocedal-Wright
-    /// scale. A non-positive value clears it. Only an L-BFGS session.
-    pub fn set_lbfgs_fixed_h0(&mut self, h0: Option<f64>) -> Result<()> {
-        match &mut self.inner {
-            Inner::Lbfgs(solver) => {
-                solver.fixed_h0 = h0.filter(|v| v.is_finite() && *v > 0.0);
-                Ok(())
-            }
-            _ => Err(Error::LbfgsCap {
-                what: "requires an L-BFGS session",
-            }),
+        if self.steps == 0 {
+            self.reset_sr_radius();
         }
     }
 
-    /// Measure the L-BFGS cap by the Euclidean length of the step.
-    /// The default is the longest per-atom displacement. Only an
-    /// L-BFGS session.
-    pub fn set_lbfgs_euclidean_cap(&mut self, on: bool) -> Result<()> {
-        match &mut self.inner {
-            Inner::Lbfgs(solver) => {
-                solver.euclidean_cap = on;
-                Ok(())
-            }
-            _ => Err(Error::LbfgsCap {
-                what: "requires an L-BFGS session",
-            }),
-        }
+    /// Capped Cartesian L-BFGS takes the geometry step: eOn's L-BFGS
+    /// with a finite-difference or `sy/yy` initial inverse curvature, a
+    /// reset on negative curvature, on a step past the per-atom cap or
+    /// against the force, and an energy test with at most ten halvings.
+    /// Off, the per-atom cap only clips the two-loop trial and the NEB
+    /// guards of [`Self::set_neb_guards`] apply. Needs [`Self::set_atom_maxmove`].
+    /// Unset, a Wolfe session with an explicit per-atom cap takes this
+    /// step; off keeps its strong Wolfe search under the cap.
+    /// [`Self::set_lbfgs_step`] unsets it.
+    pub fn set_geometry_step(&mut self, on: bool) {
+        self.geometry_step = Some(on);
     }
 
-    /// Trust-region radius on the capped two-loop step.
+    /// eOn `lbfgs_project_rigid`.
     ///
-    /// A long direction is scaled to the radius and the pairs are kept.
-    /// The radius starts at the cap. A ratio below `0.1` rejects the
-    /// trial and shrinks the radius. A ratio above `0.75` on a step
-    /// that meets the radius grows it, up to the cap. Off by default.
-    /// The predicted reduction is the Newton model `−½ g·s`
-    /// (Nocedal and Wright, algorithm 4.1,
-    /// <https://doi.org/10.1007/978-0-387-40065-5>).
-    /// This is the radius update, not the compact subproblem solve of
-    /// Burdakov, Gong, Yuan and Zikrin
-    /// (<https://doi.org/10.1007/s12532-016-0109-7>)
-    /// or Brust, Erway and Marcia
-    /// (<https://doi.org/10.1007/s10589-016-9868-3>).
-    pub fn set_lbfgs_trust(&mut self, on: bool) -> Result<()> {
-        if !matches!(self.inner, Inner::Lbfgs(_)) {
-            return Err(Error::LbfgsCap {
-                what: "requires an L-BFGS session",
+    /// Nonzero selects [`RigidMode::Auto`] and declares a molecule, so a
+    /// host that also set the axis mask drops rotations on a cell. Zero
+    /// forces the Euclidean path off. A quotient manifold still projects.
+    pub fn set_project_rigid(&mut self, enabled: bool) {
+        self.set_rigid_mode(if enabled {
+            RigidMode::Auto
+        } else {
+            RigidMode::Off
+        });
+    }
+
+    /// `Off`, `Auto`, `Translation`, or `TranslationRotation`.
+    ///
+    /// `Auto` declares a molecule: translation and rotation when no axis is
+    /// periodic, translation on the periodic axes otherwise. Frozen
+    /// coordinates keep the combinations that do not move them. Broken
+    /// axes are a host mask, not a field vector.
+    /// A bare Euclidean session stays off until something declares it.
+    pub fn set_rigid_mode(&mut self, mode: RigidMode) {
+        self.rigid_before_pbc = None;
+        self.rigid_mode = mode;
+        self.project_rigid = mode != RigidMode::Off;
+        if mode == RigidMode::Off {
+            self.rigid_forced_off = true;
+            self.rigid_declared = false;
+        } else {
+            self.rigid_forced_off = false;
+            self.rigid_declared = true;
+        }
+    }
+
+    /// Cartesian mass inner product `sum m_i u_i · v_i`.
+    ///
+    /// Turns the mass-weighted chart off. A raw force should leave this false.
+    pub fn set_rigid_mass_metric(&mut self, enabled: bool) {
+        self.mass_metric = enabled;
+        if enabled {
+            self.mass_weighted_coords = false;
+        }
+    }
+
+    /// Coordinates are `q_i = sqrt(m_i) x_i`. The metric is Euclidean.
+    ///
+    /// Turns the Cartesian mass metric off. The two switches are not both on.
+    pub fn set_rigid_mass_weighted(&mut self, enabled: bool) {
+        self.mass_weighted_coords = enabled;
+        if enabled {
+            self.mass_metric = false;
+            self.declare_molecule();
+        }
+    }
+
+    /// Periodic axes. Any true axis drops rotations and keeps only those
+    /// translations. This replaces the single bit from [`Self::set_periodic`].
+    /// Clearing every axis undoes a declaration the axes alone made.
+    pub fn set_pbc_axes(&mut self, x: bool, y: bool, z: bool) {
+        self.pbc = [x, y, z];
+        self.periodic = x || y || z;
+        if self.periodic {
+            let before = self.rigid_before_pbc.or_else(|| {
+                (!self.rigid_declared).then_some((
+                    self.rigid_mode,
+                    self.project_rigid,
+                    self.rigid_declared,
+                    self.rigid_forced_off,
+                ))
             });
-        }
-        let cap = self
-            .lbfgs_step()
-            .capped_limit()
-            .unwrap_or(crate::lbfgs::EON_MAX_MOVE);
-        self.trust = on;
-        self.trust_delta = cap;
-        self.trust_max = cap;
-        if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.keep_long = on;
-        }
-        Ok(())
-    }
-
-    /// Adaptive Burdakov trust radius for session L-BFGS, starting at
-    /// `radius`. A non-positive or non-finite `radius` turns it off,
-    /// the default.
-    ///
-    /// The radius follows Algorithm 1 of Burdakov, Gong, Zikrin, and
-    /// Yuan, Math. Program. Comput. 9, 101-134 (2017),
-    /// <https://doi.org/10.1007/s12532-016-0109-7>, with their Section 9
-    /// constants. The step is a ray truncation along the two-loop
-    /// direction, the third L-BFGS variant in their comparison. It does
-    /// not solve their trust-region subproblem.
-    /// [`Self::set_lbfgs_trust`] is a different opt-in: it scales a long
-    /// capped step and scores the Newton model. The two can both be
-    /// stored. When this radius is on, the Euclidean L-BFGS step uses
-    /// this ray and leaves the capped step and that Newton-model radius
-    /// alone.
-    ///
-    /// With [`Self::set_project_rigid`] the rigid modes leave the
-    /// direction first. The ray stops at the Euclidean radius, then at
-    /// the per-atom or Euclidean cap. `rho` is the actual over the
-    /// predicted energy drop. `rho = 1` when the energy changes by at
-    /// most `1e-11 |f|`, so a rise that small is accepted. `rho < 0`
-    /// refuses the step: `x` and the pairs stay. `rho < 0.25` sets the
-    /// radius to `min(r/4, |s|/2)`. `rho >= 0.75` with `|s| >= 0.8 r`
-    /// doubles it. A trial moved by the box or by the rigid projection
-    /// is predicted from `-g^T s`. Whenever the radius falls below
-    /// `1e-15`, the step keeps the previous point and returns
-    /// [`Error::TrustCollapsed`]. When the slope `g^T d` is still NaN
-    /// or infinite after the pairs are dropped, the step returns
-    /// [`Error::Oracle`]. When it is finite and not negative, the step
-    /// returns [`Error::NoDescent`]. Neither moves.
-    ///
-    /// On Euclidean L-BFGS without HiGHS this replaces [`Self::set_accept`]
-    /// and the geometry step of [`Self::set_atom_maxmove`]. Other methods
-    /// and manifolds, and the HiGHS step, ignore the radius. `forget` and
-    /// `rebase` restore `radius`.
-    pub fn set_lbfgs_trust_radius(&mut self, radius: f64) {
-        let on = radius > 0.0 && radius.is_finite();
-        self.lbfgs_burdakov_init = if on { radius } else { 0.0 };
-        self.lbfgs_burdakov = self.lbfgs_burdakov_init;
-    }
-
-    /// Current Burdakov radius, or `None` when it is off. A session
-    /// whose method, manifold or HiGHS step ignores the radius still
-    /// reports the stored value.
-    pub fn lbfgs_trust_radius(&self) -> Option<f64> {
-        (self.lbfgs_burdakov_init > 0.0).then_some(self.lbfgs_burdakov)
-    }
-
-    /// Keep a long downhill quasi-Newton step and scale it per atom.
-    ///
-    /// The eOn cap replaces that step with `H0` times the force and
-    /// clears the pairs. This clears the pairs too, but the step stays
-    /// the model direction, so the Euclidean length may exceed the cap
-    /// while no atom moves further than the cap. That is the L-BFGS
-    /// form of the per-atom-only CG step. Off by default.
-    pub fn set_lbfgs_model_atom(&mut self, on: bool) -> Result<()> {
-        match &mut self.inner {
-            Inner::Lbfgs(solver) => {
-                solver.model_atom = on;
-                Ok(())
-            }
-            _ => Err(Error::LbfgsCap {
-                what: "requires an L-BFGS session",
-            }),
+            self.declare_molecule();
+            self.rigid_before_pbc = before;
+        } else if let Some((mode, project, declared, forced_off)) = self.rigid_before_pbc.take() {
+            self.rigid_mode = mode;
+            self.project_rigid = project;
+            self.rigid_declared = declared;
+            self.rigid_forced_off = forced_off;
         }
     }
 
-    /// Compact Byrd–Nocedal–Schnabel step inside the per-atom cap.
-    ///
-    /// A two-loop step inside the cap is unchanged. A longer step is
-    /// the trust-region solution `(B + λ I) s = −g` with `λ` chosen so
-    /// the longest atom sits on the cap. The pairs are kept. Off by
-    /// default. The radius update in [`Self::set_lbfgs_trust`] is a
-    /// different rule.
-    pub fn set_lbfgs_compact_tr(&mut self, on: bool) -> Result<()> {
-        match &mut self.inner {
-            Inner::Lbfgs(solver) => {
-                solver.compact_tr = on;
-                Ok(())
-            }
-            _ => Err(Error::LbfgsCap {
-                what: "requires an L-BFGS session",
-            }),
-        }
-    }
-
-    /// Skip a curvature pair with `s·y ≤ 0` instead of clearing memory
-    /// on the next step. Nocedal and Wright skip that update. The eOn
-    /// client stores it and resets. Off by default.
-    pub fn set_lbfgs_skip_bad(&mut self, on: bool) -> Result<()> {
-        match &mut self.inner {
-            Inner::Lbfgs(solver) => {
-                solver.skip_bad = on;
-                Ok(())
-            }
-            _ => Err(Error::LbfgsCap {
-                what: "requires an L-BFGS session",
-            }),
-        }
-    }
-
-    /// Lindh model Hessian as the initial inverse. `None` removes it.
-    ///
-    /// The factor is rebuilt from the current geometry. The first call
-    /// spends one gradient to set the scale `μ`. A non-positive ridge,
-    /// a session that is not L-BFGS, or atomic numbers whose length is
-    /// neither 0 nor `N` is an error.
-    pub fn set_lindh(&mut self, spec: Option<LindhSpec>) -> Result<()> {
-        if !matches!(self.inner, Inner::Lbfgs(_)) {
-            return Err(Error::LbfgsCap {
-                what: "requires an L-BFGS session",
-            });
-        }
-        if let Some(spec) = &spec {
-            if !(spec.c_stab.is_finite() && spec.c_stab > 0.0) {
-                return Err(Error::Precon {
-                    what: "c_stab is not positive",
-                });
-            }
-            if !spec.z.is_empty() && spec.z.len() * 3 != self.dim {
-                return Err(Error::Precon {
-                    what: "atomic numbers do not match the dimension",
-                });
-            }
-        }
-        self.lindh_spec = spec;
-        self.lindh_mu = None;
-        if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.set_lindh_factor(None);
-        }
-        Ok(())
-    }
-
-    /// Rebuild the Lindh factor. One gradient probe the first time.
-    fn ensure_lindh<G>(&mut self, x: &[f64], g: &[f64], mut grad_at: G)
-    where
-        G: FnMut(&[f64]) -> Array1<f64>,
-    {
-        if self.lindh_spec.is_none() {
+    /// Length `3N`. A nonzero byte freezes that coordinate. The basis is
+    /// the rigid combinations that are already zero there. Empty clears
+    /// the mask.
+    pub fn set_frozen(&mut self, frozen: &[u8]) {
+        if frozen.is_empty() {
+            self.frozen = None;
             return;
         }
-        if self.lindh_mu.is_none() {
-            self.lindh_mu = Some(self.probe_lindh_mu(x, g, &mut grad_at));
-        }
-        let mu = self.lindh_mu.unwrap_or(1.0);
-        let built = self
-            .lindh_spec
-            .as_ref()
-            .and_then(|spec| crate::lindh::factor(x, &spec.z, spec.c_stab, spec.cell, mu));
-        if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.set_lindh_factor(built);
+        self.frozen = Some(frozen.to_vec());
+        self.declare_molecule();
+    }
+
+    /// Axes that are not symmetries. The library does not infer them
+    /// from a force or a field. Any set bit declares a molecule.
+    pub fn set_broken_axes(
+        &mut self,
+        trans_x: bool,
+        trans_y: bool,
+        trans_z: bool,
+        rot_x: bool,
+        rot_y: bool,
+        rot_z: bool,
+    ) {
+        self.broken_translation = [trans_x, trans_y, trans_z];
+        self.broken_rotation = [rot_x, rot_y, rot_z];
+        if trans_x || trans_y || trans_z || rot_x || rot_y || rot_z {
+            self.declare_molecule();
         }
     }
 
-    fn probe_lindh_mu<G>(&self, x: &[f64], g: &[f64], grad_at: &mut G) -> f64
-    where
-        G: FnMut(&[f64]) -> Array1<f64>,
-    {
-        let mut n2 = 0.0;
-        for v in g {
-            n2 += *v * *v;
+    fn declare_molecule(&mut self) {
+        self.rigid_before_pbc = None;
+        self.rigid_declared = true;
+        self.rigid_forced_off = false;
+        if self.rigid_mode == RigidMode::Off {
+            self.rigid_mode = RigidMode::Auto;
         }
-        let norm = n2.sqrt();
-        if !(norm.is_finite() && norm > 0.0 && g.len() == x.len()) {
-            return 1.0;
-        }
-        let fd = crate::EON_FINITE_DIFFERENCE;
-        let mut probe = x.to_vec();
-        let mut u = vec![0.0; g.len()];
-        for i in 0..g.len() {
-            u[i] = -g[i] / norm;
-            probe[i] = x[i] + fd * u[i];
-        }
-        let gp = grad_at(&probe);
-        if gp.len() != g.len() {
-            return 1.0;
-        }
-        let mut curv = 0.0;
-        for i in 0..g.len() {
-            curv += (gp[i] - g[i]) * u[i];
-        }
-        curv /= fd;
-        let Some(spec) = self.lindh_spec.as_ref() else {
-            return 1.0;
-        };
-        let quad = crate::lindh::shape_quad(x, &spec.z, spec.c_stab, spec.cell, &u);
-        if curv.is_finite() && curv > 0.0 && quad > 1e-18 {
-            curv / quad
-        } else {
-            1.0
-        }
-    }
-
-    /// eOn `lbfgs_project_rigid`. Isolated clusters only.
-    pub fn set_project_rigid(&mut self, enabled: bool) {
-        self.project_rigid = enabled;
-        #[cfg(feature = "highs")]
-        self.apply_highs_opts();
+        self.project_rigid = true;
     }
 
     /// Periodic cell. Sella leaves `proj_rot` off; the quotient is \(R^{3N}/T(3)\).
+    ///
+    /// Nonzero is [`Self::set_pbc_axes`]`(true, true, true)` and declares
+    /// the molecule. Zero clears the three axes and undoes that
+    /// declaration unless something else declared the molecule since.
     pub fn set_periodic(&mut self, periodic: bool) {
-        self.periodic = periodic;
-    }
-
-    /// Keep every pair of `set` at its length on every later step, with
-    /// the set's masses as the metric of every method. The memory of the
-    /// method restarts. A step under a setting the set cannot honour
-    /// returns [`crate::ConstraintError::Unsupported`]: a manifold other
-    /// than Euclidean coordinates, the exponential preconditioner, the
-    /// HiGHS step, a periodic cell, particle swarm, or rigid projection
-    /// at an active coordinate bound. A trial that takes a constrained
-    /// atom to its coordinate bound is [`crate::ConstraintError::Bound`].
-    pub fn set_distance_constraints(&mut self, set: DistanceConstraints) -> Result<()> {
-        self.refuse_constraint_settings(&set)?;
-        self.constraints = Some(Arc::new(set));
-        self.forget();
-        Ok(())
-    }
-
-    /// Drop the constraint set. The memory of the method restarts.
-    pub fn clear_distance_constraints(&mut self) {
-        if self.constraints.take().is_some() {
-            self.forget();
-        }
-    }
-
-    /// The constraint set, if any.
-    pub fn distance_constraints(&self) -> Option<&DistanceConstraints> {
-        self.constraints.as_deref()
+        self.set_pbc_axes(periodic, periodic, periodic);
     }
 
     /// Embedded manifold for project / retract / transport.
@@ -1020,6 +1009,10 @@ impl Solver {
     /// [`Error::ProductTangentMetric`]; [`crate::rtr::minimize_rtr`] runs
     /// in its metric.
     pub fn set_manifold(&mut self, kind: ManifoldKind) {
+        let kind = match (kind, self.factor_shape) {
+            (ManifoldKind::Grassmann, Some((n, p))) => ManifoldKind::GrassmannP { n, p },
+            (other, _) => other,
+        };
         let (kind, chart) = chart::chart_form(kind);
         if kind != self.manifold || chart != self.chart {
             self.forget();
@@ -1028,6 +1021,7 @@ impl Solver {
         }
         self.manifold = kind;
         self.chart = chart;
+        self.apply_default_atom_cap();
     }
 
     /// Weighted product of `factors`, \(g = \sum_i w_i g_i\).
@@ -1056,16 +1050,21 @@ impl Solver {
         }
     }
 
-    /// Oblique \(\mathrm{OB}(n,m)\): product of `m` unit spheres in `R^n`.
-    /// Packed column-major, length `n*m`.
-    pub fn set_oblique(&mut self, n: usize, m: usize) {
-        self.set_manifold(ManifoldKind::Oblique { n, m });
-    }
-
     /// Stiefel \(\mathrm{St}(n,p)\). `p = 1` is the sphere packing.
     /// `p > 1` is column-major, length `n*p`.
     pub fn set_stiefel(&mut self, n: usize, p: usize) {
         self.set_manifold(ManifoldKind::stiefel(n, p));
+    }
+
+    /// Real Grassmann `Gr(n,p)`, packed column-major.
+    pub fn set_grassmann(&mut self, n: usize, p: usize) {
+        self.set_manifold(ManifoldKind::GrassmannP { n, p });
+    }
+
+    /// Oblique \(\mathrm{OB}(n,m)\): product of `m` unit spheres in `R^n`.
+    /// Packed column-major, length `n*m`.
+    pub fn set_oblique(&mut self, n: usize, m: usize) {
+        self.set_manifold(ManifoldKind::Oblique { n, m });
     }
 
     /// Product of `n` unit-modulus complex numbers. Packed length `2 n`.
@@ -1113,6 +1112,29 @@ impl Solver {
         self.set_manifold(ManifoldKind::CenteredMatrix { m, n, rows });
     }
 
+    /// Set Gr(n,p); a zero dimension clears the optional factor shape.
+    pub fn set_factor_shape(&mut self, n: usize, p: usize) {
+        let next = if n == 0 || p == 0 { None } else { Some((n, p)) };
+        if next != self.factor_shape {
+            self.forget();
+        }
+        self.factor_shape = next;
+        if matches!(
+            self.manifold,
+            ManifoldKind::Grassmann | ManifoldKind::GrassmannP { .. }
+        ) {
+            self.manifold = match next {
+                Some((n, p)) => ManifoldKind::GrassmannP { n, p },
+                None => ManifoldKind::Grassmann,
+            };
+        }
+    }
+
+    /// Complex unitary U(n), packed interleaved row-major.
+    pub fn set_unitary(&mut self, n: usize) {
+        self.set_manifold(ManifoldKind::unitary(n));
+    }
+
     /// Per-atom masses for [`ManifoldKind::MwRigid`] (Page–McIver / Eckart).
     /// Empty clears them (unit mass). A product reads them per MwRigid
     /// factor, as in [`Self::set_power`].
@@ -1124,7 +1146,9 @@ impl Solver {
         }
     }
 
-    /// Al-Baali extra-updates on the newest L-BFGS pair.
+    /// Al-Baali extra-updates on the newest L-BFGS pair. No effect: a
+    /// replayed newest pair leaves the BFGS map unchanged (see
+    /// [`Lbfgs::extra_updates`]).
     pub fn set_extra_updates(&mut self, extra: usize) {
         if let Inner::Lbfgs(solver) = &mut self.inner {
             solver.extra_updates = extra;
@@ -1139,6 +1163,20 @@ impl Solver {
         }
     }
 
+    /// Enable the opt-in direct NEB guards and empty-memory scale 0.01.
+    /// Other methods ignore this setting. Disabling restores scale one.
+    pub fn set_lbfgs_neb_guards(&mut self, enabled: bool) {
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            if solver.curvature_reset != enabled {
+                solver.forget();
+            }
+            solver.distance_reset = enabled;
+            solver.angle_reset = enabled;
+            solver.curvature_reset = enabled;
+            solver.inverse_curvature = if enabled { 0.01 } else { 1.0 };
+        }
+    }
+
     /// HiGHS feasible-set step. No-op unless this build has `highs`.
     pub fn set_highs(&mut self, enabled: bool) {
         #[cfg(not(feature = "highs"))]
@@ -1146,12 +1184,73 @@ impl Solver {
         #[cfg(feature = "highs")]
         {
             self.highs = enabled;
-            self.apply_highs_opts();
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.highs_options = self.highs_options;
+                solver.highs = if enabled {
+                    Some(crate::HighsStep {
+                        trust: self
+                            .highs_trust
+                            .or(self.atom_maxmove)
+                            .or(self.control.maxmove_cap()),
+                        lo: None,
+                        hi: None,
+                        equalities: self.equalities.clone(),
+                        center_axes: None,
+                    })
+                } else {
+                    None
+                };
+            }
         }
     }
 
-    /// Per-coordinate box on `x + p`. `None` on a side is unbounded.
-    /// Returns `true` when this build has `highs`.
+    /// Select a HiGHS engine. Returns false when the feature is absent.
+    pub fn set_highs_solver(&mut self, solver: crate::HighsSolverKind) -> bool {
+        #[cfg(feature = "highs")]
+        {
+            self.highs_options.solver = solver;
+            self.set_highs(self.highs);
+            true
+        }
+        #[cfg(not(feature = "highs"))]
+        {
+            let _ = solver;
+            false
+        }
+    }
+
+    /// Select a HiGHS crossover policy. Returns false when the feature is absent.
+    pub fn set_highs_crossover(&mut self, crossover: crate::HighsCrossover) -> bool {
+        #[cfg(feature = "highs")]
+        {
+            self.highs_options.crossover = crossover;
+            self.set_highs(self.highs);
+            true
+        }
+        #[cfg(not(feature = "highs"))]
+        {
+            let _ = crossover;
+            false
+        }
+    }
+
+    /// Set or clear a host callback. Returns false when HiGHS is absent.
+    pub fn set_highs_callback(&mut self, callback: Option<crate::HighsCallback>) -> bool {
+        #[cfg(feature = "highs")]
+        {
+            self.highs_options.callback = callback;
+            self.set_highs(self.highs);
+            true
+        }
+        #[cfg(not(feature = "highs"))]
+        {
+            let _ = callback;
+            false
+        }
+    }
+
+    /// Per-coordinate box. Empty or missing sides are unbounded; length one broadcasts.
+    /// Bounds are enforced when HiGHS constraints are enabled.
     pub fn set_box(&mut self, lo: Option<Vec<f64>>, hi: Option<Vec<f64>>) -> bool {
         #[cfg(not(feature = "highs"))]
         {
@@ -1162,13 +1261,12 @@ impl Solver {
         {
             self.box_lo = lo;
             self.box_hi = hi;
-            self.apply_highs_opts();
             true
         }
     }
 
-    /// L_inf trust radius on the HiGHS step. Non-positive clears it.
-    /// Returns `true` when this build has `highs`.
+    /// L-infinity trust radius on the constrained model step.
+    /// Non-positive or non-finite radii disable the radius.
     pub fn set_trust(&mut self, radius: f64) -> bool {
         #[cfg(not(feature = "highs"))]
         {
@@ -1177,28 +1275,44 @@ impl Solver {
         }
         #[cfg(feature = "highs")]
         {
-            self.highs_trust = if radius > 0.0 { Some(radius) } else { None };
-            self.apply_highs_opts();
+            self.highs_trust = (radius > 0.0 && radius.is_finite()).then_some(radius);
+            self.set_highs(self.highs);
             true
         }
     }
 
-    /// Append one linear equality `a · p = rhs`. Returns `true` with `highs`.
-    pub fn add_equality(&mut self, coeffs: Vec<(usize, f64)>, rhs: f64) -> bool {
+    /// Alias for [`Self::set_trust`], with the same radius and feature contract.
+    pub fn set_highs_trust(&mut self, radius: f64) -> bool {
+        self.set_trust(radius)
+    }
+
+    /// Append a sparse linear equality on the model and accepted displacement.
+    /// A line search or retraction that violates a row returns `Error::Highs`,
+    /// restores the starting point, and clears method memory. The residual
+    /// tolerance is 1e-7 in row units plus floating-point summation error.
+    /// Reject non-finite coefficients and indices outside the session dimension.
+    pub fn add_equality(&mut self, coefficients: Vec<(usize, f64)>, rhs: f64) -> bool {
         #[cfg(not(feature = "highs"))]
         {
-            let _ = (coeffs, rhs);
+            let _ = (coefficients, rhs);
             false
         }
         #[cfg(feature = "highs")]
         {
-            self.equalities.push((coeffs, rhs));
-            self.apply_highs_opts();
+            if !rhs.is_finite()
+                || coefficients
+                    .iter()
+                    .any(|(k, a)| *k >= self.dim || !a.is_finite())
+            {
+                return false;
+            }
+            self.equalities.push((coefficients, rhs));
+            self.set_highs(self.highs);
             true
         }
     }
 
-    /// Drop every stored HiGHS equality. Returns `true` with `highs`.
+    /// Remove every model-step equality.
     pub fn clear_equalities(&mut self) -> bool {
         #[cfg(not(feature = "highs"))]
         {
@@ -1207,91 +1321,188 @@ impl Solver {
         #[cfg(feature = "highs")]
         {
             self.equalities.clear();
-            self.apply_highs_opts();
+            self.set_highs(self.highs);
             true
         }
     }
 
-    /// HiGHS `solver` token. Returns `true` with `highs`.
-    pub fn set_highs_solver(&mut self, kind: crate::HighsSolverKind) -> bool {
-        #[cfg(not(feature = "highs"))]
-        {
-            let _ = kind;
-            false
-        }
+    fn has_equalities(&self) -> bool {
         #[cfg(feature = "highs")]
         {
-            self.highs_solver = kind;
-            self.apply_highs_opts();
-            true
+            !self.equalities.is_empty()
         }
-    }
-
-    /// HiGHS user callback for logging and IPM interrupt. Returns
-    /// `true` with `highs`.
-    pub fn set_highs_callback(
-        &mut self,
-        cb: Option<crate::HighsCCallback>,
-        user: *mut std::os::raw::c_void,
-    ) -> bool {
         #[cfg(not(feature = "highs"))]
         {
-            let _ = (cb, user);
             false
-        }
-        #[cfg(feature = "highs")]
-        {
-            self.highs_callback = cb;
-            self.highs_callback_user = user;
-            self.apply_highs_opts();
-            true
         }
     }
 
-    /// HiGHS `run_crossover`. Returns `true` with `highs`.
-    pub fn set_highs_crossover(&mut self, kind: crate::HighsCrossover) -> bool {
+    fn has_coordinate_box(&self) -> bool {
+        #[cfg(feature = "highs")]
+        {
+            self.highs && (self.box_lo.is_some() || self.box_hi.is_some())
+        }
         #[cfg(not(feature = "highs"))]
         {
-            let _ = kind;
             false
-        }
-        #[cfg(feature = "highs")]
-        {
-            self.highs_crossover = kind;
-            self.apply_highs_opts();
-            true
         }
     }
 
-    #[cfg(feature = "highs")]
-    fn apply_highs_opts(&mut self) {
-        if !self.highs {
-            if let Inner::Lbfgs(solver) = &mut self.inner {
-                solver.highs = None;
+    fn note_bounds(&mut self, bounds: &eindir_core::Bounds<f64>) {
+        if self.box_stationarity() {
+            self.bound_low = Some(bounds.low.clone());
+            self.bound_high = Some(bounds.high.clone());
+        }
+    }
+
+    fn box_stationarity(&self) -> bool {
+        self.has_coordinate_box()
+            && self.manifold == ManifoldKind::Euclidean
+            && self.removal_mode() == RigidMode::Off
+            && !self.has_equalities()
+    }
+
+    /// Stationarity of `grad` at `x`, in [`Self::stop_norm`].
+    ///
+    /// A Euclidean session with a coordinate box and no other constraint
+    /// measures the projected gradient `grad.clamp(x - hi, x - lo)`.
+    fn stationarity_norm(&self, x: &Array1<f64>, grad: &Array1<f64>) -> f64 {
+        if self.box_stationarity()
+            && let (Some(lo), Some(hi)) = (&self.bound_low, &self.bound_high)
+        {
+            let mut projected = Array1::zeros(x.len());
+            for k in 0..x.len() {
+                let lo_k = lo.get(k).copied().unwrap_or(f64::NEG_INFINITY);
+                let hi_k = hi.get(k).copied().unwrap_or(f64::INFINITY);
+                if !(x[k].is_finite() && grad[k].is_finite() && lo_k <= x[k] && x[k] <= hi_k) {
+                    return f64::INFINITY;
+                }
+                // Distance clipping retains gradients smaller than an ulp of x.
+                projected[k] = grad[k].clamp(x[k] - hi_k, x[k] - lo_k);
             }
+            return self.stop_norm.of(projected.view());
+        }
+        self.stop_norm.of(grad.view())
+    }
+
+    fn noted_free_len(&self) -> usize {
+        if self.box_stationarity()
+            && let (Some(lo), Some(hi)) = (&self.bound_low, &self.bound_high)
+        {
+            let n = self.dim.min(lo.len()).min(hi.len());
+            return (0..n).filter(|&k| hi[k] > lo[k]).count();
+        }
+        self.dim
+    }
+
+    fn finish(
+        &self,
+        value: f64,
+        x: &Array1<f64>,
+        grad: &Array1<f64>,
+        grad_norm: f64,
+        status: crate::report::Status,
+    ) -> Report {
+        Report {
+            value,
+            coords: if self.brief {
+                Array1::zeros(0)
+            } else {
+                x.clone()
+            },
+            steps: self.steps,
+            grad_norm,
+            stop_norm: self.stop_norm,
+            grad: Some(grad.clone()),
+            status,
+        }
+    }
+
+    fn report(&self, value: f64, x: &Array1<f64>, grad: &Array1<f64>) -> Report {
+        let grad_norm = self.stationarity_norm(x, grad);
+        let status = self.control.classify(grad_norm, self.noted_free_len());
+        self.finish(value, x, grad, grad_norm, status)
+    }
+
+    /// Coordinates the stationarity measure runs over.
+    ///
+    /// A coordinate box drops entries whose bounds have no width. Every
+    /// other path uses the length of the horizontal or projected gradient,
+    /// which is the session dimension.
+    pub(crate) fn free_len(&self, bounds: &eindir_core::Bounds<f64>) -> usize {
+        if self.has_coordinate_box()
+            && self.manifold == ManifoldKind::Euclidean
+            && self.removal_mode() == RigidMode::Off
+            && !self.has_equalities()
+        {
+            let n = self.dim.min(bounds.low.len()).min(bounds.high.len());
+            return (0..n).filter(|&k| bounds.high[k] > bounds.low[k]).count();
+        }
+        self.dim
+    }
+
+    /// Active Eckart mode. Quotient manifolds project even when the
+    /// Euclidean flag is off. A bare Euclidean session does not.
+    fn removal_mode(&self) -> RigidMode {
+        let quotient = matches!(
+            self.manifold,
+            ManifoldKind::RigidQuotient | ManifoldKind::MwRigid
+        );
+        if quotient {
+            if self.rigid_mode == RigidMode::Off {
+                RigidMode::Auto
+            } else {
+                self.rigid_mode
+            }
+        } else if self.rigid_forced_off || !self.rigid_declared {
+            RigidMode::Off
+        } else {
+            self.rigid_mode
+        }
+    }
+
+    /// `MwRigid` stores `q = sqrt(m) x`. That chart uses the Euclidean product.
+    fn chart_weighted(&self) -> bool {
+        self.mass_weighted_coords || matches!(self.manifold, ManifoldKind::MwRigid)
+    }
+
+    /// Cartesian force. The mass metric is not this switch.
+    fn force_metric(&self) -> bool {
+        self.mass_metric && !self.chart_weighted()
+    }
+
+    /// FIRE velocity. Momentum is `m v` on raw Cartesians.
+    fn velocity_metric(&self) -> bool {
+        !self.chart_weighted() && (self.mass_metric || self.masses.is_some())
+    }
+
+    fn anchor_and_project(&mut self, x: &[f64], v: &mut [f64]) {
+        let mode = self.removal_mode();
+        if mode == RigidMode::Off || v.len() != x.len() {
             return;
         }
-        let step = crate::HighsStep {
-            trust: self
-                .highs_trust
-                .or(self.atom_maxmove)
-                .or(self.control.maxmove),
-            lo: self.box_lo.clone(),
-            hi: self.box_hi.clone(),
-            equalities: self.equalities.clone(),
-            center_axes: if self.project_rigid && self.dim.is_multiple_of(3) {
-                Some((self.dim / 3, 3))
-            } else {
-                None
-            },
-            solver: self.highs_solver,
-            crossover: self.highs_crossover,
-            callback: self.highs_callback,
-            callback_user: self.highs_callback_user,
+        let metric = self.force_metric();
+        let weighted = self.chart_weighted();
+        let pbc = self.pbc;
+        let broken_t = self.broken_translation;
+        let broken_r = self.broken_rotation;
+        self.rigid_ws.set_anchor(x);
+        let masses = self.masses.as_ref().and_then(|m| m.as_slice());
+        let frozen = self.frozen.as_deref();
+        self.rigid_ws.project_at_anchor(
+            v, masses, frozen, weighted, metric, mode, pbc, broken_t, broken_r,
+        );
+    }
+
+    /// Remove the rigid motion of `v` at the geometry `x`.
+    fn kill_at(&mut self, x: &Array1<f64>, v: &mut Array1<f64>) {
+        let Some(xs) = x.as_slice() else {
+            return;
         };
-        if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.highs = Some(step);
-        }
+        let Some(vs) = v.as_slice_mut() else {
+            return;
+        };
+        self.anchor_and_project(xs, vs);
     }
 
     fn check_manifold(&self, n: usize) -> Result<()> {
@@ -1314,26 +1525,18 @@ impl Solver {
     }
 
     /// Tangent projection. Periodic cells drop rotation (Sella `proj_rot`).
-    fn project_vec(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
-        match &self.manifold {
-            ManifoldKind::MwRigid => {
-                let mut w = v.clone();
-                let masses = self.masses.as_ref().and_then(|m| m.as_slice());
-                project_horizontal(&mut w, x.view(), masses, !self.periodic);
-                w
-            }
-            ManifoldKind::RigidQuotient => {
-                let mut w = v.clone();
-                project_horizontal(&mut w, x.view(), None, !self.periodic);
-                w
-            }
+    fn project_vec(&mut self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+        let mut w = match &self.manifold {
+            ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => v.clone(),
             ManifoldKind::Product(product) if product.has_rigid() => {
                 let mut w = product.project(x, v);
                 self.project_rigid_blocks(product, x, v, &mut w);
                 w
             }
             other => other.project(x, v),
-        }
+        };
+        self.kill_at(x, &mut w);
+        w
     }
 
     /// Dogleg model on a curved kind, for the tangent projection `P` at `x`.
@@ -1392,7 +1595,7 @@ impl Solver {
         let mut e = Array1::<f64>::zeros(n);
         for j in 0..n {
             e[j] = 1.0;
-            p.column_mut(j).assign(&self.project_vec(x, &e));
+            p.column_mut(j).assign(&self.manifold.project(x, &e));
             e[j] = 0.0;
         }
         p
@@ -1484,27 +1687,9 @@ impl Solver {
         -grad.dot(p) - 0.5 * (u.dot(&tm.model.dot(&u)) + normal)
     }
 
-    /// Column expansion `P^T H P + (I - P)^T (I - P)` that the sphere form
-    /// is checked against.
-    #[cfg(test)]
-    fn tangent_hessian(&self, x: &Array1<f64>, hess: &Array2<f64>) -> Array2<f64> {
-        let n = x.len();
-        let p = self.projection_columns(x);
-        let normal = Array2::<f64>::eye(n) - &p;
-        p.t().dot(hess).dot(&p) + normal.t().dot(&normal)
-    }
-
-    /// Euclidean sessions keep the owned gradient. Other kinds project it.
-    fn horizontal_owned(&self, x: &Array1<f64>, grad: Array1<f64>) -> Array1<f64> {
-        if !self.project_rigid && matches!(self.manifold, ManifoldKind::Euclidean) {
-            return grad;
-        }
-        self.horizontal_grad(x, &grad)
-    }
-
-    fn horizontal_grad(&self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
+    fn horizontal_grad(&mut self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
         let mut g = match &self.manifold {
-            ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => self.project_vec(x, grad),
+            ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => grad.clone(),
             ManifoldKind::Product(product) if product.has_rigid() => {
                 let mut g = product.egrad2rgrad(x, grad);
                 self.project_rigid_blocks(product, x, grad, &mut g);
@@ -1512,20 +1697,13 @@ impl Solver {
             }
             other => other.egrad2rgrad(x, grad),
         };
-        if self.project_rigid
-            && !matches!(
-                self.manifold,
-                ManifoldKind::RigidQuotient | ManifoldKind::MwRigid
-            )
-        {
-            project_out_rot_trans(&mut g, x.view());
-        }
+        self.kill_at(x, &mut g);
         g
     }
 
     /// Vector transport. Quotient manifolds project at the arrival point.
     fn transport_vec(
-        &self,
+        &mut self,
         x_from: &Array1<f64>,
         x_to: &Array1<f64>,
         v: &Array1<f64>,
@@ -1543,202 +1721,163 @@ impl Solver {
 
     /// Riemannian L-BFGS pair at `x`: `s = T(x - old)`, `y = g - T(g_old)`.
     fn lbfgs_sy(
-        &self,
+        &mut self,
         old: &Array1<f64>,
         x: &Array1<f64>,
         gold: &Array1<f64>,
         grad: &Array1<f64>,
     ) -> (Array1<f64>, Array1<f64>) {
-        // Euclidean transport is a copy, and with rigid motion left in
-        // nothing is removed afterwards. `s = x - old` and `y = g - g_old`
-        // are those copies.
-        if !self.project_rigid && self.manifold == ManifoldKind::Euclidean {
-            return (x - old, grad - gold);
-        }
-        let s = self.transport_vec(old, x, &(x - old));
-        let y = grad - &self.transport_vec(old, x, gold);
+        let mut s = self.transport_vec(old, x, &(x - old));
+        let mut y = grad - &self.transport_vec(old, x, gold);
+        self.kill_at(x, &mut s);
+        self.kill_at(x, &mut y);
         (s, y)
     }
 
+    /// True when `x` is the iterate this session last evaluated, up to
+    /// a host's round trip of the coordinates.
+    ///
+    /// The test is relative, `|a - b| <= 4 eps max(|a|, |b|) + 1e-15`: a
+    /// host that copies positions through its own storage (eOn's
+    /// `Matter`, rgsaddle's band resync) can return a coordinate of
+    /// 30 Angstrom a few ulps (3.6e-15 each) away, which an absolute
+    /// 1e-15 test reads as a new geometry and pays a force call for.
     fn same_last_x(&self, x: &Array1<f64>) -> bool {
         match &self.last_pos {
             Some(p) if p.len() == x.len() => p
                 .iter()
                 .zip(x.iter())
-                .all(|(a, b)| (*a - *b).abs() <= 1e-15),
+                .all(|(a, b)| (*a - *b).abs() <= 4.0 * f64::EPSILON * a.abs().max(b.abs()) + 1e-15),
             _ => false,
         }
     }
 
     fn remember(&mut self, x: &Array1<f64>, value: f64, grad: &Array1<f64>) {
-        match &mut self.last_pos {
-            Some(pos) if pos.len() == x.len() => pos.assign(x),
-            _ => self.last_pos = Some(x.to_owned()),
-        }
+        self.last_pos = Some(x.clone());
         self.last_value = value;
-        crate::workspace::assign_fit(&mut self.last_grad, grad.view());
+        self.last_grad = grad.clone();
     }
 
-    /// Store `x` and `value`. The gradient is already in [`Self::last_grad`].
-    fn remember_pos(&mut self, x: &Array1<f64>, value: f64) {
-        match &mut self.last_pos {
-            Some(pos) if pos.len() == x.len() => pos.assign(x),
-            _ => self.last_pos = Some(x.to_owned()),
-        }
-        self.last_value = value;
-    }
-
-    fn stationarity_norm(&self, x: &Array1<f64>, grad: &Array1<f64>) -> f64 {
-        #[cfg(feature = "highs")]
-        if self.highs
-            && (self.box_lo.is_some() || self.box_hi.is_some())
-            && matches!(self.manifold, ManifoldKind::Euclidean)
-            && !self.project_rigid
-            && self.equalities.is_empty()
-        {
-            use crate::lbfgs_qp::side_at;
-            let mut norm = 0.0_f64;
-            let mut projected = Array1::zeros(x.len());
-            for k in 0..x.len() {
-                let lo = side_at(self.box_lo.as_deref(), k).unwrap_or(f64::NEG_INFINITY);
-                let hi = side_at(self.box_hi.as_deref(), k).unwrap_or(f64::INFINITY);
-                if !(x[k].is_finite() && grad[k].is_finite() && lo <= x[k] && x[k] <= hi) {
-                    return f64::INFINITY;
+    /// FIRE schedule for a FIRE session; a no-op on any other method.
+    ///
+    /// [`FireVariant::Guenole2020`] replaces the session's FIRE state with
+    /// the published FIRE 2.0 ([`crate::fire::fire2_displacement`]) and
+    /// Table 1 of Comput. Mater. Sci. 175 (2020) 109584,
+    /// DOI 10.1016/j.commatsci.2020.109584, from `dt = Control::istep`;
+    /// [`FireVariant::Rgmin`] restores [`FireState::new`] for the kind the
+    /// session was built with. Either way the velocity starts at zero.
+    ///
+    /// On the rgpot benchmark (10 starts, per-atom cap 0.2) the published
+    /// schedule halves the force calls of the Pt7 island and the EAM Al
+    /// slab and costs 1.5 times as many on LJ38 from random packings,
+    /// which is why it is a choice and not the default.
+    pub fn set_fire_variant(&mut self, variant: FireVariant) {
+        let dim = self.dim;
+        let dt0 = self.control.istep;
+        let fire = matches!(self.inner, Inner::Fire(_));
+        let mut produced = None;
+        if let Inner::Fire(state) = &mut self.inner {
+            match variant {
+                FireVariant::Guenole2020 => {
+                    // Table 1 parameters on the state, and the published
+                    // integrator (vdfmax) beside it.
+                    state.set_preset(FirePreset::Guenole2020);
+                    let (_, extras) = guenole2020(dim, state.dt);
+                    produced = Some(Some(extras));
                 }
-                // x - clip(x-g, lo, hi) = clip(g, x-hi, x-lo).
-                // Distance clipping preserves gradients smaller than an ulp of x.
-                projected[k] = grad[k].clamp(x[k] - hi, x[k] - lo);
-                norm = norm.hypot(projected[k]);
-            }
-            return match self.stop_norm {
-                StopNorm::Two => norm,
-                other => other.of(projected.view()),
-            };
-        }
-        let _ = x;
-        self.stop_norm.of(grad.view())
-    }
-
-    fn report(&self, value: f64, x: &Array1<f64>, grad: &Array1<f64>) -> Report {
-        let grad_norm = self.stationarity_norm(x, grad);
-        if self.brief {
-            return Report {
-                value,
-                coords: Array1::zeros(0),
-                steps: self.steps,
-                grad_norm,
-                stop_norm: self.stop_norm,
-                grad: None,
-            };
-        }
-        Report {
-            value,
-            coords: copied(x),
-            steps: self.steps,
-            grad_norm,
-            stop_norm: self.stop_norm,
-            grad: Some(copied(grad)),
-        }
-    }
-
-    /// Minimize until the gradient test, the iteration budget, or a stop.
-    ///
-    /// Intermediate reports do not clone the coordinates or the gradient.
-    /// The returned report does.
-    pub fn run<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        if let Some(d) = self.chart.clone() {
-            return self.in_chart(&d, obj, x, |s, obj, z| s.run_plain(obj, z));
-        }
-        self.run_plain(obj, x)
-    }
-
-    /// [`Self::run`] with a gauge move between steps.
-    ///
-    /// `gauge(x)` replaces the iterate with another representation of the
-    /// same point: a map that leaves the objective unchanged, such as
-    /// re-centring the pivot of a hyperplane on the plane. It acts on the
-    /// caller's coordinates before every step but the first, so the
-    /// returned report describes the point left in `x`. Every report
-    /// carries its coordinates and gradient.
-    ///
-    /// A move is not a step: the value and gradient before it belong to
-    /// the old representation, where a plane rotates about the old pivot,
-    /// so their secant with the moved point holds no curvature. A gauge
-    /// that changes `x` therefore rebases the session, as
-    /// [`Self::rebase`]: the next step evaluates the objective afresh at
-    /// the moved point and the retained curvature preconditions it. A
-    /// gauge that leaves `x` as it was is no move.
-    pub fn run_gauged<O, G>(&mut self, obj: &O, x: &mut Array1<f64>, mut gauge: G) -> Result<Report>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-        G: FnMut(&mut Array1<f64>),
-    {
-        if self.control.maxiter == 0 {
-            return self.run(obj, x);
-        }
-        let tol = self.control.gtol;
-        let mut report = self.step(obj, x)?;
-        for _ in 1..self.control.maxiter {
-            if report.grad_norm < tol {
-                break;
-            }
-            let before = x.clone();
-            gauge(x);
-            if *x != before {
-                self.rebase();
-            }
-            report = self.step(obj, x)?;
-        }
-        Ok(report)
-    }
-
-    fn run_plain<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        self.brief = true;
-        let tol = self.control.gtol;
-        let budget = self.control.maxiter;
-        let mut stop: Result<()> = Ok(());
-        for _ in 0..budget {
-            match self.step_plain(obj, x) {
-                Ok(rep) if rep.grad_norm < tol => {
-                    let value = rep.value;
-                    self.brief = false;
-                    let g = self.reported_grad(x);
-                    return Ok(self.report(value, x, &g));
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    stop = Err(err);
-                    break;
+                _ => {
+                    let kind = state.kind;
+                    *state = FireState::new(kind, dim, dt0);
+                    produced = Some(None);
                 }
             }
         }
-        self.brief = false;
-        match stop {
-            Err(err) => Err(err),
-            Ok(()) => {
-                let value = self.last_value;
-                let g = self.reported_grad(x);
-                Ok(self.report(value, x, &g))
+        if let Some(extras) = produced {
+            self.fire2 = extras;
+            // FIRE 2.0 leaves the implicit cap off. Switching the schedule
+            // updates that choice unless the caller already set a cap.
+            if fire {
+                self.apply_default_atom_cap();
             }
         }
     }
 
-    /// The gradient a step report carries, for the report at the end of a
-    /// run. The unconstrained Newton-CG path remembers the raw gradient,
-    /// which its difference products need; its reports are horizontal.
-    fn reported_grad(&self, x: &Array1<f64>) -> Array1<f64> {
-        let raw = self.constraints.is_none()
-            && matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. });
-        if raw && self.last_grad.len() == x.len() {
-            self.horizontal_grad(x, &self.last_grad)
-        } else {
-            self.last_grad.clone()
+    /// Consecutive non-positive-power limit for the published FIRE 2.0
+    /// schedule (`vdfmax`). The step that makes the count exceed
+    /// `limit` returns [`Error::FireStalled`] and does not move.
+    /// A positive power step, and [`Self::forget`], clear the count.
+    /// A session that is not running that schedule ignores the call.
+    /// The published schedule starts at 2000. `usize::MAX` does not stop.
+    pub fn set_fire_vdfmax(&mut self, limit: usize) {
+        if let Some(ext) = &mut self.fire2 {
+            ext.n_neg_max = limit;
+        }
+    }
+
+    /// Split quick-min into an atomic block `[0, at)` and a cell block
+    /// `[at, n)`. Each block takes the reference projection on its own
+    /// force, so a cell velocity that opposes the stress is zeroed even
+    /// when the atoms keep the total power positive.
+    pub fn set_quickmin_cell(&mut self, at: usize) -> Result<()> {
+        if at == 0 || at >= self.dim {
+            return Err(Error::QuickMin {
+                what: "cell block must start after the atomic coordinates and before the end",
+            });
+        }
+        match &mut self.overlay {
+            Overlay::QuickMin(state, _) => {
+                state.cell_at = Some(at);
+                Ok(())
+            }
+            _ => Err(Error::QuickMin {
+                what: "cell block requires a quick-min session",
+            }),
+        }
+    }
+
+    /// Turn the FIRE time-step controller on or off. The reference
+    /// update is a fixed `dt` ([`crate::quickmin::quickmin_baseline`]).
+    /// A session that is not quick-min ignores the call.
+    pub fn set_quickmin_adapt(&mut self, enabled: bool) {
+        if let Overlay::QuickMin(state, session) = &mut self.overlay {
+            state.adapt_dt = enabled;
+            session.options.adapt_dt = enabled;
+        }
+    }
+
+    /// Quick-min options ([`QuickMinOptions`]); a no-op on any other
+    /// method. The velocity and `dt` restart from [`Control::istep`];
+    /// the cell split stays.
+    pub fn set_quickmin_options(&mut self, options: QuickMinOptions) {
+        if let Overlay::QuickMin(state, session) = &mut self.overlay {
+            session.configure(state, options);
+        }
+    }
+
+    /// Drop the cached evaluation and keep the method's memory.
+    ///
+    /// The next [`Self::step`] calls the oracle at its `x` even when `x`
+    /// is the iterate this session last evaluated. A host whose oracle
+    /// changes between steps calls this after the change: a min-mode
+    /// walker returning `g - 2 (g . tau) tau` after refreshing `tau`, or
+    /// a band after arming its climbing image. Without it the next step
+    /// starts from the gradient of the old objective at the same `x`.
+    ///
+    /// FIRE velocity, BB and NLCG history, the dense quasi-Newton
+    /// matrices and the L-BFGS pairs survive. Each stored pair is a
+    /// secant pair of one objective: its `s` and both gradients of its
+    /// `y` come from the same step, so the same `tau`, and this method
+    /// keeps that true for the next pair by re-evaluating the start under
+    /// the new oracle. What a pair no longer matches after the change is
+    /// the current curvature: with `R = I - 2 tau tau'` the effective
+    /// Hessian is `R H R`, which moves by `O(theta) ||H||` when `tau`
+    /// rotates by `theta`. Small rotations between steps keep the memory
+    /// useful; after a large one call [`Self::forget`].
+    pub fn forget_evaluation(&mut self) {
+        self.geometry_lbfgs_stiff = None;
+        self.last_pos = None;
+        if let Overlay::QuickMin(_, session) = &mut self.overlay {
+            session.forget_last();
         }
     }
 
@@ -1831,36 +1970,52 @@ impl Solver {
         Ok(dir)
     }
 
-    /// Drop method memory. The next step is a cold start from the current `x`.
-    /// Keep the method memory, drop the point. The next step evaluates
-    /// the objective afresh at the current `x` with the initial step
-    /// scale and an empty acceptance window, and the retained curvature
-    /// pairs (or dense approximation) precondition it. This is the
-    /// restart for a sequence of related objectives, such as a
-    /// marginal-likelihood fit refreshed as observations arrive: the
-    /// previous fit's optimum is the start, its curvature still applies,
-    /// but its value and gradient there belong to the previous objective.
+    /// Keep method memory and discard the cached point and acceptance window.
+    /// The next step evaluates the current objective at the supplied point
+    /// with the initial step scale and the retained curvature information.
     pub fn rebase(&mut self) {
         self.istep = self.control.istep;
-        self.lbfgs_burdakov = self.lbfgs_burdakov_init;
         self.e_hist.clear();
         self.last_pos = None;
-        self.geometry_lbfgs_stiff = None;
+        self.lbfgs_burdakov = self.lbfgs_burdakov_init;
+        self.lbfgs_plateau = crate::lbfgs_plateau::RepeatedAcceptedStep::new();
+        if let Overlay::QuickMin(_, session) = &mut self.overlay {
+            session.forget_last();
+        }
     }
 
     /// Drop method memory. The next step is a cold start from the current `x`.
     pub fn forget(&mut self) {
+        self.saddle_kicks = 0;
+        self.geometry_lbfgs_stiff = None;
         self.istep = self.control.istep;
-        self.lbfgs_burdakov = self.lbfgs_burdakov_init;
         self.e_hist.clear();
         self.last_pos = None;
-        self.geometry_lbfgs_stiff = None;
-        self.saddle_kicks = 0;
+        self.lbfgs_burdakov = self.lbfgs_burdakov_init;
+        self.lbfgs_plateau = crate::lbfgs_plateau::RepeatedAcceptedStep::new();
+        let sr_radius = self.sr_opening_radius();
         match &mut self.inner {
             Inner::Lbfgs(solver) => solver.forget(),
-            Inner::Nlcg { initialized, .. } => *initialized = false,
-            Inner::Bfgs { h, fresh } | Inner::Sr1 { h, fresh } | Inner::Sr2 { b: h, fresh } => {
+            Inner::Nlcg {
+                initialized,
+                prev_alpha,
+                prev_gd,
+                ..
+            } => {
+                *initialized = false;
+                *prev_alpha = 0.0;
+                *prev_gd = 0.0;
+            }
+            Inner::Bfgs { h, fresh } => {
                 *h = Array2::<f64>::eye(self.dim);
+                *fresh = true;
+            }
+            Inner::Sr1 { h, fresh } => {
+                *h = Array2::<f64>::eye(self.dim);
+                *fresh = true;
+            }
+            Inner::Sr2 { b, fresh } => {
+                *b = Array2::<f64>::eye(self.dim);
                 *fresh = true;
             }
             Inner::Adam {
@@ -1889,16 +2044,123 @@ impl Solver {
                 *radius = self.control.istep.max(RADIUS_START);
             }
         }
+        if matches!(self.inner, Inner::Sr1 { .. } | Inner::Sr2 { .. }) {
+            self.sr_radius = sr_radius;
+        }
+        if let Some(ext) = &mut self.fire2 {
+            ext.steps = 0;
+            ext.n_neg = 0;
+        }
+        self.reset_overlay();
+    }
+
+    fn step_with_equalities<O, F>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        step: F,
+    ) -> Result<Report>
+    where
+        O: Objective<f64> + ?Sized,
+        F: FnOnce(&mut Self, &O, &mut Array1<f64>) -> Result<Report>,
+    {
+        #[cfg(feature = "highs")]
+        let checkpoint = if self.highs && !self.equalities.is_empty() {
+            if x.len() != self.dim || Objective::dim(obj) != self.dim {
+                return Err(Error::Dim {
+                    got: x.len(),
+                    dim: self.dim,
+                });
+            }
+            Some((obj.bounds().clip(x.view()), self.steps))
+        } else {
+            None
+        };
+        let result = step(self, obj, x);
+        #[cfg(feature = "highs")]
+        if let Some((start, steps)) = checkpoint
+            && result.is_ok()
+        {
+            for (row, (coefficients, rhs)) in self.equalities.iter().enumerate() {
+                let mut residual = -*rhs;
+                let mut magnitude = rhs.abs();
+                for &(k, a) in coefficients {
+                    residual += a * (x[k] - start[k]);
+                    magnitude += a.abs() * (x[k].abs() + start[k].abs());
+                }
+                // The QP tolerance is in row units. The gamma bound also
+                // covers subtraction at a large coordinate origin.
+                let roundoff = (2.0 * coefficients.len() as f64 + 4.0) * f64::EPSILON;
+                let tolerance = crate::lbfgs_qp::EQUALITY_FEASIBILITY_TOLERANCE
+                    + roundoff / (1.0 - roundoff) * magnitude;
+                if !residual.is_finite() || !tolerance.is_finite() || residual.abs() > tolerance {
+                    *x = start;
+                    self.steps = steps;
+                    self.forget();
+                    return Err(Error::Highs(format!(
+                        "accepted displacement violates equality {row}: residual {residual} exceeds {tolerance}"
+                    )));
+                }
+            }
+        }
+        result
+    }
+
+    /// The window states how accurate the objective's values are, so it
+    /// holds under every acceptance policy, as the default four-epsilon
+    /// window it replaces does.
+    fn search_options(&self) -> LineSearchOptions {
+        if self.manifold == ManifoldKind::Euclidean {
+            self.line_options
+        } else {
+            LineSearchOptions::default()
+        }
+    }
+
+    /// A zero iteration budget is the SCG reading. The plateau itself is
+    /// `lbfgs_plateau`: this only asks it, and only for L-BFGS. A positive
+    /// budget does not ask, so its trajectory is unchanged.
+    fn note_repeated_lbfgs_step(
+        &mut self,
+        before: &Array1<f64>,
+        x: &Array1<f64>,
+        report: &mut Report,
+    ) {
+        if self.control.maxiter != 0 || !matches!(self.inner, Inner::Lbfgs(_)) {
+            return;
+        }
+        if report.status != Status::Iterating {
+            return;
+        }
+        let moved = before.len() == x.len()
+            && before
+                .iter()
+                .zip(x.iter())
+                .any(|(a, b)| a.to_bits() != b.to_bits());
+        if self.lbfgs_plateau.observe(
+            self.dim,
+            moved,
+            report.value,
+            report.grad_norm,
+            self.control.gtol,
+            self.search_options().objective_window(),
+        ) {
+            report.status = Status::StepTolerance;
+        }
     }
 
     /// One outer iteration. `x` is the iterate and is overwritten in place.
-    /// A first-order step whose start, or whose FIRE, geometry fallback or
-    /// L-BFGS [`Accept::None`] trial, answers with a non-finite value or
-    /// gradient returns [`Error::Oracle`] with `x` and the solver as they
-    /// were, so a retry probes the same trial. Under
-    /// [`Self::set_lbfgs_trust_radius`] the step scores a non-finite
-    /// trial as `rho < 0` instead. The radius shrinks, `x` and the
-    /// pairs stay, and the step returns a report at `x`.
+    ///
+    /// With `control.maxiter == 0` an L-BFGS session reports
+    /// [`Status::StepTolerance`] once `max(n, 2)` consecutive accepted steps
+    /// move `x` while `||g||` stays at or above `gtol`, the value stays
+    /// inside the objective roundoff window
+    /// ([`Self::set_objective_roundoff`], else four epsilon relative) and
+    /// `||g||` inside `sqrt(eps)` relative, both of the first of those
+    /// steps. The step that reports it is taken. A caller's own loop reads
+    /// it as the end of the fit: the objective cannot resolve the progress
+    /// the steps make. A positive `maxiter` never reports it here, and
+    /// [`Self::run`] keeps reading a zero `maxiter` as no steps.
     pub fn step<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,
@@ -1913,6 +2175,17 @@ impl Solver {
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
+        let before = x.clone();
+        let mut report = self.step_once(obj, x)?;
+        self.note_repeated_lbfgs_step(&before, x, &mut report);
+        Ok(report)
+    }
+
+    /// One iteration, without the unlimited-budget plateau check.
+    fn step_once<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
         if self.constraints.is_some() {
             return self.constrained_step(x, |s, x| s.step_constrained(obj, x));
         }
@@ -1923,18 +2196,26 @@ impl Solver {
             return Err(Error::NeedHessian);
         }
         #[cfg(feature = "highs")]
-        if self.highs && (self.box_lo.is_some() || self.box_hi.is_some()) {
-            let bounded = crate::box_objective::BoxObjective::new(
-                obj,
-                self.box_lo.clone(),
-                self.box_hi.clone(),
-            )?;
-            if bounded.clip_start(x)? {
-                self.last_pos = None;
+        {
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.coordinate_box = None;
             }
-            return self.step_first_order(&bounded, x);
+            if self.has_coordinate_box() {
+                let bounded = crate::box_objective::BoxObjective::new(
+                    obj,
+                    self.box_lo.clone(),
+                    self.box_hi.clone(),
+                )?;
+                if bounded.clip_start(x)? {
+                    self.last_pos = None;
+                }
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.coordinate_box = Some(bounded.bounds().clone());
+                }
+                return self.step_with_equalities(&bounded, x, Self::step_first_order);
+            }
         }
-        self.step_first_order(obj, x)
+        self.step_with_equalities(obj, x, Self::step_first_order)
     }
 
     /// One Newton / RFO iteration. Hessian is rebuilt at the current `x`.
@@ -1962,18 +2243,26 @@ impl Solver {
             return self.step_newton_cg(obj, x, &FiniteDifference);
         }
         #[cfg(feature = "highs")]
-        if self.highs && (self.box_lo.is_some() || self.box_hi.is_some()) {
-            let bounded = crate::box_objective::BoxObjective::new(
-                obj,
-                self.box_lo.clone(),
-                self.box_hi.clone(),
-            )?;
-            if bounded.clip_start(x)? {
-                self.last_pos = None;
+        {
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.coordinate_box = None;
             }
-            return self.step_hess_inner(&bounded, x);
+            if self.has_coordinate_box() {
+                let bounded = crate::box_objective::BoxObjective::new(
+                    obj,
+                    self.box_lo.clone(),
+                    self.box_hi.clone(),
+                )?;
+                if bounded.clip_start(x)? {
+                    self.last_pos = None;
+                }
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.coordinate_box = Some(bounded.bounds().clone());
+                }
+                return self.step_with_equalities(&bounded, x, Self::step_hess_inner);
+            }
         }
-        self.step_hess_inner(obj, x)
+        self.step_with_equalities(obj, x, Self::step_hess_inner)
     }
 
     /// One Steihaug-Toint iteration. `obj` supplies analytic products;
@@ -2017,9 +2306,10 @@ impl Solver {
             });
         }
         self.check_manifold(x.len())?;
+        self.note_bounds(obj.bounds());
         let cached = self.same_last_x(x);
         if !cached {
-            clip_mut(obj.bounds(), x);
+            *x = obj.bounds().clip(x.view());
         }
         let (value, raw_grad) = if cached {
             (self.last_value, self.last_grad.clone())
@@ -2037,7 +2327,13 @@ impl Solver {
         }
         if gnorm < self.control.gtol {
             self.remember(x, value, &raw_grad);
-            return Ok(self.report(value, x, &grad));
+            return Ok(self.finish(
+                value,
+                x,
+                &grad,
+                gnorm,
+                self.control.classify(gnorm, self.free_len(obj.bounds())),
+            ));
         }
         let (radius, precondition) = match &self.inner {
             Inner::NewtonCg { radius } => (*radius, false),
@@ -2048,9 +2344,10 @@ impl Solver {
         // otherwise eight times the current radius, and never below it.
         let rmax = self
             .control
-            .maxmove
-            .unwrap_or(radius * RADIUS_GROWTH)
+            .maxmove_cap()
+            .unwrap_or(radius * 8.0)
             .max(radius);
+        let project_rigid = self.removal_mode() != RigidMode::Off;
         let taken = newton_cg_step(
             obj,
             x,
@@ -2061,8 +2358,8 @@ impl Solver {
                 radius,
                 rmax,
                 atom_cap: self.atom_maxmove,
-                euclid_cap: self.control.maxmove,
-                project_rigid: self.project_rigid,
+                euclid_cap: self.control.maxmove_cap(),
+                project_rigid,
                 precondition,
                 seed: self.steps as u64,
                 manifold: (!self.manifold.is_flat()).then(|| self.manifold.clone()),
@@ -2090,7 +2387,14 @@ impl Solver {
         };
         self.remember(x, taken.value, &raw_out);
         self.steps += 1;
-        Ok(self.report(taken.value, x, &report_grad))
+        let gnorm = self.stationarity_norm(x, &report_grad);
+        Ok(self.finish(
+            taken.value,
+            x,
+            &report_grad,
+            gnorm,
+            self.control.classify(gnorm, self.free_len(obj.bounds())),
+        ))
     }
 
     /// `P^{-1} force` when an exponential preconditioner is installed.
@@ -2115,8 +2419,56 @@ impl Solver {
         scale * force
     }
 
+    /// Adaptive Burdakov trust radius for session L-BFGS, starting at
+    /// `radius`. A non-positive or non-finite `radius` turns it off,
+    /// the default.
+    ///
+    /// The radius follows Algorithm 1 of Burdakov, Gong, Zikrin, and
+    /// Yuan, Math. Program. Comput. 9, 101-134 (2017),
+    /// <https://doi.org/10.1007/s12532-016-0109-7>, with their Section 9
+    /// constants. The step is a ray truncation along the two-loop
+    /// direction, the third L-BFGS variant in their comparison. It does
+    /// not solve their trust-region subproblem.
+    /// [`Self::set_lbfgs_trust`] is a different opt-in: it scales a long
+    /// capped step and scores the Newton model. The two can both be
+    /// stored. When this radius is on, the Euclidean L-BFGS step uses
+    /// this ray and leaves the capped step and that Newton-model radius
+    /// alone.
+    ///
+    /// With [`Self::set_project_rigid`] the rigid modes leave the
+    /// direction first. The ray stops at the Euclidean radius, then at
+    /// the per-atom or Euclidean cap. `rho` is the actual over the
+    /// predicted energy drop. `rho = 1` when the energy changes by at
+    /// most `1e-11 |f|`, so a rise that small is accepted. `rho < 0`
+    /// refuses the step: `x` and the pairs stay. `rho < 0.25` sets the
+    /// radius to `min(r/4, |s|/2)`. `rho >= 0.75` with `|s| >= 0.8 r`
+    /// doubles it. A trial moved by the box or by the rigid projection
+    /// is predicted from `-g^T s`. Whenever the radius falls below
+    /// `1e-15`, the step keeps the previous point and returns
+    /// [`Error::TrustCollapsed`]. When the slope `g^T d` is still NaN
+    /// or infinite after the pairs are dropped, the step returns
+    /// [`Error::Oracle`]. When it is finite and not negative, the step
+    /// returns [`Error::NoDescent`]. Neither moves.
+    ///
+    /// On Euclidean L-BFGS without HiGHS this replaces [`Self::set_accept`]
+    /// and the geometry step of [`Self::set_atom_maxmove`]. Other methods
+    /// and manifolds, and the HiGHS step, ignore the radius. `forget` and
+    /// `rebase` restore `radius`.
+    pub fn set_lbfgs_trust_radius(&mut self, radius: f64) {
+        let on = radius > 0.0 && radius.is_finite();
+        self.lbfgs_burdakov_init = if on { radius } else { 0.0 };
+        self.lbfgs_burdakov = self.lbfgs_burdakov_init;
+    }
+
+    /// Current Burdakov radius, or `None` when it is off. A session
+    /// whose method, manifold or HiGHS step ignores the radius still
+    /// reports the stored value.
+    pub fn lbfgs_trust_radius(&self) -> Option<f64> {
+        (self.lbfgs_burdakov_init > 0.0).then_some(self.lbfgs_burdakov)
+    }
+
     fn use_lbfgs_burdakov(&self) -> bool {
-        // NaN is not `<= 0`, so a non-finite stored radius stays on, as before.
+        // NaN is not `<= 0`, so a non-finite stored radius stays on.
         let on = matches!(
             self.lbfgs_burdakov_init.partial_cmp(&0.0),
             Some(std::cmp::Ordering::Greater) | None
@@ -2151,7 +2503,6 @@ impl Solver {
             projected = rigid && strip_rigid(&mut dir, x);
             gd = grad.dot(&dir);
         }
-        // An infinite slope also overflows |d|, so tau = 0 would accept x.
         if !gd.is_finite() {
             return Err(Error::Oracle {
                 what: "non-finite search direction",
@@ -2163,7 +2514,7 @@ impl Solver {
         let mut tau = (self.lbfgs_burdakov / l2(&dir)).min(1.0);
         if let Some(cap) = self.atom_maxmove {
             tau = tau.min(cap / max_atom_displacement(&dir));
-        } else if let Some(cap) = self.control.maxmove {
+        } else if let Some(cap) = self.control.maxmove_cap() {
             tau = tau.min(cap / l2(&dir));
         }
         let raw = &*x + &(tau * &dir);
@@ -2206,56 +2557,34 @@ impl Solver {
         Ok(self.report(tval, x, &new_grad))
     }
 
-    /// Line-search-free cap on unconstrained Euclidean L-BFGS. Curved
-    /// kinds keep their retraction search. A distance-constraint set and
-    /// HiGHS keep their own projections.
-    fn use_capped_lbfgs(&self) -> bool {
-        let capped = self.lbfgs_step().capped_limit().is_some()
-            && matches!(self.manifold, ManifoldKind::Euclidean)
-            && self.constraints.is_none();
-        #[cfg(feature = "highs")]
-        let capped = capped && !self.highs;
-        capped
-    }
-
-    fn use_geometry_lbfgs(&self) -> bool {
-        let on = matches!(self.lbfgs_step(), LbfgsStep::Wolfe)
-            && self.atom_maxmove.is_some()
-            && matches!(self.manifold, ManifoldKind::Euclidean)
-            && matches!(self.inner, Inner::Lbfgs(_));
-        #[cfg(feature = "highs")]
-        let on = on && !self.highs;
-        on
-    }
-
-    fn apply_geometry_curvature(
-        &mut self,
-        sy: f64,
-        yy: f64,
-        h0: &mut f64,
-        force: &Array1<f64>,
-        cap: f64,
-        forced: &mut Option<Array1<f64>>,
-    ) {
-        let curvature = if sy.is_finite() && yy.is_finite() && sy != 0.0 {
-            yy / sy
-        } else {
-            -1.0
-        };
-        if curvature < 0.0 {
-            if let Inner::Lbfgs(solver) = &mut self.inner {
-                solver.forget();
-            }
-            *forced = Some(cap_displacement_atom(
-                &self.geometry_scaled_force(force, 1000.0),
-                cap,
-            ));
-        } else if sy > 0.0 && yy > 0.0 {
-            *h0 = sy / yy;
+    /// Default Euclidean L-BFGS: the eOn cap, no line search.
+    /// [`Self::set_geometry_step`] keeps the geometry algorithm.
+    fn use_eon_lbfgs(&self) -> bool {
+        // Accept::Step is the one-oracle two-loop clip. The default
+        // Accept::None session takes the eOn cap.
+        if self.geometry_step == Some(true)
+            || self.accept == Accept::Step
+            || !matches!(self.lbfgs_step(), LbfgsStep::Capped { .. })
+        {
+            return false;
         }
+        if !matches!(self.manifold, ManifoldKind::Euclidean) {
+            return false;
+        }
+        if !matches!(self.inner, Inner::Lbfgs(_)) || self.constraints.is_some() {
+            return false;
+        }
+        if self.use_lbfgs_burdakov() {
+            return false;
+        }
+        #[cfg(feature = "highs")]
+        if self.highs {
+            return false;
+        }
+        true
     }
 
-    fn shape_step(&self, x: &Array1<f64>, mut direction: Array1<f64>) -> Array1<f64> {
+    fn shape_step(&mut self, x: &Array1<f64>, mut direction: Array1<f64>) -> Array1<f64> {
         if !self.project_rigid && matches!(self.manifold, ManifoldKind::Euclidean) {
             return direction;
         }
@@ -2263,25 +2592,6 @@ impl Solver {
             project_out_rot_trans(&mut direction, x.view());
         }
         self.project_vec(x, &direction)
-    }
-
-    /// Search direction of one capped step, after rigid and manifold projection.
-    fn capped_search(&mut self, x: &Array1<f64>, g: &Array1<f64>) -> Option<(Array1<f64>, bool)> {
-        let (direction, full) = match &mut self.inner {
-            Inner::Lbfgs(solver) => solver.capped_direction(g.view())?,
-            _ => return None,
-        };
-        let direction = self.shape_step(x, direction);
-        let slope = crate::vecops::dot(direction.view(), g.view());
-        if slope.is_finite() && slope < 0.0 {
-            return Some((direction, full));
-        }
-        if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.forget();
-        }
-        let direction = self.shape_step(x, g.mapv(|v| -v));
-        let slope = crate::vecops::dot(direction.view(), g.view());
-        (slope.is_finite() && slope < 0.0).then_some((direction, true))
     }
 
     /// Trial point of a capped displacement. `steepest` reports that the
@@ -2293,7 +2603,7 @@ impl Solver {
         x: &Array1<f64>,
         step: &Array1<f64>,
         steepest: bool,
-    ) -> Result<(Array1<f64>, f64, Array1<f64>, bool)>
+    ) -> Result<(Array1<f64>, f64, Array1<f64>)>
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
@@ -2303,7 +2613,7 @@ impl Solver {
                 what: "the capped step is zero",
             });
         }
-        let trial = clip_owned(obj.bounds(), x + step);
+        let trial = crate::step::clip_owned(obj.bounds(), x + step);
         let taken = max_atom_displacement(&(&trial - x));
         if !taken.is_finite() || taken <= 0.0 {
             return Err(Error::OffManifold {
@@ -2311,60 +2621,16 @@ impl Solver {
             });
         }
         let (value, grad) = obj.value_and_gradient(trial.view());
-        if !finite(value, grad.view()) {
+        if !crate::step::finite(value, grad.view()) {
             return Err(if steepest {
-                non_finite()
+                crate::step::non_finite()
             } else {
                 Error::Oracle {
                     what: "non-finite quasi-Newton trial",
                 }
             });
         }
-        Ok((trial, value, grad, steepest))
-    }
-
-    fn propose_capped<O>(
-        &mut self,
-        obj: &O,
-        x: &Array1<f64>,
-        grad: &Array1<f64>,
-        cap: f64,
-    ) -> std::result::Result<(Array1<f64>, f64, Array1<f64>), CappedMiss>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        let Some((direction, full)) = self.capped_search(x, grad) else {
-            return Err(CappedMiss::Stop(Error::LbfgsCap {
-                what: "the gradient is not a descent direction",
-            }));
-        };
-        let step = Lbfgs::apply_atom_cap(&direction, cap, full);
-        match self.capped_trial(obj, x, &step, full) {
-            Ok((trial, value, grad, _)) => Ok((trial, value, grad)),
-            Err(Error::Oracle {
-                what: "non-finite quasi-Newton trial",
-            }) => Err(CappedMiss::Retry),
-            Err(err) => Err(CappedMiss::Stop(err)),
-        }
-    }
-
-    /// One line-search-free L-BFGS step. [`LbfgsStep::Capped`] follows
-    /// eOn. [`LbfgsStep::Scaled`] shortens the two-loop step and keeps
-    /// the pairs.
-    fn capped_lbfgs_step<O>(
-        &mut self,
-        obj: &O,
-        x: &mut Array1<f64>,
-        value: f64,
-        grad: Array1<f64>,
-    ) -> Result<Report>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        if matches!(self.lbfgs_step(), LbfgsStep::Capped { .. }) {
-            return self.eon_lbfgs_step(obj, x, value, grad);
-        }
-        self.scaled_lbfgs_step(obj, x, value, grad)
+        Ok((trial, value, grad))
     }
 
     /// Curvature probe of the first eOn step, clipped to the box.
@@ -2381,13 +2647,13 @@ impl Solver {
         }
         let u = &force / norm;
         let raw = x + &(EON_FINITE_DIFFERENCE * &u);
-        let probe = clip_owned(obj.bounds(), raw);
+        let probe = crate::step::clip_owned(obj.bounds(), raw);
         let along = (&probe - x).dot(&u);
         if !(along.is_finite() && along > 0.0) {
             return EonSeed::Scale(EON_INVERSE_CURVATURE);
         }
         let (value, grad) = obj.value_and_gradient(probe.view());
-        if !finite(value, grad.view()) {
+        if !crate::step::finite(value, grad.view()) {
             return EonSeed::Steepest;
         }
         let curvature = (&grad - g).dot(&u) / along;
@@ -2398,14 +2664,14 @@ impl Solver {
         }
     }
 
-    /// One eOn L-BFGS step. A non-finite quasi-Newton trial is retried
-    /// once along `H0` times the force. A second non-finite trial
-    /// restores the pairs and returns [`Error::Oracle`].
+    /// One eOn L-BFGS step. A caller's move since the last step is a
+    /// curvature pair. A non-finite quasi-Newton trial is retried once
+    /// along `H0` times the force. A second non-finite trial restores the
+    /// pairs, the caller's included, and returns [`Error::Oracle`].
     fn eon_lbfgs_step<O>(
         &mut self,
         obj: &O,
         x: &mut Array1<f64>,
-        _value: f64,
         grad: Array1<f64>,
     ) -> Result<Report>
     where
@@ -2431,7 +2697,7 @@ impl Solver {
             }
         };
         if !self.same_last_x(x)
-            && let Some(previous) = self.last_pos.as_ref()
+            && let Some(previous) = self.last_pos.as_ref().filter(|p| p.len() == x.len())
         {
             let prev = previous.as_slice().unwrap_or(&[]);
             let xs = x.as_slice().unwrap_or(&[]);
@@ -2466,7 +2732,7 @@ impl Solver {
                 let force = grad.mapv(|v| -v);
                 let step = self.shape_step(x, cap_displacement_atom(&(h0 * &force), cap));
                 match self.capped_trial(obj, x, &step, true) {
-                    Ok((trial, value, grad, _)) => (trial, value, grad),
+                    Ok(point) => point,
                     Err(err) => {
                         if let Inner::Lbfgs(solver) = &mut self.inner {
                             solver.rollback_txn(txn);
@@ -2486,7 +2752,7 @@ impl Solver {
         let old = x.clone();
         let gold = grad;
         *x = trial;
-        let grad = self.horizontal_owned(x, tgrad);
+        let grad = self.horizontal_grad(x, &tgrad);
         let y_prev = gold.as_slice().unwrap_or(&[]);
         let y_new = grad.as_slice().unwrap_or(&[]);
         let prev = old.as_slice().unwrap_or(&[]);
@@ -2500,8 +2766,7 @@ impl Solver {
         Ok(self.report(tval, x, &grad))
     }
 
-    /// Euclidean eOn step. The displacement is added to `x` in place.
-    #[allow(clippy::too_many_arguments)]
+    /// Euclidean eOn proposal and its trial.
     fn eon_propose<O>(
         &mut self,
         obj: &O,
@@ -2529,7 +2794,7 @@ impl Solver {
             solver.recycle(step);
         }
         match result {
-            Ok((trial, value, grad, _)) => Ok((trial, value, grad)),
+            Ok(point) => Ok(point),
             Err(Error::Oracle {
                 what: "non-finite quasi-Newton trial",
             }) => Err(CappedMiss::Retry),
@@ -2537,84 +2802,59 @@ impl Solver {
         }
     }
 
-    /// One ASE-style L-BFGS step. The two-loop direction keeps its pairs
-    /// when it is shortened to the cap. A non-finite quasi-Newton trial
-    /// is retried once along the force. A second non-finite trial restores
-    /// the pairs and returns [`Error::Oracle`].
-    fn scaled_lbfgs_step<O>(
+    /// The geometry step is the explicit flag, or a Wolfe session that
+    /// has a per-atom cap. The default eOn cap is not this path.
+    fn use_geometry_lbfgs(&self) -> bool {
+        // An explicit per-atom cap on a Wolfe session is the geometry
+        // step unless the caller turned it off. Accept::Step keeps the
+        // one-oracle two-loop. The implicit default cap does not select
+        // this path.
+        let wolfe_cap = matches!(self.lbfgs_step(), LbfgsStep::Wolfe)
+            && self.geometry_step.is_none()
+            && self.atom_maxmove_set
+            && self.atom_maxmove.is_some()
+            && self.accept != Accept::Step;
+        if self.geometry_step != Some(true) && !wolfe_cap {
+            return false;
+        }
+        if self.atom_maxmove.is_none() || !matches!(self.manifold, ManifoldKind::Euclidean) {
+            return false;
+        }
+        if !matches!(self.inner, Inner::Lbfgs(_)) {
+            return false;
+        }
+        #[cfg(feature = "highs")]
+        if self.highs {
+            return false;
+        }
+        true
+    }
+
+    fn apply_geometry_curvature(
         &mut self,
-        obj: &O,
-        x: &mut Array1<f64>,
-        _value: f64,
-        grad: Array1<f64>,
-    ) -> Result<Report>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        let Some(cap) = self.lbfgs_step().capped_limit() else {
-            return Err(Error::LbfgsCap {
-                what: "the cap is not positive",
-            });
+        sy: f64,
+        yy: f64,
+        h0: &mut f64,
+        force: &Array1<f64>,
+        cap: f64,
+        forced: &mut Option<Array1<f64>>,
+    ) {
+        let curvature = if sy.is_finite() && yy.is_finite() && sy != 0.0 {
+            yy / sy
+        } else {
+            -1.0
         };
-        let saved = match &self.inner {
-            Inner::Lbfgs(solver) => solver.curvature(),
-            _ => {
-                return Err(Error::LbfgsCap {
-                    what: "requires an L-BFGS session",
-                });
-            }
-        };
-        if !self.same_last_x(x)
-            && let Some(previous) = self.last_pos.clone()
-        {
-            let s = &*x - &previous;
-            let y = &grad - &self.last_grad;
+        if curvature < 0.0 {
             if let Inner::Lbfgs(solver) = &mut self.inner {
-                solver.push(s, y);
+                solver.forget();
             }
+            *forced = Some(cap_displacement_atom(
+                &self.geometry_scaled_force(force, 1000.0),
+                cap,
+            ));
+        } else if sy > 0.0 && yy > 0.0 {
+            *h0 = sy / yy;
         }
-        let proposed = match self.propose_capped(obj, x, &grad, cap) {
-            Ok(point) => point,
-            Err(CappedMiss::Retry) => {
-                if let Inner::Lbfgs(solver) = &mut self.inner {
-                    solver.forget();
-                }
-                match self.propose_capped(obj, x, &grad, cap) {
-                    Ok(point) => point,
-                    Err(CappedMiss::Retry) => {
-                        if let Inner::Lbfgs(solver) = &mut self.inner {
-                            solver.restore(saved);
-                        }
-                        return Err(non_finite());
-                    }
-                    Err(CappedMiss::Stop(err)) => {
-                        if let Inner::Lbfgs(solver) = &mut self.inner {
-                            solver.restore(saved);
-                        }
-                        return Err(err);
-                    }
-                }
-            }
-            Err(CappedMiss::Stop(err)) => {
-                if let Inner::Lbfgs(solver) = &mut self.inner {
-                    solver.restore(saved);
-                }
-                return Err(err);
-            }
-        };
-        let (trial, tval, tgrad) = proposed;
-        let old = x.clone();
-        let gold = grad;
-        *x = trial;
-        let grad = self.horizontal_owned(x, tgrad);
-        let s = &*x - &old;
-        let y = &grad - &gold;
-        if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.push(s, y);
-        }
-        self.remember(x, tval, &grad);
-        self.steps += 1;
-        Ok(self.report(tval, x, &grad))
     }
 
     /// Capped Cartesian L-BFGS step: severely clipped starts estimate inverse
@@ -2641,10 +2881,6 @@ impl Solver {
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
-        let saved = match &self.inner {
-            Inner::Lbfgs(solver) => Some((solver.curvature(), self.geometry_lbfgs_stiff)),
-            _ => None,
-        };
         let cap = self.atom_maxmove.unwrap_or(0.2);
         let nominal_motion = max_atom_displacement(&(self.istep * grad.mapv(|g| -g)));
         let stiff = *self
@@ -2683,7 +2919,7 @@ impl Solver {
                 // 0.01 is the eOn probe length. Clip before the evaluation:
                 // the raw point can lie outside the objective box.
                 let raw = &*x + &(0.01 * &unit);
-                let probe = clip_owned(obj.bounds(), raw);
+                let probe = obj.bounds().clip(raw.view());
                 let along = (&probe - &*x).dot(&unit);
                 let curvature = if along > 0.0 && along.is_finite() {
                     let (_efd, gfd) = obj.value_and_gradient(probe.view());
@@ -2710,9 +2946,6 @@ impl Solver {
                 Inner::Lbfgs(solver) => solver.direction_h0(grad.view(), h0),
                 _ => h0 * &force,
             };
-            if self.project_rigid {
-                project_out_rot_trans(&mut direction, x.view());
-            }
             direction = self.project_vec(x, &direction);
             let motion = max_atom_displacement(&direction);
             if motion >= cap {
@@ -2750,11 +2983,11 @@ impl Solver {
         let mut tval = value;
         let mut tgrad = grad.clone();
         for _ in 0..10 {
-            trial = clip_owned(obj.bounds(), &*x + alpha * &direction);
+            trial = obj.bounds().clip((&*x + alpha * &direction).view());
             let ev = obj.value_and_gradient(trial.view());
             tval = ev.0;
             tgrad = ev.1;
-            if finite(tval, tgrad.view()) && tval - reference <= 1.0e-8 {
+            if tval.is_finite() && tval - reference <= 1.0e-8 {
                 accepted = true;
                 break;
             }
@@ -2765,17 +2998,10 @@ impl Solver {
                 solver.forget();
             }
             let sd = cap_displacement_atom(&self.geometry_scaled_force(&force, 0.1), cap);
-            trial = clip_owned(obj.bounds(), &*x + &sd);
+            trial = obj.bounds().clip((&*x + &sd).view());
             let ev = obj.value_and_gradient(trial.view());
             tval = ev.0;
             tgrad = ev.1;
-            if !finite(tval, tgrad.view()) {
-                if let (Inner::Lbfgs(solver), Some((curvature, stiff))) = (&mut self.inner, saved) {
-                    solver.restore(curvature);
-                    self.geometry_lbfgs_stiff = stiff;
-                }
-                return Err(non_finite());
-            }
         }
         if !stiff {
             self.e_hist.push_back(tval);
@@ -2786,7 +3012,7 @@ impl Solver {
         let old = x.clone();
         let gold = grad.clone();
         *x = trial;
-        grad = self.horizontal_owned(x, tgrad);
+        grad = self.horizontal_grad(x, &tgrad);
         let s = &*x - &old;
         let y = &grad - &gold;
         if let Inner::Lbfgs(solver) = &mut self.inner {
@@ -2802,7 +3028,14 @@ impl Solver {
         }
         self.remember(x, tval, &grad);
         self.steps += 1;
-        Ok(self.report(tval, x, &grad))
+        let gnorm = self.stationarity_norm(x, &grad);
+        Ok(self.finish(
+            tval,
+            x,
+            &grad,
+            gnorm,
+            self.control.classify(gnorm, self.free_len(obj.bounds())),
+        ))
     }
 
     fn saddle_escape_enabled(&self) -> bool {
@@ -2814,7 +3047,7 @@ impl Solver {
     }
 
     /// Lowest eigenpair of `hess` when it lies below the stationarity tolerance.
-    fn unstable_mode(&self, hess: &Array2<f64>) -> Option<Array1<f64>> {
+    fn unstable_mode(&self, hess: &ndarray::Array2<f64>) -> Option<Array1<f64>> {
         let n = hess.nrows();
         if n == 0 || hess.ncols() != n || hess.iter().any(|v| !v.is_finite()) {
             return None;
@@ -2840,7 +3073,7 @@ impl Solver {
             }
             (best, evecs.column(k).to_owned())
         } else {
-            struct Mat<'a>(&'a Array2<f64>);
+            struct Mat<'a>(&'a ndarray::Array2<f64>);
             impl ApplyHessian for Mat<'_> {
                 fn apply_hessian(&self, _x: ArrayView1<f64>, v: ArrayView1<f64>) -> Array1<f64> {
                     self.0.dot(&v)
@@ -2850,8 +3083,18 @@ impl Solver {
             for i in 0..n {
                 seed[i] = ((i % 11) as f64) - 5.0;
             }
-            let Ok(found) = lowest_eigenpair(&Mat(hess), seed.view(), seed.view(), 48.min(n))
-            else {
+            // `lowest_mode` returns a result. A failed Lanczos run is not a
+            // direction this kick can take.
+            let Ok(found) = crate::lowest_mode(
+                &Mat(hess),
+                seed.view(),
+                seed.view(),
+                &crate::EigenParams {
+                    kind: crate::EigensolverKind::Lanczos,
+                    krylov: 48.min(n),
+                    ..crate::EigenParams::default()
+                },
+            ) else {
                 return None;
             };
             (found.value, found.vector)
@@ -2872,7 +3115,7 @@ impl Solver {
     {
         loop {
             let gnorm = self.stationarity_norm(x, grad);
-            if gnorm > self.control.gtol || self.saddle_kicks >= SADDLE_KICKS {
+            if gnorm > self.control.gtol || self.saddle_kicks >= 4 {
                 return;
             }
             let hess = obj.hessian(x.view());
@@ -2881,19 +3124,19 @@ impl Solver {
             };
             let cap = self
                 .atom_maxmove
-                .unwrap_or_else(|| self.control.istep.max(RADIUS_START));
+                .unwrap_or_else(|| self.control.istep.max(1.0e-8));
             let step = scale_displacement_to_atom_cap(&mode, cap);
-            let trial = clip_owned(obj.bounds(), &*x + &step);
+            let trial = obj.bounds().clip((&*x + &step).view());
             let (v, g) = obj.value_and_gradient(trial.view());
             if !v.is_finite() || g.iter().any(|c| !c.is_finite()) {
                 return;
             }
             *x = trial;
             *value = v;
-            *grad = self.horizontal_owned(x, g);
+            *grad = self.horizontal_grad(x, &g);
             self.saddle_kicks = self.saddle_kicks.saturating_add(1);
             if let Inner::Dogleg { radius } = &mut self.inner {
-                *radius = self.control.istep.max(RADIUS_START);
+                *radius = self.control.istep.max(1.0e-8);
             }
             self.remember(x, *value, grad);
         }
@@ -2912,7 +3155,14 @@ impl Solver {
         if self.saddle_escape_enabled() && self.stationarity_norm(x, &grad) <= self.control.gtol {
             self.leave_saddle(obj, x, &mut value, &mut grad);
         }
-        Ok(self.report(value, x, &grad))
+        let gnorm = self.stationarity_norm(x, &grad);
+        Ok(self.finish(
+            value,
+            x,
+            &grad,
+            gnorm,
+            self.control.classify(gnorm, self.free_len(obj.bounds())),
+        ))
     }
 
     fn step_hess_inner<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
@@ -2926,6 +3176,7 @@ impl Solver {
             });
         }
         self.check_manifold(x.len())?;
+        self.note_bounds(obj.bounds());
         let newton_kind = match &self.inner {
             Inner::Newton { kind } => Some(*kind),
             Inner::Lbfgs(_) => match self.qn_step {
@@ -2942,16 +3193,20 @@ impl Solver {
         };
         let cached = self.same_last_x(x);
         if !cached {
-            clip_mut(obj.bounds(), x);
+            *x = obj.bounds().clip(x.view());
         }
         let (mut value, mut grad) = if cached {
             (self.last_value, self.last_grad.clone())
         } else {
             obj.value_and_gradient(x.view())
         };
-        grad = self.horizontal_owned(x, grad);
+        grad = self.horizontal_grad(x, &grad);
         let gnorm = self.stationarity_norm(x, &grad);
-        if gnorm < self.control.gtol {
+        if self
+            .control
+            .halt(gnorm, self.free_len(obj.bounds()))
+            .is_some()
+        {
             return self.report_or_escape(obj, x, value, grad);
         }
         let hess = obj.hessian(x.view());
@@ -2960,71 +3215,78 @@ impl Solver {
         }
         #[cfg(feature = "highs")]
         if self.highs {
-            let center = if self.project_rigid && self.dim.is_multiple_of(3) {
-                Some((self.dim / 3, 3))
-            } else {
-                None
-            };
-            let mut model_hess = hess.clone();
-            if newton_kind == Some(NewtonKind::Rfo) {
-                // The lowest augmented eigenvalue makes H - lambda I
-                // convex and preserves the unconstrained RFO direction.
-                let (_, shift) = crate::sella_step::rfo_step_and_shift(&hess, &grad, 0, 1.0);
-                for k in 0..self.dim {
-                    model_hess[(k, k)] -= shift;
+            let center: Option<(usize, usize)> = None;
+            let feasible = if self.has_coordinate_box()
+                || self.highs_trust.is_some()
+                || !self.equalities.is_empty()
+            {
+                let mut model_hess = hess.clone();
+                if newton_kind == Some(NewtonKind::Rfo) {
+                    let (_, shift) = crate::sella_step::rfo_step_and_shift(&hess, &grad, 0, 1.0);
+                    for k in 0..self.dim {
+                        model_hess[(k, k)] -= shift;
+                    }
                 }
-            }
-            let dir = crate::lbfgs_qp::highs_feasible_step(
-                None,
-                Some(&model_hess),
-                &grad,
-                x.view(),
-                self.box_lo.as_deref(),
-                self.box_hi.as_deref(),
-                self.atom_maxmove,
-                self.highs_trust.or(self.control.maxmove),
-                center,
-                &self.equalities,
-                self.highs_solver,
-                self.highs_crossover,
-                self.highs_callback,
-                self.highs_callback_user,
-            )?;
-            let old = x.clone();
-            let gold = grad.clone();
-            let (npos, nval, ngrad, moved) = accept_step_with_fallback(
-                obj,
-                x,
-                value,
-                &gold,
-                &dir,
-                Acceptance {
-                    control: &self.control,
-                    accept: self.accept,
-                    e_hist: &mut self.e_hist,
-                    atom_maxmove: None,
-                    manifold: self.manifold.clone(),
-                },
-                false,
-            );
-            if moved {
-                *x = npos;
-                value = nval;
-                grad = ngrad;
-            }
-            grad = self.horizontal_owned(x, grad);
-            self.remember(x, value, &grad);
-            let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
-                let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
-                Some((s, y, l2(&grad)))
+                Ok(crate::lbfgs_qp::highs_feasible_step_boxed(
+                    None,
+                    Some(&model_hess),
+                    &grad,
+                    self.atom_maxmove,
+                    self.highs_trust.or(self.control.maxmove_cap()),
+                    center,
+                    self.has_coordinate_box().then(|| (x.view(), obj.bounds())),
+                    &self.equalities,
+                    &self.highs_options,
+                )?)
             } else {
-                None
+                crate::lbfgs_qp::highs_feasible_step_with_options(
+                    None,
+                    Some(&hess),
+                    &grad,
+                    self.atom_maxmove,
+                    self.control.maxmove_cap(),
+                    center,
+                    &self.highs_options,
+                )
             };
-            if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
-                solver.push_pair(s, y, Some(gn));
+            if let Ok(dir) = feasible {
+                let old = x.clone();
+                let gold = grad.clone();
+                let allow_gradient_fallback = !self.has_coordinate_box()
+                    && self.highs_trust.is_none()
+                    && self.equalities.is_empty();
+                let (npos, nval, ngrad, moved) = crate::accept::accept_step_with_fallback(
+                    obj,
+                    x,
+                    value,
+                    &gold,
+                    &dir,
+                    &self.control,
+                    self.accept,
+                    &mut self.e_hist,
+                    None,
+                    &self.manifold,
+                    allow_gradient_fallback,
+                );
+                if moved {
+                    *x = npos;
+                    value = nval;
+                    grad = ngrad;
+                }
+                grad = self.horizontal_grad(x, &grad);
+                self.remember(x, value, &grad);
+                let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
+                    let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
+                    Some((s, y, l2(&grad)))
+                } else {
+                    None
+                };
+                if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
+                    solver.push_pair(s, y, Some(gn));
+                }
+                self.steps += 1;
+                return self.report_or_escape(obj, x, value, grad);
             }
-            self.steps += 1;
-            return Ok(self.report(value, x, &grad));
         }
         let mut dir = if let Some(kind) = newton_kind {
             match kind {
@@ -3036,9 +3298,6 @@ impl Solver {
         } else {
             return self.step_first_order(obj, x);
         };
-        if self.project_rigid {
-            project_out_rot_trans(&mut dir, x.view());
-        }
         dir = self.project_vec(x, &dir);
         let old = x.clone();
         let gold = grad.clone();
@@ -3053,7 +3312,7 @@ impl Solver {
                 accept: self.accept,
                 e_hist: &mut self.e_hist,
                 atom_maxmove: self.atom_maxmove,
-                manifold: self.manifold.clone(),
+                manifold: &self.manifold,
             },
         );
         if moved {
@@ -3061,7 +3320,7 @@ impl Solver {
             value = nval;
             grad = ngrad;
         }
-        grad = self.horizontal_owned(x, grad);
+        grad = self.horizontal_grad(x, &grad);
         self.remember(x, value, &grad);
         let pair = if x.iter().zip(old.iter()).any(|(a, b)| a != b) {
             let (s, y) = self.lbfgs_sy(&old, x, &gold, &grad);
@@ -3089,7 +3348,7 @@ impl Solver {
     {
         let radius = match &self.inner {
             Inner::Dogleg { radius } => *radius,
-            _ => self.control.istep.max(RADIUS_START),
+            _ => self.control.istep.max(1e-8),
         };
         // Nocedal and Wright, algorithm 4.1: grow Δ only when the trust
         // step meets the boundary, and only up to a Euclidean Δ_max.
@@ -3104,17 +3363,15 @@ impl Solver {
         // eight times the current radius. The cap still limits the trial.
         let rmax = self
             .control
-            .maxmove
-            .unwrap_or(radius * RADIUS_GROWTH)
+            .maxmove_cap()
+            .unwrap_or(radius * 8.0)
             .max(radius);
         // A curved kind steps in the tangent space. The dogleg point is
         // tangent, the trial is the retracted tangent step, and the ratio
         // compares the energy there with the tangent model.
         let curved = !self.manifold.is_flat();
         let mut dir = self.dogleg_point(x, hess, &grad, radius);
-        if self.project_rigid {
-            project_out_rot_trans(&mut dir, x.view());
-        }
+        self.kill_at(x, &mut dir);
         if curved {
             self.manifold.project_in_place(x, &mut dir);
         }
@@ -3125,7 +3382,7 @@ impl Solver {
                 x,
                 &dir,
                 self.atom_maxmove,
-                self.control.maxmove,
+                self.control.maxmove_cap(),
                 &self.manifold,
             );
             let Some(pair) = fitted else {
@@ -3142,10 +3399,10 @@ impl Solver {
             let mut trial = &*x + &dir;
             if let Some(cap) = self.atom_maxmove {
                 scale_step_atom(x, &mut trial, cap);
-            } else if let Some(cap) = self.control.maxmove {
+            } else if let Some(cap) = self.control.maxmove_cap() {
                 scale_step(x, &mut trial, cap);
             }
-            trial = clip_owned(obj.bounds(), trial);
+            trial = obj.bounds().clip(trial.view());
             let p = &trial - &*x;
             (trial, p)
         };
@@ -3156,7 +3413,7 @@ impl Solver {
         // No displacement cap: the boundary length is the step after the
         // box clip, as before. With a cap, the dogleg length is the one
         // algorithm 4.1 tests against Δ.
-        let boundary_norm = if self.atom_maxmove.is_some() || self.control.maxmove.is_some() {
+        let boundary_norm = if self.atom_maxmove.is_some() || self.control.maxmove_cap().is_some() {
             trust_norm
         } else {
             taken
@@ -3176,19 +3433,6 @@ impl Solver {
         }
     }
 
-    /// Euclidean FIRE with the default preset and no preconditioner.
-    fn fire_is_flat(&self) -> bool {
-        let Inner::Fire(state) = &self.inner else {
-            return false;
-        };
-        matches!(self.manifold, ManifoldKind::Euclidean)
-            && !self.project_rigid
-            && self.exp.is_none()
-            && !state.abc
-            && state.preset() == crate::fire::FirePreset::Default
-    }
-
-    /// In-place Euclidean FIRE step. The integrator matches the general arm.
     fn step_first_order<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,
@@ -3200,78 +3444,71 @@ impl Solver {
             });
         }
         self.check_manifold(x.len())?;
+        self.note_bounds(obj.bounds());
         let cached = self.same_last_x(x);
         if !cached {
-            clip_mut(obj.bounds(), x);
+            *x = obj.bounds().clip(x.view());
         }
 
         if let Inner::Pso { .. } = &self.inner {
             return self.step_pso(obj, x);
         }
 
-        if self.exp.is_none()
-            && !self.project_rigid
-            && matches!(self.manifold, ManifoldKind::Euclidean)
-            && !self.use_lbfgs_burdakov()
-        {
-            if self.use_capped_lbfgs() && matches!(self.lbfgs_step(), LbfgsStep::Capped { .. }) {
-                return self.step_eon_euclidean(obj, x);
-            }
-            if matches!(self.inner, Inner::Fire(_)) {
-                return self.step_fire_euclidean(obj, x);
-            }
-        }
-
         let (mut value, mut grad) = if cached {
-            if self.brief {
-                (
-                    self.last_value,
-                    std::mem::replace(&mut self.last_grad, Array1::zeros(0)),
-                )
-            } else {
-                (self.last_value, self.last_grad.clone())
-            }
+            (self.last_value, self.last_grad.clone())
         } else {
             obj.value_and_gradient(x.view())
         };
-        grad = self.horizontal_owned(x, grad);
-        if !finite(value, grad.view()) {
-            if self.brief {
-                self.last_grad = grad;
-            }
-            return Err(non_finite());
+        grad = self.horizontal_grad(x, &grad);
+        if !value.is_finite() || grad.iter().any(|g| !g.is_finite()) {
+            return Err(Error::Oracle {
+                what: "non-finite value or gradient",
+            });
         }
         let gnorm = self.stationarity_norm(x, &grad);
-        if gnorm < self.control.gtol {
-            if self.brief {
-                self.remember(x, value, &grad);
+        let eon = self.use_eon_lbfgs();
+        // A caller that moved the iterate between steps measured the
+        // gradient at both ends, so the displacement is a secant of the
+        // retained inverse Hessian. The eOn step records it in the
+        // transaction a refused trial rolls back.
+        if !cached
+            && !eon
+            && self.manifold.retract_is_translation()
+            && let Some(previous) = self.last_pos.clone().filter(|p| p.len() == x.len())
+        {
+            let last_grad = self.last_grad.clone();
+            let (s, y) = self.lbfgs_sy(&previous, x, &last_grad, &grad);
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.push_pair(s, y, Some(gnorm));
             }
-            return Ok(self.report(value, x, &grad));
+        }
+        if let Some(status) = self.control.halt(gnorm, self.free_len(obj.bounds())) {
+            return Ok(self.finish(value, x, &grad, gnorm, status));
         }
         self.refresh_exp(obj, x, &grad)?;
 
         if self.use_lbfgs_burdakov() {
-            if !cached && let Some(previous) = &self.last_pos {
-                let (s, y) = self.lbfgs_sy(previous, x, &self.last_grad, &grad);
-                if let Inner::Lbfgs(solver) = &mut self.inner {
-                    solver.push_pair(s, y, Some(l2(&grad)));
-                }
-            }
             return self.lbfgs_burdakov_step(obj, x, value, grad);
         }
-
-        if self.use_capped_lbfgs() {
-            return self.capped_lbfgs_step(obj, x, value, grad);
+        if eon {
+            return self.eon_lbfgs_step(obj, x, grad);
+        }
+        if self.use_geometry_lbfgs() {
+            return self.geometry_lbfgs_step(obj, x, value, grad);
+        }
+        if self.use_scaled_lbfgs() {
+            return self.scaled_lbfgs_step(obj, x, value, grad);
         }
 
         if matches!(self.manifold, ManifoldKind::Sphere | ManifoldKind::Stiefel)
             && matches!(self.inner, Inner::Lbfgs(_))
-            && self.accept != Accept::None
+            && matches!(self.accept, Accept::Energy | Accept::Nonmonotone)
         {
-            if !cached && let Some(previous) = &self.last_pos {
-                let (s, y) = self.lbfgs_sy(previous, x, &self.last_grad, &grad);
+            if !cached && let Some(previous) = self.last_pos.clone() {
+                let last_grad = self.last_grad.clone();
+                let (s, y) = self.lbfgs_sy(&previous, x, &last_grad, &grad);
                 if let Inner::Lbfgs(solver) = &mut self.inner {
-                    solver.transport(|v| crate::manifold::Sphere.transport(previous, x, v));
+                    solver.transport(|v| crate::manifold::Sphere.transport(&previous, x, v));
                     solver.push_pair(s, y, Some(l2(&grad)));
                 }
             }
@@ -3284,34 +3521,24 @@ impl Solver {
                     solver,
                     self.linesearch,
                     &self.control,
-                );
+                    self.atom_maxmove,
+                )?;
                 *x = point;
                 value = f;
                 grad = g;
             }
             self.remember(x, value, &grad);
             self.steps += 1;
-            return Ok(self.report(value, x, &grad));
-        }
-
-        if self.use_geometry_lbfgs() {
-            return self.geometry_lbfgs_step(obj, x, value, grad);
-        }
-
-        // An external displacement has a measured gradient at both ends.
-        // Its secant updates the retained inverse Hessian at the supplied
-        // point, using the same vector transport as accepted solver steps.
-        // A refused Accept::None trial takes the pair back: `last_pos`
-        // still names the old point, so a retry records the move again.
-        let mut before_move = None;
-        if !cached && let Some(previous) = &self.last_pos {
-            let (s, y) = self.lbfgs_sy(previous, x, &self.last_grad, &grad);
-            if let Inner::Lbfgs(solver) = &mut self.inner {
-                if self.accept == Accept::None {
-                    before_move = Some(solver.curvature());
-                }
-                solver.push_pair(s, y, Some(l2(&grad)));
-            }
+            return Ok(self.finish(
+                value,
+                x,
+                &grad,
+                self.stationarity_norm(x, &grad),
+                self.control.classify(
+                    self.stationarity_norm(x, &grad),
+                    self.free_len(obj.bounds()),
+                ),
+            ));
         }
 
         let raw_gradient = match self.inner {
@@ -3320,7 +3547,7 @@ impl Solver {
             | Inner::Sr1 { .. }
             | Inner::Sr2 { .. }
             | Inner::Bb { .. } => true,
-            Inner::Nlcg { .. } => self.exp.is_none(),
+            Inner::Nlcg { .. } => self.precon.is_none(),
             _ => false,
         };
         if self.unit_first_step
@@ -3331,59 +3558,201 @@ impl Solver {
             self.istep = self.control.istep.min(1.0 / l2(&grad));
         }
 
+        let line_options = self.search_options();
         let start = x.clone();
-        // The origin gradient is the secant of an L-BFGS step. Other
-        // Euclidean steps do not read it.
-        let gold = if matches!(self.inner, Inner::Lbfgs(_)) {
-            Some(grad.clone())
+        let gold = grad.clone();
+        // Accept::Step: the two-loop direction goes through accept_step
+        // like the BB arm and the Hessian path in step_hess, one oracle
+        // call and the clipped step with no energy test. The oracle value
+        // of a projected NEB force is not the potential of the gradient it
+        // returns, so a decrease test there says nothing. Every other
+        // Accept keeps the line-searched step_objective path.
+        let guarded_direction = if self.accept == Accept::Step {
+            match &mut self.inner {
+                Inner::Lbfgs(solver)
+                    if solver.distance_reset || solver.angle_reset || solver.curvature_reset =>
+                {
+                    Some(solver.guarded_direction(grad.view(), self.atom_maxmove))
+                }
+                _ => None,
+            }
         } else {
             None
         };
-        let mut refused = false;
-        match &mut self.inner {
-            Inner::Lbfgs(solver) => {
-                // Accept::None: take the clipped two-loop step. The NEB
-                // band force is not a gradient of the reported energy, so
-                // step_objective (nval < value) never moves.
-                // Accept::Energy: Wolfe line search in step_objective.
-                if self.accept == Accept::None {
-                    let dir = solver.search_direction(x.view(), grad.view());
-                    let old = x.clone();
-                    let gold = grad.clone();
-                    let trial = single_trial(
-                        obj,
-                        x,
-                        &dir,
-                        &self.control,
-                        &mut self.e_hist,
+        #[cfg(feature = "highs")]
+        let constrained_direction =
+            if self.highs && (self.highs_trust.is_some() || !self.equalities.is_empty()) {
+                if let Inner::Lbfgs(solver) = &self.inner {
+                    let direction = guarded_direction
+                        .clone()
+                        .unwrap_or_else(|| solver.direction(grad.view()));
+                    let center: Option<(usize, usize)> = None;
+                    Some(crate::lbfgs_qp::highs_feasible_step_boxed(
+                        Some(&direction),
+                        None,
+                        &grad,
                         self.atom_maxmove,
-                        &self.manifold,
-                    );
-                    let (npos, nval, ngrad) = match trial {
-                        Trial::Accepted(npos, nval, ngrad) => (npos, nval, ngrad),
-                        Trial::OffManifold => {
-                            if let Some(saved) = before_move {
-                                solver.restore(saved);
-                            }
-                            return Err(Error::OffManifold {
-                                kind: self.manifold.as_str(),
-                            });
-                        }
-                        Trial::NonFinite => {
-                            if let Some(saved) = before_move {
-                                solver.restore(saved);
-                            }
-                            return Err(Error::Oracle {
-                                what: "non-finite value or gradient",
-                            });
-                        }
-                    };
+                        self.highs_trust.or(self.control.maxmove_cap()),
+                        center,
+                        self.has_coordinate_box().then(|| (x.view(), obj.bounds())),
+                        &self.equalities,
+                        &self.highs_options,
+                    )?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+        #[cfg(not(feature = "highs"))]
+        let constrained_direction: Option<Array1<f64>> = None;
+        let lbfgs_direct = match (&self.inner, self.accept) {
+            (Inner::Lbfgs(solver), Accept::Step) => {
+                let dir = constrained_direction.clone().unwrap_or_else(|| {
+                    guarded_direction
+                        .clone()
+                        .unwrap_or_else(|| solver.direction(grad.view()))
+                });
+                #[cfg(feature = "highs")]
+                let dir = if let Some(bounds) = &solver.coordinate_box {
+                    // The model QP already enforces its box and equalities.
+                    if constrained_direction.is_some() {
+                        dir
+                    } else {
+                        crate::box_objective::project_direction(bounds, x.view(), grad.view(), dir)
+                    }
+                } else {
+                    dir
+                };
+                Some(dir)
+            }
+            _ => None,
+        };
+        // On a curved kind the line search would probe the chord, off the
+        // set. Accept::None takes one retracted trial of the two-loop step.
+        // So does a product with rigid factors: its horizontal gradient is
+        // the mass-metric projection, whose slope along a step is not the
+        // directional derivative the line search measures at its trials.
+        let rigid_product =
+            matches!(&self.manifold, ManifoldKind::Product(product) if product.has_rigid());
+        let lbfgs_single = lbfgs_direct.is_none()
+            && self.accept == Accept::None
+            && (!self.manifold.is_flat() || rigid_product)
+            && matches!(self.inner, Inner::Lbfgs(_));
+        let lbfgs_line_searched =
+            lbfgs_direct.is_none() && !lbfgs_single && matches!(self.inner, Inner::Lbfgs(_));
+        let on_set = lbfgs_single;
+        if lbfgs_single {
+            let dir = match &self.inner {
+                Inner::Lbfgs(solver) => solver.search_direction(x.view(), grad.view())?,
+                _ => unreachable!(),
+            };
+            match single_trial(
+                obj,
+                x,
+                &dir,
+                &self.control,
+                &mut self.e_hist,
+                self.atom_maxmove,
+                &self.manifold,
+            ) {
+                Trial::Accepted(npos, nval, ngrad) => {
                     *x = npos;
                     value = nval;
                     grad = ngrad;
-                    solver.push(&*x - &old, &grad - &gold);
-                } else {
-                    solver.step_objective(
+                }
+                Trial::OffManifold => {
+                    return Err(Error::OffManifold {
+                        kind: self.manifold.as_str(),
+                    });
+                }
+                Trial::NonFinite => return Err(crate::step::non_finite()),
+            }
+        }
+        if let Some(mut dir) = lbfgs_direct {
+            dir = self.project_vec(x, &dir);
+            let (npos, nval, ngrad, moved) = accept_step(
+                obj,
+                x,
+                value,
+                &gold,
+                &dir,
+                Acceptance {
+                    control: &self.control,
+                    accept: self.accept,
+                    e_hist: &mut self.e_hist,
+                    atom_maxmove: self.atom_maxmove,
+                    manifold: &self.manifold,
+                },
+            );
+            if moved {
+                *x = npos;
+                value = nval;
+                grad = ngrad;
+            }
+        }
+        #[cfg(feature = "highs")]
+        let boxed = self.has_coordinate_box();
+        let mut energy_stall = false;
+        let mut sr_secant: Option<(Array1<f64>, Array1<f64>)> = None;
+        let diis_alpha = self.istep;
+        let diis_atom_cap = self.atom_maxmove;
+        let diis_euclidean_cap = self.control.maxmove_cap();
+        if matches!(&self.inner, Inner::Sr1 { .. } | Inner::Sr2 { .. }) {
+            self.sr_trust_attempt(obj, x, &mut value, &mut grad, &start, &gold, &mut sr_secant);
+        }
+        // The rigid projector for the trial directions: the workspace is
+        // taken out of the session for the step so that the closure and
+        // the stepper borrow disjoint fields, and returns when the hold
+        // drops.
+        if !matches!(self.overlay, Overlay::None) {
+            self.overlay_apply(
+                obj,
+                x,
+                &mut value,
+                &mut grad,
+                &mut energy_stall,
+                line_options,
+                diis_alpha,
+                diis_atom_cap,
+                diis_euclidean_cap,
+            )?;
+        } else {
+            let mut fire2_local = self.fire2.clone();
+            let mut stalled = false;
+            let rigid_mode = self.removal_mode();
+            let rigid_metric = self.force_metric();
+            let rigid_vmetric = self.velocity_metric();
+            let rigid_weighted = self.chart_weighted();
+            let rigid_pbc = self.pbc;
+            let rigid_broken_t = self.broken_translation;
+            let rigid_broken_r = self.broken_rotation;
+            let mut hold = WsHold::take(&mut self.rigid_ws);
+            if rigid_mode != RigidMode::Off
+                && let Some(xs) = x.as_slice()
+            {
+                hold.ws.set_anchor(xs);
+            }
+            match &mut self.inner {
+                Inner::Lbfgs(_) if !lbfgs_line_searched => {}
+                Inner::Lbfgs(solver) => {
+                    let masses = self.masses.as_ref().and_then(|m| m.as_slice());
+                    let frozen = self.frozen.as_deref();
+                    let mut project = |d: &mut Array1<f64>| {
+                        eckart(
+                            &mut hold.ws,
+                            rigid_mode,
+                            masses,
+                            frozen,
+                            rigid_weighted,
+                            rigid_metric,
+                            rigid_pbc,
+                            rigid_broken_t,
+                            rigid_broken_r,
+                            d,
+                        );
+                    };
+                    energy_stall = solver.step_objective_with_direction(
                         obj,
                         x,
                         &mut value,
@@ -3391,83 +3760,111 @@ impl Solver {
                         &mut self.istep,
                         self.linesearch,
                         &self.control,
+                        self.atom_maxmove,
+                        constrained_direction,
+                        false,
+                        line_options,
+                        &mut project,
                     );
                 }
-            }
-            Inner::Steepest => {
-                let dir = grad.mapv(|g| -g * self.istep);
-                let (npos, nval, ngrad, moved) = accept_step(
-                    obj,
-                    x,
-                    value,
-                    &grad,
-                    &dir,
-                    Acceptance {
-                        control: &self.control,
-                        accept: self.accept,
-                        e_hist: &mut self.e_hist,
-                        atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold.clone(),
-                    },
-                );
-                *x = npos;
-                value = nval;
-                grad = ngrad;
-                refused = !moved && self.accept != Accept::None;
-            }
-            Inner::Nlcg {
-                conjugacy,
-                restart,
-                dir,
-                g_old,
-                z_old,
-                d_old,
-                initialized,
-            } => {
-                let metric = self.exp.is_some();
-                let z_now = if metric {
-                    metric_vector(&self.exp, &grad)
-                } else {
-                    grad.clone()
-                };
-                if !*initialized {
-                    *dir = if metric {
-                        z_now.mapv(|z| -z * self.istep)
-                    } else {
-                        grad.mapv(|g| -g * self.istep)
-                    };
-                    *g_old = grad.clone();
-                    *z_old = z_now;
-                    *d_old = dir.clone();
-                    *initialized = true;
+                Inner::Steepest => {
+                    let dir = grad.mapv(|g| -g);
+                    let t = take_session_step(
+                        obj,
+                        x,
+                        value,
+                        &grad,
+                        dir.view(),
+                        self.istep,
+                        self.linesearch,
+                        &self.control,
+                        self.atom_maxmove,
+                        self.accept,
+                        &mut self.e_hist,
+                        &self.manifold,
+                        self.istep,
+                        line_options,
+                    );
+                    energy_stall = t.energy_noise;
+                    *x = t.x;
+                    value = t.f;
+                    grad = t.g;
+                    if self.accept != Accept::Step {
+                        self.istep = qn_istep(&self.control);
+                    }
                 }
-                let step_dir = dir.clone();
-                let (npos, nval, ngrad, moved) = accept_step(
-                    obj,
-                    x,
-                    value,
-                    &grad,
-                    &step_dir,
-                    Acceptance {
-                        control: &self.control,
-                        accept: self.accept,
-                        e_hist: &mut self.e_hist,
-                        atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold.clone(),
-                    },
-                );
-                *x = npos;
-                value = nval;
-                grad = ngrad;
-                if moved {
-                    let ctx = ConjugacyContext {
-                        current_gradient: grad.view(),
-                        previous_gradient: g_old.view(),
-                        previous_direction: d_old.view(),
+                Inner::Nlcg {
+                    conjugacy,
+                    restart,
+                    dir,
+                    g_old,
+                    z_old,
+                    d_old,
+                    initialized,
+                    z_epoch,
+                    prev_alpha,
+                    prev_gd,
+                } => {
+                    let z_now = metric_vector(&self.precon, &grad)?;
+                    if !*initialized || *z_epoch != self.metric_epoch {
+                        // A new or replaced P makes z_old belong to the old
+                        // matrix. This iteration is steepest descent in the
+                        // current metric, so the next β is formed with one P.
+                        if *initialized {
+                            *prev_alpha = 0.0;
+                            *prev_gd = 0.0;
+                        }
+                        *dir = nlcg_steepest(&z_now, self.accept, self.istep);
+                        *g_old = grad.clone();
+                        *z_old = z_now;
+                        *d_old = dir.clone();
+                        *z_epoch = self.metric_epoch;
+                        *initialized = true;
+                    }
+                    let gd_used = crate::vecops::dot(grad.view(), dir.view());
+                    let cap = cap_alpha(dir.view(), &self.control, self.atom_maxmove);
+                    let first = if self.precon.is_some() {
+                        1.0
+                    } else {
+                        self.control.istep
                     };
-                    if metric {
-                        let z_new = metric_vector(&self.exp, &grad);
-                        let mut beta = conjugacy.beta_metric(&ctx, z_new.view(), z_old.view());
+                    let alpha0 = if self.accept == Accept::Step {
+                        self.istep
+                    } else {
+                        nlcg_opening_alpha(*prev_alpha, *prev_gd, gd_used, cap, first)
+                    };
+                    let t = take_session_step(
+                        obj,
+                        x,
+                        value,
+                        &grad,
+                        dir.view(),
+                        alpha0,
+                        self.linesearch,
+                        &self.control,
+                        self.atom_maxmove,
+                        self.accept,
+                        &mut self.e_hist,
+                        &self.manifold,
+                        1.0,
+                        line_options,
+                    );
+                    energy_stall = t.energy_noise;
+                    *x = t.x;
+                    value = t.f;
+                    grad = t.g;
+                    if t.moved || self.accept != Accept::Step {
+                        let z_new = metric_vector(&self.precon, &grad)?;
+                        let ctx = ConjugacyContext {
+                            current_gradient: grad.view(),
+                            previous_gradient: g_old.view(),
+                            previous_direction: d_old.view(),
+                        };
+                        let mut beta = if *z_epoch != self.metric_epoch {
+                            0.0
+                        } else {
+                            conjugacy.beta_metric(&ctx, z_new.view(), z_old.view())
+                        };
                         if restart.should_restart_metric(
                             grad.view(),
                             z_new.view(),
@@ -3476,219 +3873,259 @@ impl Solver {
                         ) {
                             beta = 0.0;
                         }
-                        *dir = Array1::from_iter(
-                            z_new
-                                .iter()
-                                .zip(d_old.iter())
-                                .map(|(z, d)| -z * self.istep + beta * d),
-                        );
-                        // A non-descent direction in the metric is not a valid
-                        // conjugate step. Fall back to the Riesz steepest direction.
+                        *dir = if self.accept == Accept::Step {
+                            Array1::from_iter(
+                                z_new
+                                    .iter()
+                                    .zip(d_old.iter())
+                                    .map(|(z, d)| -z * self.istep + beta * d),
+                            )
+                        } else {
+                            Array1::from_iter(
+                                z_new.iter().zip(d_old.iter()).map(|(z, d)| -z + beta * d),
+                            )
+                        };
+                        // A non-descent direction is not a valid conjugate step.
                         let gd = crate::vecops::dot(grad.view(), dir.view());
                         if gd.partial_cmp(&0.0) != Some(std::cmp::Ordering::Less) {
-                            *dir = z_new.mapv(|z| -z * self.istep);
+                            self.nlcg_descent_fallbacks += 1;
+                            *dir = nlcg_steepest(&z_new, self.accept, self.istep);
                         }
+                        g_old.assign(&grad);
                         z_old.assign(&z_new);
-                    } else {
-                        let mut beta = conjugacy.beta(&ctx);
-                        if restart.should_restart(&ctx) {
-                            beta = 0.0;
+                        d_old.assign(dir);
+                        *z_epoch = self.metric_epoch;
+                    }
+                    if self.accept != Accept::Step {
+                        *prev_alpha = t.alpha;
+                        *prev_gd = gd_used;
+                    }
+                }
+                Inner::Bfgs { h, .. } => {
+                    let direction = -h.dot(&grad);
+                    let old = x.clone();
+                    let gold = grad.clone();
+                    let t = take_session_step(
+                        obj,
+                        x,
+                        value,
+                        &grad,
+                        direction.view(),
+                        self.istep,
+                        self.linesearch,
+                        &self.control,
+                        self.atom_maxmove,
+                        self.accept,
+                        &mut self.e_hist,
+                        &self.manifold,
+                        1.0,
+                        line_options,
+                    );
+                    energy_stall = t.energy_noise;
+                    let moved = t.moved;
+                    *x = t.x;
+                    value = t.f;
+                    grad = t.g;
+                    if moved {
+                        bfgs_inverse_update(h, &(&*x - &old), &(&grad - &gold));
+                    }
+                    if self.accept != Accept::Step {
+                        self.istep = qn_istep(&self.control);
+                    }
+                }
+                Inner::Sr1 { .. } | Inner::Sr2 { .. } => {}
+                Inner::Adam {
+                    m,
+                    v,
+                    b1p,
+                    b2p,
+                    beta1,
+                    beta2,
+                    eps,
+                } => {
+                    let m_old = m.clone();
+                    let v_old = v.clone();
+                    let raw = adam_direction(m, v, &grad, *beta1, *beta2, (*b1p, *b2p), *eps);
+                    let dir = scale_to_unit_atom(&raw);
+                    let t = take_session_step(
+                        obj,
+                        x,
+                        value,
+                        &grad,
+                        dir.view(),
+                        self.istep,
+                        self.linesearch,
+                        &self.control,
+                        self.atom_maxmove,
+                        self.accept,
+                        &mut self.e_hist,
+                        &self.manifold,
+                        self.istep,
+                        line_options,
+                    );
+                    energy_stall = t.energy_noise;
+                    if t.moved {
+                        *x = t.x;
+                        value = t.f;
+                        grad = t.g;
+                        *b1p *= *beta1;
+                        *b2p *= *beta2;
+                        if self.accept != Accept::Step && t.alpha.is_finite() && t.alpha > 0.0 {
+                            self.istep = t.alpha;
                         }
-                        *dir = Array1::from_iter(
-                            grad.iter()
-                                .zip(d_old.iter())
-                                .map(|(g, d)| -g * self.istep + beta * d),
+                    } else {
+                        m.assign(&m_old);
+                        v.assign(&v_old);
+                    }
+                }
+                Inner::Fire(state) => {
+                    // A refused trial returns with the integrator as it was,
+                    // so a retry probes the same point.
+                    let saved = state.checkpoint();
+                    let manifold = self.manifold.clone();
+                    let curved = !manifold.is_flat();
+                    let n_pos_saved = state.n_pos;
+                    let dt_saved = state.dt;
+                    let alpha_saved = state.alpha;
+                    let vel_saved = state.vel.clone();
+                    // The force, its metric image and the velocity leave the
+                    // rigid subspace at the start geometry; the velocity in the
+                    // momentum metric, the force in the force metric.
+                    let masses = self.masses.as_ref().and_then(|m| m.as_slice());
+                    let frozen = self.frozen.as_deref();
+                    let mut raw = grad.mapv(|g| -g);
+                    eckart(
+                        &mut hold.ws,
+                        rigid_mode,
+                        masses,
+                        frozen,
+                        rigid_weighted,
+                        rigid_metric,
+                        rigid_pbc,
+                        rigid_broken_t,
+                        rigid_broken_r,
+                        &mut raw,
+                    );
+                    #[allow(unused_mut)]
+                    let mut steepest = metric_vector(&self.precon, &raw)?;
+                    eckart(
+                        &mut hold.ws,
+                        rigid_mode,
+                        masses,
+                        frozen,
+                        rigid_weighted,
+                        rigid_metric,
+                        rigid_pbc,
+                        rigid_broken_t,
+                        rigid_broken_r,
+                        &mut steepest,
+                    );
+                    eckart(
+                        &mut hold.ws,
+                        rigid_mode,
+                        masses,
+                        frozen,
+                        rigid_weighted,
+                        rigid_vmetric,
+                        rigid_pbc,
+                        rigid_broken_t,
+                        rigid_broken_r,
+                        &mut state.vel,
+                    );
+                    #[cfg(feature = "highs")]
+                    if boxed {
+                        crate::box_objective::project_tangent(obj.bounds(), x, &mut raw);
+                        crate::box_objective::project_tangent(obj.bounds(), x, &mut steepest);
+                        crate::box_objective::project_tangent(obj.bounds(), x, &mut state.vel);
+                    }
+                    let mix = fire_mix(&self.precon, &state.vel, &raw, &steepest);
+                    let displacement = match fire2_local.as_mut() {
+                        Some(ext) => fire2_displacement_metric(state, ext, &raw, &steepest, mix)
+                            .map_err(|_| ()),
+                        None => match fire_prepare_v2(state, &raw) {
+                            FirePreparation::Stalled => Err(()),
+                            FirePreparation::Rollback(correction) => {
+                                if curved {
+                                    let back = manifold.project(x, &correction);
+                                    let Some((point, _)) =
+                                        retract_within_cap(obj, x, &back, None, None, &manifold)
+                                    else {
+                                        state.restore(saved);
+                                        *x = start;
+                                        return Err(Error::OffManifold {
+                                            kind: manifold.as_str(),
+                                        });
+                                    };
+                                    *x = point;
+                                } else {
+                                    *x = &*x + &correction;
+                                }
+                                let ev = obj.value_and_gradient(x.view());
+                                if !crate::step::finite(ev.0, ev.1.view()) {
+                                    state.restore(saved);
+                                    *x = start;
+                                    return Err(crate::step::non_finite());
+                                }
+                                value = ev.0;
+                                grad = ev.1;
+                                raw = grad.mapv(|g| -g);
+                                let mut dx = Array1::zeros(x.len());
+                                fire_displacement_into(state, &raw, &mut dx);
+                                Ok(dx)
+                            }
+                            FirePreparation::Ready => {
+                                let mut dx = Array1::zeros(x.len());
+                                fire_displacement_into(state, &raw, &mut dx);
+                                Ok(dx)
+                            }
+                        },
+                    };
+                    let mut dx = match displacement {
+                        Ok(dx) => dx,
+                        Err(()) => {
+                            // The published integrator increments the negative-power
+                            // count and then returns before it changes dt, alpha,
+                            // or velocity. Undo the rigid projection of velocity
+                            // and the n_pos clear so this stopping step leaves
+                            // the integrator as it was, apart from that count.
+                            state.n_pos = n_pos_saved;
+                            state.dt = dt_saved;
+                            state.alpha = alpha_saved;
+                            state.vel.assign(&vel_saved);
+                            stalled = true;
+                            Array1::zeros(state.vel.len())
+                        }
+                    };
+                    if !stalled
+                        && state.abc
+                        && let Some(cap) = self.atom_maxmove.or(self.control.maxmove_cap())
+                    {
+                        dx = fire_clip_components(state, cap);
+                    }
+                    if !stalled {
+                        eckart(
+                            &mut hold.ws,
+                            rigid_mode,
+                            masses,
+                            frozen,
+                            rigid_weighted,
+                            rigid_metric,
+                            rigid_pbc,
+                            rigid_broken_t,
+                            rigid_broken_r,
+                            &mut dx,
                         );
-                        z_old.assign(&grad);
-                    }
-                    g_old.assign(&grad);
-                    d_old.assign(dir);
-                } else if self.accept != Accept::None {
-                    // The refused direction would be retried from the same
-                    // point on every later call.
-                    *initialized = false;
-                    refused = true;
-                }
-            }
-            Inner::Bfgs { h, fresh } => {
-                // The identity carries no length scale, and the energy test
-                // allows ten halvings. Take `istep` along it, as L-BFGS does
-                // with an empty memory, then rescale it by Nocedal-Wright
-                // 6.20 before the first update. SR1 and SR2 do the same.
-                let seed = *fresh && self.accept != Accept::None;
-                let mut direction = -h.dot(&grad);
-                if seed {
-                    direction *= self.istep;
-                }
-                let old = x.clone();
-                let gold = grad.clone();
-                let (npos, nval, ngrad, moved) = accept_step(
-                    obj,
-                    x,
-                    value,
-                    &gold,
-                    &direction,
-                    Acceptance {
-                        control: &self.control,
-                        accept: self.accept,
-                        e_hist: &mut self.e_hist,
-                        atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold.clone(),
-                    },
-                );
-                *x = npos;
-                value = nval;
-                grad = ngrad;
-                if moved {
-                    let (s, y) = (&*x - &old, &grad - &gold);
-                    if !seed {
-                        bfgs_inverse_update(h, &s, &y);
-                        *fresh = false;
-                    } else if let Some(gamma) = secant_scale(&s, &y) {
-                        *h = Array2::<f64>::eye(self.dim) * gamma;
-                        *fresh = false;
-                        bfgs_inverse_update(h, &s, &y);
-                    }
-                } else if self.accept != Accept::None {
-                    // The refused direction would be retried from the same
-                    // point on every later call.
-                    *h = Array2::<f64>::eye(self.dim);
-                    *fresh = true;
-                    refused = true;
-                }
-            }
-            Inner::Sr1 { h, fresh } => {
-                let seed = *fresh && self.accept != Accept::None;
-                let mut direction = -h.dot(&grad);
-                if seed {
-                    direction *= self.istep;
-                }
-                let old = x.clone();
-                let gold = grad.clone();
-                let (npos, nval, ngrad, moved) = accept_step(
-                    obj,
-                    x,
-                    value,
-                    &gold,
-                    &direction,
-                    Acceptance {
-                        control: &self.control,
-                        accept: self.accept,
-                        e_hist: &mut self.e_hist,
-                        atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold.clone(),
-                    },
-                );
-                *x = npos;
-                value = nval;
-                grad = ngrad;
-                if moved {
-                    let (s, y) = (&*x - &old, &grad - &gold);
-                    if !seed {
-                        sr1_inverse_update(h, &s, &y);
-                        *fresh = false;
-                    } else if let Some(gamma) = secant_scale(&s, &y) {
-                        *h = Array2::<f64>::eye(self.dim) * gamma;
-                        *fresh = false;
-                        sr1_inverse_update(h, &s, &y);
-                    }
-                } else if self.accept != Accept::None {
-                    // The refused direction would be retried from the same
-                    // point on every later call.
-                    *h = Array2::<f64>::eye(self.dim);
-                    *fresh = true;
-                    refused = true;
-                }
-            }
-            Inner::Sr2 { b, fresh } => {
-                let seed = *fresh && self.accept != Accept::None;
-                let rhs = grad.mapv(|g| -g);
-                let mut direction = solve_dense(b, &rhs).unwrap_or(rhs);
-                if seed {
-                    direction *= self.istep;
-                }
-                let old = x.clone();
-                let gold = grad.clone();
-                let (npos, nval, ngrad, moved) = accept_step(
-                    obj,
-                    x,
-                    value,
-                    &gold,
-                    &direction,
-                    Acceptance {
-                        control: &self.control,
-                        accept: self.accept,
-                        e_hist: &mut self.e_hist,
-                        atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold.clone(),
-                    },
-                );
-                *x = npos;
-                value = nval;
-                grad = ngrad;
-                if moved {
-                    let (s, y) = (&*x - &old, &grad - &gold);
-                    if !seed {
-                        sr2_hessian_update(b, &s, &y);
-                        *fresh = false;
-                    } else if let Some(gamma) = secant_scale(&s, &y) {
-                        *b = Array2::<f64>::eye(self.dim) / gamma;
-                        *fresh = false;
-                        sr2_hessian_update(b, &s, &y);
-                    }
-                } else if self.accept != Accept::None {
-                    *b = Array2::<f64>::eye(self.dim);
-                    *fresh = true;
-                    refused = true;
-                }
-            }
-            Inner::Adam {
-                m,
-                v,
-                b1p,
-                b2p,
-                beta1,
-                beta2,
-                eps,
-            } => {
-                let dir = adam_direction(m, v, &grad, *beta1, *beta2, (*b1p, *b2p), *eps);
-                let dir = dir.mapv(|d| d * self.istep);
-                let (npos, nval, ngrad, _) = accept_step(
-                    obj,
-                    x,
-                    value,
-                    &grad,
-                    &dir,
-                    Acceptance {
-                        control: &self.control,
-                        accept: self.accept,
-                        e_hist: &mut self.e_hist,
-                        atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold.clone(),
-                    },
-                );
-                *x = npos;
-                value = nval;
-                grad = ngrad;
-                *b1p *= *beta1;
-                *b2p *= *beta2;
-            }
-            Inner::Fire(state) => {
-                // A refused trial returns with the integrator as it was, so a
-                // retry probes the same point instead of one further along.
-                let saved = state.checkpoint();
-                let mut raw = grad.mapv(|g| -g);
-                project_box_tangent(obj.bounds(), x, &mut raw);
-                project_box_tangent(obj.bounds(), x, &mut state.vel);
-                let manifold = self.manifold.clone();
-                let curved = !manifold.is_flat();
-                match fire_prepare_v2(state, &raw) {
-                    FirePreparation::Ready => {}
-                    FirePreparation::Rollback(correction) => {
-                        if curved {
-                            let back = manifold.project(x, &correction);
-                            let Some((point, _)) =
-                                retract_within_cap(obj, x, &back, None, None, &manifold)
+                        let trial = if curved {
+                            // The chord leaves the set; the trial is the
+                            // retraction of the tangent step, inside the cap.
+                            let (atom_cap, cap) = if state.abc {
+                                (None, None)
+                            } else {
+                                (self.atom_maxmove, self.control.maxmove_cap())
+                            };
+                            let tangent = manifold.project(x, &dx);
+                            let Some((trial, _)) =
+                                retract_within_cap(obj, x, &tangent, atom_cap, cap, &manifold)
                             else {
                                 state.restore(saved);
                                 *x = start;
@@ -3696,618 +4133,247 @@ impl Solver {
                                     kind: manifold.as_str(),
                                 });
                             };
-                            *x = point;
+                            if matches!(state.kind, FireKind::V2) && state.dt > 0.0 {
+                                let mut secant = (&trial - &*x) / state.dt;
+                                manifold.project_in_place(&trial, &mut secant);
+                                state.vel = secant;
+                            }
+                            trial
                         } else {
-                            *x = clip_owned(obj.bounds(), &*x + &correction);
+                            let mut trial = x.clone();
+                            trial += &dx;
+                            if !state.abc {
+                                if let Some(cap) = self.atom_maxmove {
+                                    scale_step_atom(x, &mut trial, cap);
+                                } else if let Some(cap) = self.control.maxmove_cap() {
+                                    scale_step(x, &mut trial, cap);
+                                }
+                            }
+                            let bounds = obj.bounds();
+                            if bounds.low.iter().any(|v| v.is_finite())
+                                || bounds.high.iter().any(|v| v.is_finite())
+                            {
+                                trial = bounds.clip(trial.view());
+                            }
+                            // The clamp and clip shorten the move; the velocity has to
+                            // describe the move taken, or the power adapt reads an
+                            // integral of moves that never happened. An unshortened
+                            // move leaves the velocity alone: `trial - x` is not
+                            // always bit-identical to `dx`. A move rounding swallows
+                            // whole is shortened to nothing.
+                            let swallowed = trial == *x && dx.iter().any(|v| *v != 0.0);
+                            if swallowed
+                                || (!state.abc
+                                    && (self.atom_maxmove.is_some()
+                                        || self.control.maxmove_cap().is_some()))
+                            {
+                                let taken = &trial - &*x;
+                                fire_rescale_velocity(state, &dx, &taken);
+                            }
+                            trial
+                        };
+                        let mut trial = trial;
+                        let mut ev = obj.value_and_gradient(trial.view());
+                        // A flat trial with no answer retreats toward the start,
+                        // inside the clip box, before the step is refused.
+                        let mut halvings = 0;
+                        while !curved
+                            && !crate::step::finite(ev.0, ev.1.view())
+                            && halvings < crate::accept::HALVINGS
+                        {
+                            let before = &trial - &*x;
+                            let after = before.mapv(|v| 0.5 * v);
+                            trial = &*x + &after;
+                            fire_rescale_velocity(state, &before, &after);
+                            halvings += 1;
+                            ev = obj.value_and_gradient(trial.view());
                         }
-                        let ev = obj.value_and_gradient(x.view());
-                        if !finite(ev.0, ev.1.view()) {
+                        if !crate::step::finite(ev.0, ev.1.view()) {
                             state.restore(saved);
                             *x = start;
-                            return Err(non_finite());
+                            return Err(crate::step::non_finite());
                         }
+                        *x = trial;
+                        if rigid_mode != RigidMode::Off
+                            && let Some(xs) = x.as_slice()
+                        {
+                            hold.ws.set_anchor(xs);
+                        }
+                        value = ev.0;
                         grad = ev.1;
-                        raw = grad.mapv(|g| -g);
-                        project_box_tangent(obj.bounds(), x, &mut raw);
-                    }
-                    FirePreparation::Stalled => {
-                        return Err(Error::FireStalled { steps: self.steps });
-                    }
-                }
-                let forward_start = x.clone();
-                let dx = if self.exp.is_some() {
-                    let mut steepest = metric_vector(&self.exp, &raw);
-                    project_box_tangent(obj.bounds(), x, &mut steepest);
-                    fire_displacement_metric(state, &raw, &steepest, |vel| {
-                        fire_mix(&self.exp, vel, &raw, &steepest)
-                    })
-                } else {
-                    fire_displacement(state, &raw)
-                };
-                let dx = match self.atom_maxmove.or(self.control.maxmove) {
-                    Some(cap) if state.abc => fire_clip_components(state, cap),
-                    _ => dx,
-                };
-                // `(x + dx - x) / dt` rounds `v` by about `u |x| / |dx|`. The
-                // opt-in settings keep `v` unless a cap, a bound or the
-                // retraction moved the trial.
-                let plain = state.preset() == FirePreset::Default && !state.abc;
-                let free = (!plain).then(|| &*x + &dx);
-                let (atom_cap, cap) = if state.abc {
-                    (None, None)
-                } else {
-                    (self.atom_maxmove, self.control.maxmove)
-                };
-                let trial = if curved {
-                    let tangent = manifold.project(x, &dx);
-                    let Some((trial, _)) =
-                        retract_within_cap(obj, x, &tangent, atom_cap, cap, &manifold)
-                    else {
-                        state.restore(saved);
-                        *x = start;
-                        return Err(Error::OffManifold {
-                            kind: manifold.as_str(),
-                        });
-                    };
-                    trial
-                } else {
-                    let mut trial = &*x + &dx;
-                    if let Some(cap) = atom_cap {
-                        scale_step_atom(x, &mut trial, cap);
-                    } else if let Some(cap) = cap {
-                        scale_step(x, &mut trial, cap);
-                    }
-                    clip_owned(obj.bounds(), trial)
-                };
-                let moved = free.is_none_or(|free| trial != free);
-                if matches!(state.kind, FireKind::V2) && state.dt > 0.0 && moved {
-                    let mut secant = (&trial - &forward_start) / state.dt;
-                    // The secant of a curved step has a normal part at the
-                    // trial, of order |trial - x| / 2 relative.
-                    if curved {
-                        manifold.project_in_place(&trial, &mut secant);
-                    }
-                    state.vel = secant;
-                }
-                let ev = obj.value_and_gradient(trial.view());
-                if !finite(ev.0, ev.1.view()) {
-                    state.restore(saved);
-                    *x = start;
-                    return Err(non_finite());
-                }
-                *x = trial;
-                value = ev.0;
-                grad = ev.1;
-                project_box_tangent(obj.bounds(), x, &mut state.vel);
-                // FIRE 2.0 mixes before the step. The post-step force is
-                // read only by FIRE 1.0.
-                if matches!(state.kind, FireKind::V1) {
-                    let mut raw_new = grad.mapv(|g| -g);
-                    project_box_tangent(obj.bounds(), x, &mut raw_new);
-                    if self.exp.is_some() {
-                        let mut steep_new = metric_vector(&self.exp, &raw_new);
-                        project_box_tangent(obj.bounds(), x, &mut steep_new);
-                        let mix_new = fire_mix(&self.exp, &state.vel, &raw_new, &steep_new);
+                        let mut raw_new = grad.mapv(|g| -g);
+                        eckart(
+                            &mut hold.ws,
+                            rigid_mode,
+                            masses,
+                            frozen,
+                            rigid_weighted,
+                            rigid_metric,
+                            rigid_pbc,
+                            rigid_broken_t,
+                            rigid_broken_r,
+                            &mut raw_new,
+                        );
+                        #[allow(unused_mut)]
+                        let mut steep_new = metric_vector(&self.precon, &raw_new)?;
+                        eckart(
+                            &mut hold.ws,
+                            rigid_mode,
+                            masses,
+                            frozen,
+                            rigid_weighted,
+                            rigid_metric,
+                            rigid_pbc,
+                            rigid_broken_t,
+                            rigid_broken_r,
+                            &mut steep_new,
+                        );
+                        eckart(
+                            &mut hold.ws,
+                            rigid_mode,
+                            masses,
+                            frozen,
+                            rigid_weighted,
+                            rigid_vmetric,
+                            rigid_pbc,
+                            rigid_broken_t,
+                            rigid_broken_r,
+                            &mut state.vel,
+                        );
+                        #[cfg(feature = "highs")]
+                        if boxed {
+                            crate::box_objective::project_tangent(obj.bounds(), x, &mut raw_new);
+                            crate::box_objective::project_tangent(obj.bounds(), x, &mut steep_new);
+                            crate::box_objective::project_tangent(obj.bounds(), x, &mut state.vel);
+                        }
+                        let mix_new = fire_mix(&self.precon, &state.vel, &raw_new, &steep_new);
                         fire_after_v1_metric(state, &raw_new, &steep_new, mix_new);
-                    } else {
-                        fire_after_v1(state, &raw_new);
                     }
                 }
-            }
-            Inner::Bb { prev_s, prev_y } => {
-                let dir = bb_direction(prev_s.as_ref(), prev_y.as_ref(), &grad, self.istep);
-                let old = x.clone();
-                let gold = grad.clone();
-                let (npos, nval, ngrad, moved) = accept_step(
-                    obj,
-                    x,
-                    value,
-                    &gold,
-                    &dir,
-                    Acceptance {
-                        control: &self.control,
-                        accept: self.accept,
-                        e_hist: &mut self.e_hist,
-                        atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold.clone(),
-                    },
-                );
-                *x = npos;
-                value = nval;
-                grad = ngrad;
-                if moved {
-                    *prev_s = Some(&*x - &old);
-                    *prev_y = Some(&grad - &gold);
-                } else if self.accept != Accept::None {
-                    // The refused spectral length would be retried from the
-                    // same point on every later call.
-                    *prev_s = None;
-                    *prev_y = None;
-                    refused = true;
+                Inner::Bb { prev_s, prev_y } => {
+                    let dir = bb_direction(prev_s.as_ref(), prev_y.as_ref(), &grad, self.istep);
+                    let old = x.clone();
+                    let gold = grad.clone();
+                    let (npos, nval, ngrad, moved) = accept_step(
+                        obj,
+                        x,
+                        value,
+                        &gold,
+                        &dir,
+                        Acceptance {
+                            control: &self.control,
+                            accept: self.accept,
+                            e_hist: &mut self.e_hist,
+                            atom_maxmove: self.atom_maxmove,
+                            manifold: &self.manifold,
+                        },
+                    );
+                    *x = npos;
+                    value = nval;
+                    grad = ngrad;
+                    if moved {
+                        *prev_s = Some(&*x - &old);
+                        *prev_y = Some(&grad - &gold);
+                    } else if self.accept != Accept::None {
+                        // The refused spectral length would be retried from
+                        // the same point on every later call.
+                        *prev_s = None;
+                        *prev_y = None;
+                    }
                 }
+                Inner::Pso { .. }
+                | Inner::Newton { .. }
+                | Inner::Dogleg { .. }
+                | Inner::NewtonCg { .. }
+                | Inner::NewtonPcg { .. } => unreachable!(),
             }
-            Inner::Pso { .. }
-            | Inner::Newton { .. }
-            | Inner::Dogleg { .. }
-            | Inner::NewtonCg { .. }
-            | Inner::NewtonPcg { .. } => unreachable!(),
-        }
-        // Each refusal restarts from steepest descent. A second refusal
-        // at the same point refused that restart, and every later call
-        // would repeat it.
-        if refused && self.refused && cached {
-            return Err(Error::AcceptStalled { steps: self.steps });
-        }
-        self.refused = refused;
 
-        // On a curved kind every arm but the L-BFGS line search evaluated
-        // a retracted trial, so the energy in hand is the energy on the set.
-        let line_search = matches!(self.inner, Inner::Lbfgs(_)) && self.accept != Accept::None;
-        let retracted = !(self.manifold.is_flat() || line_search);
-        if !retracted {
-            let delta = &*x - &start;
-            let y = self.manifold.retract(&start, &delta);
-            if y.iter().zip(x.iter()).any(|(a, b)| (*a - *b).abs() > 1e-15) {
-                *x = y;
-                let ev = obj.value_and_gradient(x.view());
-                value = ev.0;
-                grad = ev.1;
+            // A translation retract maps the accepted point to itself; the
+            // round trip start + (x - start) only adds rounding (one ulp of
+            // a 30 Angstrom coordinate is 3.6e-15) and would buy a second
+            // oracle call at the same geometry.
+            // BB and the direct first-order routes evaluate the retracted point.
+            // A nonlinear retraction applied to its chord is a different point.
+            // The stepper is done with the workspace; the hold puts it back.
+            drop(hold);
+            self.fire2 = fire2_local;
+            if stalled {
+                return Err(Error::FireStalled { steps: self.steps });
             }
         }
-        grad = self.horizontal_owned(x, grad);
+        let curved_trial = !self.manifold.is_flat()
+            && matches!(
+                &self.inner,
+                Inner::Steepest
+                    | Inner::Nlcg { .. }
+                    | Inner::Bfgs { .. }
+                    | Inner::Adam { .. }
+                    | Inner::Fire(_)
+            );
+        let already_retracted = matches!(self.overlay, Overlay::None)
+            && (matches!(&self.inner, Inner::Bb { .. })
+                || on_set
+                || curved_trial
+                || (self.accept == Accept::Step
+                    && matches!(
+                        &self.inner,
+                        Inner::Lbfgs(_)
+                            | Inner::Steepest
+                            | Inner::Nlcg { .. }
+                            | Inner::Bfgs { .. }
+                            | Inner::Sr1 { .. }
+                            | Inner::Sr2 { .. }
+                            | Inner::Adam { .. }
+                    )));
+        let y = if already_retracted || self.manifold.retract_is_translation() {
+            None
+        } else {
+            Some(self.manifold.retract(&start, &(&*x - &start)))
+        };
+        if let Some(y) = y.filter(|y| y.iter().zip(x.iter()).any(|(a, b)| (*a - *b).abs() > 1e-15))
+        {
+            *x = y;
+            let ev = obj.value_and_gradient(x.view());
+            value = ev.0;
+            grad = ev.1;
+        }
+        grad = self.horizontal_grad(x, &grad);
+        if let Some((old_x, old_g)) = sr_secant
+            && x.iter().zip(old_x.iter()).any(|(a, b)| a != b)
+        {
+            let s = &*x - &old_x;
+            let y = &grad - &old_g;
+            match &mut self.inner {
+                Inner::Sr1 { h, .. } => sr1_hessian_update(h, &s, &y),
+                Inner::Sr2 { b, .. } => sr2_hessian_update(b, &s, &y),
+                _ => {}
+            }
+        }
 
         let pair = if matches!(self.inner, Inner::Lbfgs(_))
             && x.iter().zip(start.iter()).any(|(a, b)| a != b)
         {
-            let gold = gold.as_ref().expect("L-BFGS keeps the gradient");
-            let (s, y) = self.lbfgs_sy(&start, x, gold, &grad);
+            let (s, y) = self.lbfgs_sy(&start, x, &gold, &grad);
             Some((s, y, l2(&grad)))
         } else {
             None
         };
         if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
-            solver.replace_newest(s, y, Some(gn));
+            // Only the final transported pair can enter the history. A
+            // refused pair leaves every retained pair in place.
+            solver.push_pair(s, y, Some(gn));
         }
 
         self.remember(x, value, &grad);
         self.steps += 1;
-        Ok(self.report(value, x, &grad))
-    }
-
-    /// Euclidean eOn step. The gradient at `x` is [`Self::reuse`].`gold`.
-    /// A warm call writes the trial into the scratch sized at construction.
-    fn step_eon_euclidean<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        let cached = self.same_last_x(x);
-        if cached {
-            crate::workspace::assign_fit(&mut self.reuse.gold, self.last_grad.view());
-        } else {
-            let ev = obj.value_and_gradient(x.view());
-            if !finite(ev.0, ev.1.view()) {
-                if self.brief {
-                    crate::workspace::absorb(&mut self.last_grad, ev.1);
-                    self.last_value = ev.0;
-                }
-                return Err(non_finite());
-            }
-            crate::workspace::absorb(&mut self.reuse.gold, ev.1);
-            self.last_value = ev.0;
+        let grad_norm = self.stationarity_norm(x, &grad);
+        let mut status = self
+            .control
+            .classify(grad_norm, self.free_len(obj.bounds()));
+        if energy_stall && status == Status::Iterating {
+            status = Status::NoiseFloor;
         }
-        let value = self.last_value;
-        if !finite(value, self.reuse.gold.view()) {
-            return Err(non_finite());
-        }
-        let gnorm = self.stationarity_norm(x, &self.reuse.gold);
-        if gnorm < self.control.gtol {
-            if self.brief {
-                std::mem::swap(&mut self.last_grad, &mut self.reuse.gold);
-                self.remember_pos(x, value);
-                return Ok(self.report(value, x, &self.last_grad));
-            }
-            return Ok(self.report(value, x, &self.reuse.gold));
-        }
-        self.eon_euclidean_move(obj, x)
-    }
-
-    /// One eOn move from [`Self::reuse`].`gold`. The accepted gradient lands
-    /// in [`Self::last_grad`].
-    fn eon_euclidean_move<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        use crate::lbfgs::{EON_INVERSE_CURVATURE, EonSeed};
-        if self.lindh_spec.is_some() {
-            let xs: Vec<f64> = x.iter().copied().collect();
-            let gs: Vec<f64> = self.reuse.gold.iter().copied().collect();
-            self.ensure_lindh(&xs, &gs, |p| obj.grad(ArrayView1::from(p)));
-        }
-        let Some(cap) = self.lbfgs_step().capped_limit() else {
-            return Err(Error::LbfgsCap {
-                what: "the cap is not positive",
-            });
-        };
-        let mut txn = match &mut self.inner {
-            Inner::Lbfgs(solver) => solver.begin_txn(),
-            _ => {
-                return Err(Error::LbfgsCap {
-                    what: "requires an L-BFGS session",
-                });
-            }
-        };
-        if !self.same_last_x(x)
-            && let Some(previous) = self.last_pos.as_ref()
-        {
-            let prev = previous.as_slice().unwrap_or(&[]);
-            let xs = x.as_slice().unwrap_or(&[]);
-            let gold = self.last_grad.as_slice().unwrap_or(&[]);
-            let gnew = self.reuse.gold.as_slice().unwrap_or(&[]);
-            if let Inner::Lbfgs(solver) = &mut self.inner {
-                solver.store_pos_diff(prev, xs, gold, gnew, &mut txn);
-            }
-        }
-        let wants_fd = match &self.inner {
-            Inner::Lbfgs(solver) => solver.eon_wants_fd(),
-            _ => false,
-        };
-        let seed = if wants_fd {
-            self.eon_fd_seed(obj, x, &self.reuse.gold)
-        } else {
-            match &self.inner {
-                Inner::Lbfgs(solver) => solver.eon_seed(),
-                _ => EonSeed::Scale(EON_INVERSE_CURVATURE),
-            }
-        };
-        let h0 = match seed {
-            EonSeed::Scale(h) => h,
-            EonSeed::Steepest => EON_INVERSE_CURVATURE,
-        };
-        let proposed = self.eon_trial(obj, x, cap, seed, &mut txn);
-        let (tval, steep_retry) = match proposed {
-            Ok(value) => (value, false),
-            Err(CappedMiss::Retry) => {
-                if let Inner::Lbfgs(solver) = &mut self.inner {
-                    solver.forget_txn(&mut txn);
-                }
-                self.force_cap_into(h0, cap);
-                match self.trial_of(obj, x, true) {
-                    Ok(value) => (value, true),
-                    Err(err) => {
-                        if let Inner::Lbfgs(solver) = &mut self.inner {
-                            solver.rollback_txn(txn);
-                        }
-                        return Err(err);
-                    }
-                }
-            }
-            Err(CappedMiss::Stop(err)) => {
-                if let Inner::Lbfgs(solver) = &mut self.inner {
-                    solver.rollback_txn(txn);
-                }
-                return Err(err);
-            }
-        };
-        let _ = steep_retry;
-        self.saved_x.assign(x);
-        x.assign(&self.reuse.trial);
-        {
-            let Solver {
-                saved_x,
-                reuse,
-                inner,
-                ..
-            } = &mut *self;
-            if let Inner::Lbfgs(solver) = inner {
-                solver.store_pos_diff(
-                    saved_x.as_slice().unwrap_or(&[]),
-                    x.as_slice().unwrap_or(&[]),
-                    reuse.gold.as_slice().unwrap_or(&[]),
-                    reuse.grad.as_slice().unwrap_or(&[]),
-                    &mut txn,
-                );
-                solver.commit_txn(txn);
-            }
-        }
-        std::mem::swap(&mut self.last_grad, &mut self.reuse.grad);
-        self.remember_pos(x, tval);
-        self.steps += 1;
-        Ok(self.report(tval, x, &self.last_grad))
-    }
-
-    /// `scratch_b = cap(h0 * -gold)`.
-    fn force_cap_into(&mut self, h0: f64, cap: f64) {
-        let n = self.reuse.gold.len().min(self.scratch_b.len());
-        for i in 0..n {
-            self.scratch_b[i] = h0 * -self.reuse.gold[i];
-        }
-        let motion = max_atom_displacement(&self.scratch_b);
-        if motion > cap && motion > 0.0 && cap > 0.0 {
-            self.scratch_b *= cap / motion;
-        }
-    }
-
-    /// Trial of the displacement in `scratch_b` when `from_scratch`, otherwise
-    /// of the vector `eon_step_from_seed` just produced.
-    fn eon_trial<O>(
-        &mut self,
-        obj: &O,
-        x: &Array1<f64>,
-        cap: f64,
-        seed: crate::lbfgs::EonSeed,
-        txn: &mut crate::lbfgs::Txn,
-    ) -> std::result::Result<f64, CappedMiss>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        self.scratch.assign(&self.reuse.gold);
-        let take = {
-            let Solver { scratch, inner, .. } = &mut *self;
-            match inner {
-                Inner::Lbfgs(solver) => solver.eon_step_from_seed(scratch.view(), cap, seed, txn),
-                _ => None,
-            }
-        };
-        let Some(take) = take else {
-            return Err(CappedMiss::Stop(Error::LbfgsCap {
-                what: "the capped step is zero",
-            }));
-        };
-        let step = self.shape_step(x, take.step);
-        let result = self.trial_of_step(obj, x, &step, take.fallback);
-        if let Inner::Lbfgs(solver) = &mut self.inner {
-            solver.recycle(step);
-        }
-        result
-    }
-
-    /// Value at `clip(x + scratch_b)`. The point is [`Self::reuse`].`trial`
-    /// and the gradient is [`Self::reuse`].`grad`.
-    fn trial_of<O>(&mut self, obj: &O, x: &Array1<f64>, steepest: bool) -> Result<f64>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        let n = x.len().min(self.scratch_b.len());
-        for i in 0..n {
-            self.reuse.corr[i] = self.scratch_b[i];
-        }
-        let step = self.shape_step(x, self.reuse.corr.clone());
-        let value = self
-            .trial_of_step(obj, x, &step, steepest)
-            .map_err(|miss| match miss {
-                CappedMiss::Stop(err) => err,
-                CappedMiss::Retry => non_finite(),
-            })?;
-        let _ = step;
-        Ok(value)
-    }
-
-    /// `clip(x + step)` into [`Self::reuse`].`trial`.
-    fn trial_of_step<O>(
-        &mut self,
-        obj: &O,
-        x: &Array1<f64>,
-        step: &Array1<f64>,
-        steepest: bool,
-    ) -> std::result::Result<f64, CappedMiss>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        let motion = max_atom_displacement(step);
-        if !motion.is_finite() || motion <= 0.0 {
-            return Err(CappedMiss::Stop(Error::LbfgsCap {
-                what: "the capped step is zero",
-            }));
-        }
-        let n = x.len().min(step.len()).min(self.reuse.trial.len());
-        for i in 0..n {
-            self.reuse.trial[i] = x[i] + step[i];
-        }
-        clip_mut(obj.bounds(), &mut self.reuse.trial);
-        let taken = max_atom_motion(x, &self.reuse.trial);
-        if !taken.is_finite() || taken <= 0.0 {
-            return Err(CappedMiss::Stop(Error::OffManifold {
-                kind: self.manifold.as_str(),
-            }));
-        }
-        let (value, grad) = obj.value_and_gradient(self.reuse.trial.view());
-        if !finite(value, grad.view()) {
-            return Err(if steepest {
-                CappedMiss::Stop(non_finite())
-            } else {
-                CappedMiss::Retry
-            });
-        }
-        crate::workspace::absorb(&mut self.reuse.grad, grad);
-        Ok(value)
-    }
-
-    /// Euclidean FIRE, including Guénolé and ABC. Curved and preconditioned
-    /// sessions stay on the allocating arm.
-    fn step_fire_euclidean<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        let cached = self.same_last_x(x);
-        if !cached {
-            let ev = obj.value_and_gradient(x.view());
-            if !finite(ev.0, ev.1.view()) {
-                if self.brief {
-                    crate::workspace::absorb(&mut self.last_grad, ev.1);
-                    self.last_value = ev.0;
-                }
-                return Err(non_finite());
-            }
-            crate::workspace::absorb(&mut self.last_grad, ev.1);
-            self.last_value = ev.0;
-        }
-        let mut value = self.last_value;
-        if !finite(value, self.last_grad.view()) {
-            return Err(non_finite());
-        }
-        let gnorm = self.stationarity_norm(x, &self.last_grad);
-        if gnorm < self.control.gtol {
-            if self.brief {
-                self.remember_pos(x, value);
-            }
-            return Ok(self.report(value, x, &self.last_grad));
-        }
-        self.saved_x.assign(x);
-        self.fire_euclidean_move(obj, x, &mut value)?;
-        let drifted = self.saved_x.iter().zip(x.iter()).any(|(s, xi)| {
-            let d = *xi - *s;
-            (*s + d - *xi).abs() > 1e-15
-        });
-        if drifted {
-            let n = x.len().min(self.saved_x.len());
-            for i in 0..n {
-                let d = x[i] - self.saved_x[i];
-                x[i] = self.saved_x[i] + d;
-            }
-            let ev = obj.value_and_gradient(x.view());
-            value = ev.0;
-            crate::workspace::absorb(&mut self.last_grad, ev.1);
-        }
-        self.remember_pos(x, value);
-        self.steps += 1;
-        Ok(self.report(value, x, &self.last_grad))
-    }
-
-    /// One flat FIRE step. `saved_x` is the point a refusal restores.
-    fn fire_euclidean_move<O>(
-        &mut self,
-        obj: &O,
-        x: &mut Array1<f64>,
-        value: &mut f64,
-    ) -> Result<()>
-    where
-        O: DifferentiableObjective<f64> + ?Sized,
-    {
-        let n = x.len();
-        let steps_now = self.steps;
-        for i in 0..n {
-            self.scratch[i] = -self.last_grad[i];
-        }
-        let saved = {
-            let Solver {
-                scratch,
-                reuse,
-                inner,
-                ..
-            } = &mut *self;
-            project_box_tangent(obj.bounds(), x, scratch);
-            let Inner::Fire(state) = inner else {
-                return Err(Error::FireStalled { steps: steps_now });
-            };
-            project_box_tangent(obj.bounds(), x, &mut state.vel);
-            let saved = state.checkpoint();
-            let prep = fire_prepare_v2_into(state, scratch, &mut reuse.corr);
-            (saved, prep)
-        };
-        if saved.1 == Prepared::Rollback {
-            for i in 0..n {
-                x[i] += self.reuse.corr[i];
-            }
-            clip_mut(obj.bounds(), x);
-            let ev = obj.value_and_gradient(x.view());
-            if !finite(ev.0, ev.1.view()) {
-                x.assign(&self.saved_x);
-                if let Inner::Fire(state) = &mut self.inner {
-                    state.restore(saved.0);
-                }
-                return Err(non_finite());
-            }
-            crate::workspace::absorb(&mut self.reuse.grad, ev.1);
-            for i in 0..n {
-                self.scratch[i] = -self.reuse.grad[i];
-            }
-            project_box_tangent(obj.bounds(), x, &mut self.scratch);
-        } else if saved.1 == Prepared::Stalled {
-            return Err(Error::FireStalled { steps: self.steps });
-        }
-        if let Inner::Fire(state) = &mut self.inner {
-            fire_displacement_into(state, &self.scratch, &mut self.scratch_b);
-            if state.abc
-                && let Some(cap) = self.atom_maxmove.or(self.control.maxmove)
-            {
-                fire_clip_velocity(state, cap);
-                let dt = state.dt;
-                for i in 0..n {
-                    self.scratch_b[i] = state.vel[i] * dt;
-                }
-            }
-        }
-        self.reuse.fwd.assign(x);
-        let (abc, v2, dt, plain) = if let Inner::Fire(state) = &self.inner {
-            (
-                state.abc,
-                matches!(state.kind, FireKind::V2),
-                state.dt,
-                state.preset() == FirePreset::Default && !state.abc,
-            )
-        } else {
-            (false, false, 0.0, true)
-        };
-        for i in 0..n {
-            self.reuse.trial[i] = x[i] + self.scratch_b[i];
-        }
-        if !plain {
-            self.reuse.free.assign(&self.reuse.trial);
-        }
-        let (atom_cap, cap) = if abc {
-            (None, None)
-        } else {
-            (self.atom_maxmove, self.control.maxmove)
-        };
-        if let Some(limit) = atom_cap {
-            scale_step_atom(&self.reuse.fwd, &mut self.reuse.trial, limit);
-        } else if let Some(limit) = cap {
-            scale_step(&self.reuse.fwd, &mut self.reuse.trial, limit);
-        }
-        clip_mut(obj.bounds(), &mut self.reuse.trial);
-        let moved = plain
-            || self
-                .reuse
-                .trial
-                .iter()
-                .zip(self.reuse.free.iter())
-                .any(|(a, b)| a != b);
-        if v2
-            && dt > 0.0
-            && moved
-            && let Inner::Fire(state) = &mut self.inner
-        {
-            for i in 0..n {
-                state.vel[i] = (self.reuse.trial[i] - self.reuse.fwd[i]) / dt;
-            }
-        }
-        let ev = obj.value_and_gradient(self.reuse.trial.view());
-        if !finite(ev.0, ev.1.view()) {
-            x.assign(&self.saved_x);
-            if let Inner::Fire(state) = &mut self.inner {
-                state.restore(saved.0);
-            }
-            return Err(non_finite());
-        }
-        x.assign(&self.reuse.trial);
-        *value = ev.0;
-        crate::workspace::absorb(&mut self.last_grad, ev.1);
-        if let Inner::Fire(state) = &mut self.inner {
-            project_box_tangent(obj.bounds(), x, &mut state.vel);
-        }
-        if matches!(
-            self.inner,
-            Inner::Fire(ref state) if matches!(state.kind, FireKind::V1)
-        ) {
-            for i in 0..n {
-                self.scratch[i] = -self.last_grad[i];
-            }
-            project_box_tangent(obj.bounds(), x, &mut self.scratch);
-            if let Inner::Fire(state) = &mut self.inner {
-                fire_after_v1(state, &self.scratch);
-            }
-        }
-        Ok(())
+        Ok(self.finish(value, x, &grad, grad_norm, status))
     }
 
     fn step_pso<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
@@ -4384,9 +4450,1005 @@ impl Solver {
             *x = state.gbest_position.clone();
             let (value, grad) = obj.value_and_gradient(x.view());
             self.steps += 1;
-            return Ok(self.report(value, x, &grad));
+            return Ok(self.finish(
+                value,
+                x,
+                &grad,
+                self.stationarity_norm(x, &grad),
+                self.control.classify(
+                    self.stationarity_norm(x, &grad),
+                    self.free_len(obj.bounds()),
+                ),
+            ));
         }
         unreachable!("PSO slot populated above")
+    }
+
+    fn sr_opening_radius(&self) -> f64 {
+        sr_trust_limits(
+            self.control.istep,
+            self.dim,
+            self.atom_maxmove,
+            self.control.maxmove_cap(),
+        )
+        .0
+    }
+
+    fn reset_sr_radius(&mut self) {
+        if matches!(self.inner, Inner::Sr1 { .. } | Inner::Sr2 { .. }) {
+            self.sr_radius = self.sr_opening_radius();
+        }
+    }
+
+    fn clip_trial(&self, origin: &Array1<f64>, trial: &mut Array1<f64>) {
+        if let Some(cap) = self.atom_maxmove {
+            scale_step_atom(origin, trial, cap);
+        } else if let Some(cap) = self.control.maxmove_cap() {
+            scale_step(origin, trial, cap);
+        }
+    }
+
+    /// One SR1/SR2 trust-region trial. The Hessian update waits until the
+    /// accepted point has been retracted.
+    fn sr_trust_attempt<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        value: &mut f64,
+        grad: &mut Array1<f64>,
+        start: &Array1<f64>,
+        gold: &Array1<f64>,
+        secant: &mut Option<(Array1<f64>, Array1<f64>)>,
+    ) where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let radius = self.sr_radius;
+        let model = match &self.inner {
+            Inner::Sr1 { h, .. } => h.clone(),
+            Inner::Sr2 { b, .. } => b.clone(),
+            _ => return,
+        };
+        let (_, rmax) = sr_trust_limits(
+            self.control.istep,
+            self.dim,
+            self.atom_maxmove,
+            self.control.maxmove_cap(),
+        );
+        let mut dir = sr_trust_direction(&model, grad, radius);
+        if self.project_rigid {
+            project_out_rot_trans(&mut dir, x.view());
+        }
+        dir = self.project_vec(x, &dir);
+        let mut trial = &*x + &dir;
+        self.clip_trial(x, &mut trial);
+        trial = obj.bounds().clip(trial.view());
+        let p = &trial - &*x;
+        let pnorm = l2(&p);
+        let mut rho = -1.0;
+        let mut finite = false;
+        let mut ft = *value;
+        let mut gt = grad.clone();
+        if pnorm.is_finite() && pnorm > 1e-16 {
+            let ev = obj.value_and_gradient(trial.view());
+            ft = ev.0;
+            gt = ev.1;
+            finite = ft.is_finite() && gt.iter().all(|v| v.is_finite());
+            if finite {
+                rho = reduction_ratio(*value - ft, predicted_reduction(&model, grad, &p));
+            }
+        }
+        let new_radius = update_radius(radius, rho, pnorm, rmax);
+        self.sr_radius = new_radius;
+        let take = finite && (self.accept == Accept::Step || accept_ratio(rho));
+        if take {
+            *secant = Some((start.clone(), gold.clone()));
+            *x = trial;
+            *value = ft;
+            *grad = gt;
+        }
+    }
+    fn reset_overlay(&mut self) {
+        match &mut self.overlay {
+            Overlay::QuickMin(state, session) => {
+                state.reset();
+                session.forget_last();
+            }
+            Overlay::Ode12r(state) => state.reset(),
+            Overlay::Diis(state) => state.clear(),
+            Overlay::None => {}
+        }
+    }
+
+    /// Outer steps completed on this session.
+    pub fn steps(&self) -> usize {
+        self.steps
+    }
+
+    /// Norm that every stop test and [`Report::grad_norm`] apply to the gradient.
+    pub fn set_stop_norm(&mut self, norm: StopNorm) {
+        self.stop_norm = norm;
+    }
+
+    /// Norm selected by [`Self::set_stop_norm`].
+    pub fn stop_norm(&self) -> StopNorm {
+        self.stop_norm
+    }
+
+    /// Parameter set of a FIRE 2.0 session. The integrator restarts from
+    /// [`Control::istep`]. [`FirePreset::Guenole2020`] also installs the
+    /// published schedule, so a non-positive power run stops at `vdfmax`.
+    pub fn set_fire_preset(&mut self, preset: FirePreset) -> Result<()> {
+        let dt = match &mut self.inner {
+            Inner::Fire(state) if state.kind == FireKind::V2 => {
+                state.set_preset(preset);
+                state.dt
+            }
+            _ => return Err(Error::NeedFire2),
+        };
+        // The preset keeps the prepare/into integrator. The published
+        // Guénolé integrator, including its vdfmax stop, is
+        // [`Self::set_fire_variant`].
+        let _ = dt;
+        self.fire2 = None;
+        self.apply_default_atom_cap();
+        Ok(())
+    }
+
+    /// Integrator parameters of a FIRE session. The velocity is cleared.
+    pub fn set_fire_config(&mut self, config: FireConfig) -> Result<()> {
+        match &mut self.inner {
+            Inner::Fire(state) => {
+                state.apply_config(&config);
+                if config.dt.is_finite() && config.dt > 0.0 {
+                    self.control.istep = config.dt;
+                    self.istep = config.dt;
+                }
+                Ok(())
+            }
+            _ => Err(Error::NeedFire),
+        }
+    }
+
+    /// ABC-FIRE on a FIRE 2.0 session. The fill path applies the bias.
+    /// [`Solver::step`] on the published schedule keeps [`fire2_displacement`].
+    pub fn set_fire_abc(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Fire(state) if state.kind == FireKind::V2 => {
+                state.abc = on;
+                Ok(())
+            }
+            _ => Err(Error::NeedFire2),
+        }
+    }
+
+    /// Step-length rule for an L-BFGS session.
+    ///
+    /// [`LbfgsStep::Capped`] at [`crate::EON_MAX_MOVE`] is the default:
+    /// the eOn step, no line search. The first step probes curvature.
+    /// A proposal at least as long as the cap clears the memory and
+    /// steps along `H0` times the force. [`LbfgsStep::Scaled`] shortens
+    /// the two-loop step and keeps the pairs. [`LbfgsStep::Wolfe`] opts
+    /// into the strong Wolfe search.
+    pub fn set_lbfgs_step(&mut self, step: LbfgsStep) -> Result<()> {
+        let step = match step {
+            LbfgsStep::Capped { max_atom } | LbfgsStep::Scaled { max_atom }
+                if !max_atom.is_finite() =>
+            {
+                return Err(Error::LbfgsCap {
+                    what: "max_atom is not finite",
+                });
+            }
+            LbfgsStep::Capped { max_atom } if max_atom <= 0.0 => LbfgsStep::Capped {
+                max_atom: crate::lbfgs::EON_MAX_MOVE,
+            },
+            LbfgsStep::Scaled { max_atom } if max_atom <= 0.0 => LbfgsStep::Scaled {
+                max_atom: crate::lbfgs::EON_MAX_MOVE,
+            },
+            other => other,
+        };
+        if !matches!(self.inner, Inner::Lbfgs(_)) {
+            return Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            });
+        }
+        if matches!(step, LbfgsStep::Capped { .. } | LbfgsStep::Scaled { .. }) {
+            if !matches!(self.manifold, ManifoldKind::Euclidean) {
+                return Err(Error::LbfgsCap {
+                    what: "requires Euclidean coordinates",
+                });
+            }
+            if self.constraints.is_some() {
+                return Err(Error::LbfgsCap {
+                    what: "distance constraints are set",
+                });
+            }
+            #[cfg(feature = "highs")]
+            if self.highs {
+                return Err(Error::LbfgsCap {
+                    what: "HiGHS projection is set",
+                });
+            }
+        }
+        let cap = step.capped_limit();
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => solver.step = step,
+            _ => {
+                return Err(Error::LbfgsCap {
+                    what: "requires an L-BFGS session",
+                });
+            }
+        }
+        // Selecting a step rule clears the geometry choice.
+        // [`Self::set_geometry_step`] is that algorithm, and a Wolfe
+        // session with a per-atom cap also takes it unless set off.
+        self.geometry_step = None;
+        if let Some(cap) = cap {
+            self.set_atom_maxmove(cap);
+        }
+        Ok(())
+    }
+
+    /// Opt into the eOn geometry step at `max_atom`.
+    pub fn set_lbfgs_capped(&mut self, max_atom: f64) -> Result<()> {
+        self.set_lbfgs_step(LbfgsStep::Capped { max_atom })
+    }
+
+    /// Step-length rule stored on an L-BFGS session.
+    /// Other methods report [`LbfgsStep::Wolfe`].
+    pub fn lbfgs_step(&self) -> LbfgsStep {
+        match &self.inner {
+            Inner::Lbfgs(solver) => solver.step,
+            _ => LbfgsStep::Wolfe,
+        }
+    }
+
+    /// ASE's fixed inverse-Hessian scale. `None` keeps the Nocedal-Wright scale.
+    pub fn set_lbfgs_fixed_h0(&mut self, h0: Option<f64>) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.fixed_h0 = h0.filter(|v| v.is_finite() && *v > 0.0);
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Measure the L-BFGS cap by the Euclidean length of the step.
+    pub fn set_lbfgs_euclidean_cap(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.euclidean_cap = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Trust-region radius on the capped fill step. Off by default.
+    pub fn set_lbfgs_trust(&mut self, on: bool) -> Result<()> {
+        if !matches!(self.inner, Inner::Lbfgs(_)) {
+            return Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            });
+        }
+        let cap = self
+            .lbfgs_step()
+            .capped_limit()
+            .unwrap_or(crate::lbfgs::EON_MAX_MOVE);
+        self.trust = on;
+        self.trust_delta = cap;
+        self.trust_max = cap;
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.keep_long = on;
+        }
+        Ok(())
+    }
+
+    /// Keep a long downhill quasi-Newton step and scale it per atom.
+    pub fn set_lbfgs_model_atom(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.model_atom = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Compact trust-region step inside the per-atom cap.
+    pub fn set_lbfgs_compact_tr(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.compact_tr = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Drop a pair with `s·y <= 0` and keep the older pairs.
+    pub fn set_lbfgs_skip_bad(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Lbfgs(solver) => {
+                solver.skip_bad = on;
+                Ok(())
+            }
+            _ => Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            }),
+        }
+    }
+
+    /// Lindh model used by the eOn fill path. Distinct from [`Self::set_lindh`],
+    /// which installs the geometry preconditioner.
+    pub fn set_lindh_model(&mut self, spec: Option<LindhSpec>) -> Result<()> {
+        if !matches!(self.inner, Inner::Lbfgs(_)) {
+            return Err(Error::LbfgsCap {
+                what: "requires an L-BFGS session",
+            });
+        }
+        if let Some(spec) = &spec {
+            if !(spec.c_stab.is_finite() && spec.c_stab > 0.0) {
+                return Err(Error::Precon {
+                    what: "c_stab is not positive",
+                });
+            }
+            if !spec.z.is_empty() && spec.z.len() * 3 != self.dim {
+                return Err(Error::Precon {
+                    what: "atomic numbers do not match the dimension",
+                });
+            }
+        }
+        self.lindh_spec = spec;
+        self.lindh_mu = None;
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_lindh_factor(None);
+        }
+        Ok(())
+    }
+
+    fn ensure_lindh<G>(&mut self, x: &[f64], g: &[f64], mut grad_at: G)
+    where
+        G: FnMut(&[f64]) -> Array1<f64>,
+    {
+        if self.lindh_spec.is_none() {
+            return;
+        }
+        if self.lindh_mu.is_none() {
+            self.lindh_mu = Some(self.probe_lindh_mu(x, g, &mut grad_at));
+        }
+        let mu = self.lindh_mu.unwrap_or(1.0);
+        let built = self
+            .lindh_spec
+            .as_ref()
+            .and_then(|spec| crate::lindh::factor(x, &spec.z, spec.c_stab, spec.cell, mu));
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            solver.set_lindh_factor(built);
+        }
+    }
+
+    fn probe_lindh_mu<G>(&self, x: &[f64], g: &[f64], grad_at: &mut G) -> f64
+    where
+        G: FnMut(&[f64]) -> Array1<f64>,
+    {
+        let mut n2 = 0.0;
+        for v in g {
+            n2 += *v * *v;
+        }
+        let norm = n2.sqrt();
+        if !(norm.is_finite() && norm > 0.0 && g.len() == x.len()) {
+            return 1.0;
+        }
+        let fd = crate::lbfgs::EON_FINITE_DIFFERENCE;
+        let mut probe = x.to_vec();
+        let mut u = vec![0.0; g.len()];
+        for i in 0..g.len() {
+            u[i] = -g[i] / norm;
+            probe[i] = x[i] + fd * u[i];
+        }
+        let gp = grad_at(&probe);
+        if gp.len() != g.len() {
+            return 1.0;
+        }
+        let mut curv = 0.0;
+        for i in 0..g.len() {
+            curv += (gp[i] - g[i]) * u[i];
+        }
+        curv /= fd;
+        let Some(spec) = self.lindh_spec.as_ref() else {
+            return 1.0;
+        };
+        let quad = crate::lindh::shape_quad(x, &spec.z, spec.c_stab, spec.cell, &u);
+        if curv.is_finite() && curv > 0.0 && quad > 1e-18 {
+            curv / quad
+        } else {
+            1.0
+        }
+    }
+
+    /// Drop the exponential preconditioner. Other geometry metrics stay.
+    pub fn clear_exp(&mut self) {
+        if self.exp.is_some() {
+            self.clear_precon();
+        }
+    }
+
+    /// Energy scale of the installed exponential preconditioner.
+    #[must_use]
+    pub fn exp_mu(&self) -> Option<f64> {
+        if self.exp.is_none() {
+            None
+        } else {
+            self.precon_scale()
+        }
+    }
+
+    /// Keep every pair of `set` at its length. The method memory restarts.
+    pub fn set_distance_constraints(&mut self, set: DistanceConstraints) -> Result<()> {
+        self.refuse_constraint_settings(&set)?;
+        self.constraints = Some(Arc::new(set));
+        self.forget();
+        Ok(())
+    }
+
+    /// Drop the constraint set. The method memory restarts.
+    pub fn clear_distance_constraints(&mut self) {
+        if self.constraints.take().is_some() {
+            self.forget();
+        }
+    }
+
+    /// The constraint set, if any.
+    pub fn distance_constraints(&self) -> Option<&DistanceConstraints> {
+        self.constraints.as_deref()
+    }
+
+    /// Open the first raw-gradient step at `min(istep, 1 / |g|)`. The C API
+    /// sets this when the caller leaves `istep` at zero.
+    #[cfg(feature = "capi")]
+    pub(crate) fn set_unit_first_step(&mut self) {
+        self.unit_first_step = true;
+    }
+
+    /// Judge `x` with no step: [`Status::Tolerance`] or
+    /// [`Status::NoiseFloor`] when the gradient evaluated there meets that
+    /// stop, else [`Status::Budget`]. `x` is clipped to the objective's
+    /// bounds, as a step clips it, and the method memory is untouched. The
+    /// stationarity measure is the one a step opens with; a distance or
+    /// equality constraint set does not project the gradient here, so
+    /// such a session reads the larger, unprojected norm.
+    pub(crate) fn assess<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        if x.len() != self.dim || self.dim != Objective::dim(obj) {
+            return Err(Error::Dim {
+                got: x.len(),
+                dim: self.dim,
+            });
+        }
+        self.check_manifold(x.len())?;
+        self.note_bounds(obj.bounds());
+        let (value, raw_grad) = if self.same_last_x(x) {
+            (self.last_value, self.last_grad.clone())
+        } else {
+            *x = obj.bounds().clip(x.view());
+            self.gradient_calls += 1;
+            obj.value_and_gradient(x.view())
+        };
+        let grad = self.horizontal_grad(x, &raw_grad);
+        if !value.is_finite() || grad.iter().any(|g| !g.is_finite()) {
+            return Err(Error::Oracle {
+                what: "non-finite value or gradient",
+            });
+        }
+        let grad_norm = self.stationarity_norm(x, &grad);
+        let status = self
+            .control
+            .finish_status(grad_norm, self.free_len(obj.bounds()), true);
+        Ok(self.finish(value, x, &grad, grad_norm, status))
+    }
+
+    /// Minimize until a step reports a stop or the iteration budget is spent.
+    ///
+    /// The run ends on the first step whose status is not
+    /// [`Status::Iterating`] and returns that status, so an energy-noise
+    /// [`Status::NoiseFloor`] is kept rather than stepped past. A spent
+    /// budget is [`Status::Budget`]. A zero `maxiter` takes no step: the
+    /// report is [`Self::assess`] of `x`, so it says [`Status::Tolerance`]
+    /// only when the gradient evaluated there is below `gtol`.
+    pub fn run<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        if let Some(d) = self.chart.clone() {
+            return self.in_chart(&d, obj, x, |s, obj, z| s.run_plain(obj, z));
+        }
+        self.run_plain(obj, x)
+    }
+
+    /// [`Self::run`] with a gauge move between steps.
+    ///
+    /// `gauge(x)` replaces the iterate with another representation of the
+    /// same point: a map that leaves the objective unchanged, such as
+    /// re-centring the pivot of a hyperplane on the plane. It acts on the
+    /// caller's coordinates before every step but the first, so the
+    /// returned report describes the point left in `x`. Every report
+    /// carries its coordinates and gradient. The run ends as [`Self::run`]
+    /// does, on the first step whose status is not [`Status::Iterating`],
+    /// and a spent budget is [`Status::Budget`].
+    ///
+    /// A move is not a step: the value and gradient before it belong to
+    /// the old representation, where a plane rotates about the old pivot,
+    /// so their secant with the moved point holds no curvature. A gauge
+    /// that changes `x` therefore rebases the session, as
+    /// [`Self::rebase`]: the next step evaluates the objective afresh at
+    /// the moved point and the retained curvature preconditions it. A
+    /// gauge that leaves `x` as it was is no move.
+    pub fn run_gauged<O, G>(&mut self, obj: &O, x: &mut Array1<f64>, mut gauge: G) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+        G: FnMut(&mut Array1<f64>),
+    {
+        if self.control.maxiter == 0 {
+            return self.run(obj, x);
+        }
+        let tol = self.control.gtol;
+        let mut report = self.step(obj, x)?;
+        for _ in 1..self.control.maxiter {
+            if report.grad_norm < tol || report.status != Status::Iterating {
+                break;
+            }
+            let before = x.clone();
+            gauge(x);
+            if *x != before {
+                self.rebase();
+            }
+            report = self.step(obj, x)?;
+        }
+        report.status = match report.status {
+            Status::Iterating if report.grad_norm < tol => Status::Tolerance,
+            Status::Iterating => Status::Budget,
+            other => other,
+        };
+        Ok(report)
+    }
+
+    fn run_plain<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let budget = self.control.maxiter;
+        if budget == 0 {
+            return self.assess(obj, x);
+        }
+        self.brief = true;
+        let tol = self.control.gtol;
+        let mut last = None;
+        let mut stop: Result<()> = Ok(());
+        for _ in 0..budget {
+            match self.step_plain(obj, x) {
+                Ok(rep) => {
+                    let status = match rep.status {
+                        Status::Iterating if rep.grad_norm < tol => Status::Tolerance,
+                        other => other,
+                    };
+                    last = Some((rep.value, rep.grad_norm, status));
+                    if status != Status::Iterating {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    stop = Err(err);
+                    break;
+                }
+            }
+        }
+        self.brief = false;
+        stop?;
+        let Some((value, grad_norm, status)) = last else {
+            unreachable!("a positive budget takes a step or returns its error");
+        };
+        let status = match status {
+            Status::Iterating => Status::Budget,
+            other => other,
+        };
+        let g = self.reported_grad(x);
+        Ok(self.finish(value, x, &g, grad_norm, status))
+    }
+
+    /// The gradient a step report carries, for the report at the end of a
+    /// run. The unconstrained Newton-CG path remembers the raw gradient,
+    /// which its difference products need; its reports are horizontal.
+    fn reported_grad(&mut self, x: &Array1<f64>) -> Array1<f64> {
+        let raw = self.constraints.is_none()
+            && matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. });
+        if raw && self.last_grad.len() == x.len() {
+            let g = self.last_grad.clone();
+            self.horizontal_grad(x, &g)
+        } else {
+            self.last_grad.clone()
+        }
+    }
+
+    /// Euclidean FIRE with the default preset and no preconditioner.
+    fn fire_is_flat(&self) -> bool {
+        let Inner::Fire(state) = &self.inner else {
+            return false;
+        };
+        matches!(self.manifold, ManifoldKind::Euclidean)
+            && !self.project_rigid
+            && self.exp.is_none()
+            && self.fire2.is_none()
+            && !state.abc
+            && state.preset() == FirePreset::Default
+    }
+
+    fn use_scaled_lbfgs(&self) -> bool {
+        if !matches!(self.lbfgs_step(), LbfgsStep::Scaled { .. }) {
+            return false;
+        }
+        if self.geometry_step == Some(true) || !matches!(self.manifold, ManifoldKind::Euclidean) {
+            return false;
+        }
+        if !matches!(self.inner, Inner::Lbfgs(_)) || self.constraints.is_some() {
+            return false;
+        }
+        #[cfg(feature = "highs")]
+        if self.highs {
+            return false;
+        }
+        true
+    }
+
+    /// ASE length control: shorten the two-loop step, keep the pairs.
+    /// A non-descent direction clears the memory and steps along the force.
+    /// One non-finite trial is retried; a second restores the pairs.
+    fn scaled_lbfgs_step<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        _value: f64,
+        grad: Array1<f64>,
+    ) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let cap = match self.lbfgs_step() {
+            LbfgsStep::Scaled { max_atom } if max_atom > 0.0 => max_atom,
+            _ => {
+                return Err(Error::LbfgsCap {
+                    what: "the cap is not positive",
+                });
+            }
+        };
+        let saved = match &self.inner {
+            Inner::Lbfgs(solver) => solver.curvature(),
+            _ => {
+                return Err(Error::LbfgsCap {
+                    what: "requires an L-BFGS session",
+                });
+            }
+        };
+        if !self.same_last_x(x)
+            && let Some(previous) = self.last_pos.clone()
+        {
+            let s = &*x - &previous;
+            let y = &grad - &self.last_grad;
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                let _ = solver.push(s, y);
+            }
+        }
+        let proposed = match self.scaled_trial(obj, x, &grad, cap) {
+            Ok(point) => point,
+            Err(Error::Oracle { .. }) => {
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.forget();
+                }
+                match self.scaled_trial(obj, x, &grad, cap) {
+                    Ok(point) => point,
+                    Err(_) => {
+                        if let Inner::Lbfgs(solver) = &mut self.inner {
+                            solver.restore(saved);
+                        }
+                        return Err(Error::Oracle {
+                            what: "non-finite value or gradient",
+                        });
+                    }
+                }
+            }
+            Err(err) => {
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.restore(saved);
+                }
+                return Err(err);
+            }
+        };
+        let (trial, tval, tgrad) = proposed;
+        let old = x.clone();
+        let gold = grad;
+        *x = trial;
+        let grad = self.horizontal_grad(x, &tgrad);
+        let s = &*x - &old;
+        let y = &grad - &gold;
+        if let Inner::Lbfgs(solver) = &mut self.inner {
+            let _ = solver.push(s, y);
+        }
+        self.remember(x, tval, &grad);
+        self.steps += 1;
+        Ok(self.report(tval, x, &grad))
+    }
+
+    fn scaled_trial<O>(
+        &mut self,
+        obj: &O,
+        x: &Array1<f64>,
+        grad: &Array1<f64>,
+        cap: f64,
+    ) -> Result<(Array1<f64>, f64, Array1<f64>)>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let mut dir = match &self.inner {
+            Inner::Lbfgs(solver) => solver.direction(grad.view()),
+            _ => grad.mapv(|g| -g),
+        };
+        let slope = dir.dot(grad);
+        if !(slope.is_finite() && slope < 0.0) {
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.forget();
+            }
+            dir = grad.mapv(|g| -g);
+        }
+        dir = self.project_vec(x, &dir);
+        let mut trial = x + &dir;
+        crate::step::scale_step_atom(x, &mut trial, cap);
+        trial = obj.bounds().clip(trial.view());
+        let (value, next) = obj.value_and_gradient(trial.view());
+        if !value.is_finite() || next.iter().any(|v| !v.is_finite()) {
+            return Err(Error::Oracle {
+                what: "non-finite value or gradient",
+            });
+        }
+        Ok((trial, value, next))
+    }
+
+    fn overlay_apply<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        value_out: &mut f64,
+        grad_out: &mut Array1<f64>,
+        energy_out: &mut bool,
+        line_options: LineSearchOptions,
+        diis_alpha: f64,
+        diis_atom_cap: Option<f64>,
+        diis_euclidean_cap: Option<f64>,
+    ) -> Result<()>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let mut value = *value_out;
+        let mut grad = grad_out.clone();
+        let mut energy_stall = *energy_out;
+        #[cfg(feature = "highs")]
+        let boxed = self.has_coordinate_box();
+        let mut overlay = std::mem::replace(&mut self.overlay, Overlay::None);
+        match &mut overlay {
+            Overlay::QuickMin(state, session) => {
+                #[allow(unused_mut)]
+                let mut force = grad.mapv(|g| -g);
+                #[cfg(feature = "highs")]
+                if boxed {
+                    crate::box_objective::project_tangent(obj.bounds(), x, &mut force);
+                    crate::box_objective::project_tangent(obj.bounds(), x, &mut state.vel);
+                }
+                let dx = quickmin_session_step(state, session, x, &force);
+                let mut trial = &*x + &dx;
+                if let Some(cap) = self.atom_maxmove {
+                    scale_step_atom(x, &mut trial, cap);
+                } else if let Some(cap) = self.control.maxmove_cap() {
+                    scale_step(x, &mut trial, cap);
+                }
+                trial = obj.bounds().clip(trial.view());
+                if session.options.rescale_on_clamp {
+                    quickmin_rescale_velocity(&mut state.vel, &dx, &(&trial - &*x));
+                }
+                *x = trial;
+                let ev = obj.value_and_gradient(x.view());
+                value = ev.0;
+                grad = ev.1;
+                #[cfg(feature = "highs")]
+                if boxed {
+                    crate::box_objective::project_tangent(obj.bounds(), x, &mut state.vel);
+                }
+            }
+            Overlay::Ode12r(state) => {
+                // Forward Euler on P^{-1} F with the ODE12r acceptance test.
+                // A rejected trial keeps x, value and grad; the next call
+                // reads them from the cache and retries with a shorter h.
+                #[allow(unused_mut)]
+                let mut force = grad.mapv(|g| -g);
+                #[allow(unused_mut)]
+                let mut steepest = metric_vector(&self.precon, &force)?;
+                #[cfg(feature = "highs")]
+                if boxed {
+                    crate::box_objective::project_tangent(obj.bounds(), x, &mut force);
+                    crate::box_objective::project_tangent(obj.bounds(), x, &mut steepest);
+                }
+                let h = state.open();
+                let dx = steepest.mapv(|v| h * v);
+                let proposed = &*x + &dx;
+                let mut trial = proposed.clone();
+                if let Some(cap) = self.atom_maxmove {
+                    scale_step_atom(x, &mut trial, cap);
+                } else if let Some(cap) = self.control.maxmove_cap() {
+                    scale_step(x, &mut trial, cap);
+                }
+                trial = obj.bounds().clip(trial.view());
+                // Only a move the cap or the box changed is shorter than h.
+                // The length ratio of an unchanged move rounds, and one ulp
+                // under h would trip the capped-move floor below.
+                let h_taken = if trial == proposed {
+                    h
+                } else {
+                    crate::ode12r::taken_step(h, &dx, &(&trial - &*x))
+                };
+                let (trial_value, trial_grad) = obj.value_and_gradient(trial.view());
+                #[allow(unused_mut)]
+                let mut force_new = trial_grad.mapv(|g| -g);
+                #[allow(unused_mut)]
+                let mut steepest_new = metric_vector(&self.precon, &force_new)?;
+                #[cfg(feature = "highs")]
+                if boxed {
+                    crate::box_objective::project_tangent(obj.bounds(), &trial, &mut force_new);
+                    crate::box_objective::project_tangent(obj.bounds(), &trial, &mut steepest_new);
+                }
+                let verdict = state.judge(&force, &steepest, &force_new, &steepest_new, h_taken);
+                // An accepted move that the cap shortened is a length the
+                // surface took; the next trial starts no shorter, so the
+                // error estimate of a cap-bound move cannot shrink the
+                // step below the cap it is already held at.
+                if verdict.accepted && h_taken < h {
+                    state.h = state.h.max(h_taken);
+                }
+                if verdict.accepted {
+                    *x = trial;
+                    value = trial_value;
+                    grad = trial_grad;
+                }
+            }
+            Overlay::Diis(state) => {
+                let alpha = diis_alpha;
+                let cap = diis_atom_cap.or(diis_euclidean_cap);
+                let gnorm_now = l2(&grad);
+                state.push(x.clone(), grad.clone());
+                let image = gdiis_point(state.positions(), state.gradients(), alpha, cap);
+                let built = state.gradients().len() >= 2;
+                let gdiis_dir = image.and_then(|y| {
+                    let d = &y - &*x;
+                    (d.dot(&grad) < 0.0 && l2(&d) > 1e-16).then_some(d)
+                });
+                let tried_gdiis = gdiis_dir.is_some();
+                let (dir, open, direct) = if let Some(d) = gdiis_dir {
+                    (d, 1.0, 1.0)
+                } else {
+                    if built {
+                        state.clear();
+                    }
+                    (grad.mapv(|g| -g), self.istep, self.istep)
+                };
+                let t = take_session_step(
+                    obj,
+                    x,
+                    value,
+                    &grad,
+                    dir.view(),
+                    open,
+                    self.linesearch,
+                    &self.control,
+                    self.atom_maxmove,
+                    self.accept,
+                    &mut self.e_hist,
+                    &self.manifold,
+                    direct,
+                    line_options,
+                );
+                energy_stall = t.energy_noise;
+                let force_fell = l2(&t.g) < gnorm_now;
+                if tried_gdiis && !(t.moved && force_fell) {
+                    state.clear();
+                }
+                *x = t.x;
+                value = t.f;
+                grad = t.g;
+                if self.accept != Accept::Step {
+                    self.istep = qn_istep(&self.control);
+                }
+            }
+
+            Overlay::None => {}
+        }
+        self.overlay = overlay;
+        *value_out = value;
+        *grad_out = grad;
+        *energy_out = energy_stall;
+        Ok(())
+    }
+}
+
+// The explicit step policy uses the method's direction and scale once.
+// Other policies retain the configured line search and its initial step
+// on a flat kind. A curved kind takes the retracted trial under the
+// policy: the line search would evaluate the chord, off the set.
+#[allow(clippy::too_many_arguments)]
+fn take_session_step<O>(
+    obj: &O,
+    pos: &Array1<f64>,
+    value: f64,
+    grad: &Array1<f64>,
+    dir: ArrayView1<'_, f64>,
+    istep: f64,
+    linesearch: LineSearch,
+    control: &Control,
+    atom_maxmove: Option<f64>,
+    accept: Accept,
+    e_hist: &mut VecDeque<f64>,
+    manifold: &ManifoldKind,
+    direct_scale: f64,
+    options: LineSearchOptions,
+) -> Taken
+where
+    O: DifferentiableObjective<f64> + ?Sized,
+{
+    if accept != Accept::Step && manifold.is_flat() {
+        return take_step_with_options(
+            obj,
+            pos,
+            value,
+            grad,
+            dir,
+            istep,
+            linesearch,
+            control,
+            atom_maxmove,
+            options,
+        );
+    }
+    let direction = if direct_scale == 1.0 {
+        dir.to_owned()
+    } else {
+        &dir * direct_scale
+    };
+    let (x, f, g, moved) = accept_step(
+        obj,
+        pos,
+        value,
+        grad,
+        &direction,
+        Acceptance {
+            control,
+            accept,
+            e_hist,
+            atom_maxmove,
+            manifold,
+        },
+    );
+    Taken {
+        x,
+        f,
+        g,
+        alpha: if moved { direct_scale } else { 0.0 },
+        moved,
+        energy_noise: false,
     }
 }
 
@@ -4406,6 +5468,9 @@ impl Inner {
                 z_old: Array1::zeros(dim),
                 d_old: Array1::zeros(dim),
                 initialized: false,
+                z_epoch: 0,
+                prev_alpha: 0.0,
+                prev_gd: 0.0,
             },
             Method::Bfgs => Inner::Bfgs {
                 h: Array2::<f64>::eye(dim),
@@ -4443,6 +5508,9 @@ impl Inner {
             },
             Method::Newton { kind } => Inner::Newton { kind: *kind },
             Method::Fire { kind } => Inner::Fire(FireState::new(*kind, dim, istep)),
+            // The overlay on Solver carries the real state. Inner stays a
+            // variant the constraint stepper matches.
+            Method::QuickMin | Method::Ode12r | Method::Diis { .. } => Inner::Steepest,
             Method::Bb => Inner::Bb {
                 prev_s: None,
                 prev_y: None,
@@ -4461,8 +5529,9 @@ impl Inner {
 }
 
 impl Solver {
-    /// Apply [`Control::gtol`] to a newly built L-BFGS session.
+    /// Set the gradient tolerance of the session and its internal solver.
     pub fn with_gtol(mut self, gtol: f64) -> Self {
+        self.control.gtol = gtol;
         if let Inner::Lbfgs(solver) = &mut self.inner {
             solver.gtol = gtol;
         }
@@ -4472,216 +5541,448 @@ impl Solver {
 
 #[cfg(test)]
 mod tests {
-    use eindir_core::{Bounds, Gradient};
-    use ndarray::array;
-
     use super::*;
+    use crate::fire::FireKind;
+    use crate::oracle::Oracle;
+    use ndarray::{ArrayView1, array};
 
-    #[test]
-    fn the_sphere_dogleg_model_matches_the_projected_basis() {
-        let mut solver = Solver::new(Method::Dogleg, Control::default(), 3);
-        solver.set_manifold(ManifoldKind::Sphere);
-        let x = array![0.3, -1.2, 0.7];
-        let hess = array![[2.0, 0.5, -1.0], [0.25, 3.0, 0.4], [-0.6, 1.5, 1.0]];
-        solver.fill_tangent_model(&x, &hess);
-        let basis = solver.tangent_hessian(&x, &hess);
-        let gap = (&solver.tangent.model - &basis)
-            .mapv(f64::abs)
-            .fold(0.0, |a: f64, &b| a.max(b));
-        assert!(
-            gap <= 1e-14,
-            "rank-one model is {gap:e} from the basis expansion"
-        );
-    }
-
-    /// The dogleg point of an oblique kind at radii that reach the Newton
-    /// point, the dogleg segment and the clipped Cauchy point: its tangent
-    /// residual `|s - P s|` and the length of `P s`, the step the session
-    /// retracts. At the first radius the point is the Newton point, and its
-    /// model gradient `H s + g` must be orthogonal to every column of `P`.
-    fn check_dogleg_point(
-        kind: ManifoldKind,
-        x: &Array1<f64>,
-        hess: &Array2<f64>,
-        grad: &Array1<f64>,
-        radii: [f64; 3],
-    ) {
-        let mut solver = Solver::new(Method::Dogleg, Control::default(), x.len());
-        solver.set_manifold(kind.clone());
-        for radius in radii {
-            let s = solver.dogleg_point(x, hess, grad, radius);
-            let residual = l2(&(&s - &kind.project(x, &s)));
-            assert!(
-                residual <= 1e-12,
-                "{} at radius {radius}: tangent residual {residual:e}",
-                kind.as_str()
-            );
-            let mut step = s;
-            kind.project_in_place(x, &mut step);
-            let len = l2(&step);
-            // A point on the trust sphere meets the radius to rounding.
-            assert!(
-                len <= radius * (1.0 + 4.0 * f64::EPSILON),
-                "{} at radius {radius}: projected step {len:e}",
-                kind.as_str()
-            );
-        }
-        let s = solver.dogleg_point(x, hess, grad, radii[0]);
-        let slope = hess.dot(&s) + grad;
-        let worst = solver
-            .projection_columns(x)
-            .columns()
-            .into_iter()
-            .map(|c| c.dot(&slope).abs())
-            .fold(0.0, f64::max);
-        assert!(
-            worst <= 1e-12,
-            "{}: the Newton point is {worst:e} from stationary on the tangent space",
-            kind.as_str()
-        );
-    }
-
-    #[test]
-    fn multinomial_dogleg_point_is_tangent_within_the_radius() {
-        let kind = ManifoldKind::Multinomial;
-        let x = array![0.2, 0.3, 0.5];
-        let hess = array![[2.0, 0.2, 0.1], [0.2, 3.0, 0.0], [0.1, 0.0, 4.0]];
-        let grad = kind.project(&x, &array![1.0, -2.0, 0.5]);
-        check_dogleg_point(kind, &x, &hess, &grad, [10.0, 0.86, 0.3]);
-    }
-
-    /// A symmetric positive definite 9 by 9 Hessian with a coupled band.
-    fn banded_hessian() -> Array2<f64> {
-        Array2::from_shape_fn((9, 9), |(i, j)| match i.abs_diff(j) {
-            0 => 1.0 + 0.5 * i as f64,
-            1 => 0.2,
-            2 => -0.1,
-            _ => 0.0,
+    /// A steep well under a tiny Euclidean cap: every FIRE step is
+    /// clamped, and the velocity has to describe the clamped move.
+    fn steep() -> Oracle<impl Fn(ArrayView1<f64>) -> (f64, Array1<f64>) + Send + Sync> {
+        Oracle::unbounded(2, |x: ArrayView1<f64>| {
+            (
+                500.0 * x.iter().map(|v| v * v).sum::<f64>(),
+                x.mapv(|v| 1000.0 * v),
+            )
         })
     }
 
-    #[test]
-    fn multinomial_ds_dogleg_point_is_tangent_within_the_radius() {
-        let kind = ManifoldKind::multinomial_ds(3);
-        let x = array![0.5, 0.3, 0.2, 0.2, 0.5, 0.3, 0.3, 0.2, 0.5];
-        let v = array![1.0, -2.0, 0.5, 0.3, -0.7, 1.2, -0.4, 0.8, -1.1];
-        let grad = kind.project(&x, &v);
-        check_dogleg_point(kind, &x, &banded_hessian(), &grad, [10.0, 0.85, 0.3]);
+    fn fire_solver(kind: FireKind) -> Solver {
+        Solver::new(
+            Method::Fire { kind },
+            Control {
+                maxiter: 10,
+                gtol: 1e-8,
+                istep: 0.1,
+                maxmove: Some(0.01),
+                ftol_rel: None,
+                noise_floor: None,
+                stop_norm: StopNorm::Two,
+            },
+            2,
+        )
+    }
+
+    fn fire_state(solver: &Solver) -> &FireState {
+        match &solver.inner {
+            Inner::Fire(state) => state,
+            _ => unreachable!("FIRE session"),
+        }
+    }
+
+    /// `f = |x|^2 / 2` whose oracle flips the sign of the gradient's
+    /// first component when `flip` is set: an objective that changes
+    /// between steps, like a min-mode effective gradient after `tau`
+    /// moves.
+    struct Flipping {
+        flip: std::sync::atomic::AtomicBool,
+        calls: std::sync::atomic::AtomicUsize,
+        bounds: eindir_core::Bounds<f64>,
+    }
+
+    impl Objective<f64> for Flipping {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn bounds(&self) -> &eindir_core::Bounds<f64> {
+            &self.bounds
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            self.value_and_gradient(x).0
+        }
+    }
+
+    impl eindir_core::Gradient<f64> for Flipping {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            self.value_and_gradient(x).1
+        }
+    }
+
+    impl DifferentiableObjective<f64> for Flipping {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            use std::sync::atomic::Ordering;
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            let mut g = x.to_owned();
+            if self.flip.load(Ordering::Relaxed) {
+                g[0] = -g[0];
+            }
+            (0.5 * x.dot(&x), g)
+        }
     }
 
     #[test]
-    fn multinomial_sym_dogleg_point_is_tangent_within_the_radius() {
-        let kind = ManifoldKind::multinomial_sym(3);
-        let x = array![0.5, 0.3, 0.2, 0.3, 0.4, 0.3, 0.2, 0.3, 0.5];
-        let v = array![1.0, -2.0, 0.5, 0.3, -0.7, 1.2, -0.4, 0.8, -1.1];
-        let grad = kind.project(&x, &v);
-        check_dogleg_point(kind, &x, &banded_hessian(), &grad, [10.0, 0.8, 0.3]);
+    fn forget_evaluation_re_evaluates_and_keeps_memory() {
+        use std::sync::atomic::Ordering;
+        let obj = Flipping {
+            flip: false.into(),
+            calls: 0.into(),
+            bounds: eindir_core::Bounds::new(array![-1e6, -1e6], array![1e6, 1e6], 0.0),
+        };
+        for method in [
+            Method::Lbfgs { memory: 5 },
+            Method::Fire { kind: FireKind::V2 },
+        ] {
+            let mut solver = Solver::new(
+                method.clone(),
+                Control {
+                    maxiter: 10,
+                    gtol: 1e-12,
+                    istep: 0.1,
+                    maxmove: Some(0.05),
+                    ftol_rel: None,
+                    noise_floor: None,
+                    stop_norm: StopNorm::Two,
+                },
+                2,
+            );
+            solver.set_accept(Accept::Step);
+            obj.flip.store(false, Ordering::Relaxed);
+            let mut x = array![1.0, 0.5];
+            solver.step(&obj, &mut x).unwrap();
+            solver.step(&obj, &mut x).unwrap();
+            let memory = |s: &Solver| match &s.inner {
+                Inner::Lbfgs(l) => l.len() as f64,
+                Inner::Fire(f) => l2(&f.vel),
+                _ => unreachable!(),
+            };
+            let kept = memory(&solver);
+            assert!(kept > 0.0, "{method:?} built no memory");
+            // The oracle changes; the cached gradient at x is stale.
+            obj.flip.store(true, Ordering::Relaxed);
+            solver.forget_evaluation();
+            assert_eq!(memory(&solver), kept, "{method:?} lost its memory");
+            let before = obj.calls.load(Ordering::Relaxed);
+            let start = x.clone();
+            solver.step(&obj, &mut x).unwrap();
+            // One call at the unchanged x (the re-evaluation) and one at
+            // the step's trial under Accept::Step. FIRE 2.0 adds a call
+            // when the half-step-back correction is nonzero, because that
+            // correction is scored before the forward step.
+            let want = if matches!(method, Method::Fire { kind: FireKind::V2 }) {
+                3
+            } else {
+                2
+            };
+            assert_eq!(
+                obj.calls.load(Ordering::Relaxed) - before,
+                want,
+                "{method:?}"
+            );
+            // Without forget_evaluation the cached point is reused.
+            let before = obj.calls.load(Ordering::Relaxed);
+            solver.step(&obj, &mut x).unwrap();
+            assert_eq!(obj.calls.load(Ordering::Relaxed) - before, 1, "{method:?}");
+            assert!(x != start);
+        }
     }
 
-    /// Bound on `|x . v| / |v|`, the bound of the sphere trial tests.
-    /// One projection leaves a normal part of a few ulps, and the
-    /// secant of a chord of length `l` has a normal part `l / 2`.
-    const TANGENT: f64 = 1e-10;
+    #[test]
+    fn fire_v2_velocity_times_dt_is_the_clamped_move() {
+        let obj = steep();
+        let mut solver = fire_solver(FireKind::V2);
+        let mut x = array![1.0, 1.0];
+        for _ in 0..5 {
+            let before = x.clone();
+            solver.step(&obj, &mut x).unwrap();
+            let dx = &x - &before;
+            let moved = l2(&dx);
+            assert!((moved - 0.01).abs() <= 1e-12, "clamp did not bind: {moved}");
+            // FIRE 2.0 adapts dt, then steps dx = vel * dt; nothing
+            // touches vel after the step, so vel * dt is the move taken.
+            let state = fire_state(&solver);
+            for i in 0..2 {
+                assert!(
+                    (state.vel[i] * state.dt - dx[i]).abs() <= 1e-12,
+                    "vel {} dt {} dx {}",
+                    state.vel[i],
+                    state.dt,
+                    dx[i]
+                );
+            }
+        }
+    }
 
-    /// f(x) = -x_3.
-    struct Lift(Bounds<f64>);
+    #[test]
+    fn fire_v1_velocity_is_bounded_by_the_clamped_move() {
+        let obj = steep();
+        let mut solver = fire_solver(FireKind::V1);
+        let mut x = array![1.0, 1.0];
+        for _ in 0..5 {
+            let dt = fire_state(&solver).dt;
+            let before = x.clone();
+            solver.step(&obj, &mut x).unwrap();
+            let moved = l2(&(&x - &before));
+            assert!((moved - 0.01).abs() <= 1e-12, "clamp did not bind: {moved}");
+            // FIRE 1.0 steps dx = vel * dt, then mixes: the mix keeps
+            // |vel| at most what it was, and a reset zeroes it. Either way
+            // |vel| cannot exceed the clamped move over the dt used.
+            let vnorm = l2(&fire_state(&solver).vel);
+            assert!(
+                vnorm <= moved / dt + 1e-12,
+                "vel {vnorm} exceeds {} for a move of {moved} over dt {dt}",
+                moved / dt
+            );
+        }
+    }
+}
 
-    impl Objective<f64> for Lift {
+#[cfg(test)]
+mod retained_neb_guard_tests {
+    use super::*;
+    use eindir_core::{Bounds, Gradient};
+    use ndarray::{ArrayView1, array};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Scripted {
+        grads: Vec<Array1<f64>>,
+        n: AtomicUsize,
+    }
+
+    impl Objective<f64> for Scripted {
         fn dim(&self) -> usize {
             3
         }
         fn bounds(&self) -> &Bounds<f64> {
-            &self.0
+            use std::sync::OnceLock;
+            static B: OnceLock<Bounds<f64>> = OnceLock::new();
+            B.get_or_init(|| {
+                Bounds::new(array![-10.0, -10.0, -10.0], array![10.0, 10.0, 10.0], 0.0)
+            })
         }
-        fn eval(&self, x: ArrayView1<f64>) -> f64 {
-            -x[2]
+        fn eval(&self, _x: ArrayView1<f64>) -> f64 {
+            0.0
         }
     }
 
-    impl Gradient<f64> for Lift {
+    impl Gradient<f64> for Scripted {
         fn dim(&self) -> usize {
             3
         }
-        fn grad(&self, _x: ArrayView1<f64>) -> Array1<f64> {
-            array![0.0, 0.0, -1.0]
+        fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+            self.value_and_gradient(x).1
         }
     }
 
-    impl DifferentiableObjective<f64> for Lift {
-        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
-            (self.eval(x), self.grad(x))
+    impl DifferentiableObjective<f64> for Scripted {
+        fn value_and_gradient(&self, _x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            let i = self.n.load(Ordering::Relaxed).min(self.grads.len() - 1);
+            let g = self.grads[i].clone();
+            self.n.fetch_add(1, Ordering::Relaxed);
+            (0.0, g)
         }
     }
 
-    /// The sphere walk of `tests/manifold_trial_point.rs`: twelve steps
-    /// from (1, 0, 0) under a Euclidean cap of 0.1.
     #[test]
-    fn fire2_velocity_is_tangent_after_a_curved_step() {
-        let steps = 12;
-        let control = Control {
-            maxiter: steps,
-            gtol: 1e-12,
-            istep: 1.0,
-            maxmove: Some(0.1),
-            ..Default::default()
+    fn refused_step_keeps_the_previous_lbfgs_pair() {
+        let obj = Scripted {
+            grads: vec![
+                array![-1.0, 0.0, 0.0],
+                array![-0.5, 0.0, 0.0],
+                array![-1.0, 0.0, 0.0],
+            ],
+            n: AtomicUsize::new(0),
         };
-        let lift = Lift(Bounds::new(
-            Array1::from_elem(3, -1e6),
-            Array1::from_elem(3, 1e6),
-            0.0,
-        ));
-        let mut solver = Solver::new(Method::Fire { kind: FireKind::V2 }, control, 3);
-        solver.set_manifold(ManifoldKind::Sphere);
-        let mut x = array![1.0, 0.0, 0.0];
-        let mut worst = 0.0_f64;
-        for _ in 0..steps {
-            solver.step(&lift, &mut x).unwrap();
-            let Inner::Fire(state) = &solver.inner else {
-                unreachable!()
-            };
-            let speed = l2(&state.vel);
-            if speed > 0.0 {
-                worst = worst.max(x.dot(&state.vel).abs() / speed);
+        let mut x = array![0.0, 0.0, 0.0];
+        let mut solver = Solver::new(
+            Method::lbfgs(),
+            Control {
+                maxiter: 2,
+                gtol: 0.0,
+                istep: 1.0,
+                maxmove: None,
+                ftol_rel: None,
+                noise_floor: None,
+                stop_norm: StopNorm::Two,
+            },
+            3,
+        );
+        solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
+        solver.set_accept(Accept::Step);
+        solver.set_atom_maxmove(0.2);
+        solver.step(&obj, &mut x).unwrap();
+        solver.step(&obj, &mut x).unwrap();
+        let pairs = match &solver.inner {
+            Inner::Lbfgs(lbfgs) => lbfgs.len(),
+            _ => panic!("expected L-BFGS"),
+        };
+        assert_eq!(pairs, 1);
+        assert!((x[0] - 0.4).abs() < 1e-12, "x0 {}", x[0]);
+    }
+
+    fn guard_script() -> Scripted {
+        Scripted {
+            grads: vec![
+                array![-100.0, 0.0, 0.0],
+                array![-99.0, 1.0, 0.0],
+                array![-98.0, 1.0, 0.0],
+            ],
+            n: AtomicUsize::new(0),
+        }
+    }
+
+    fn guard_solver(guards: bool) -> Solver {
+        let mut solver = Solver::new(
+            Method::lbfgs(),
+            Control {
+                maxiter: 2,
+                gtol: 0.0,
+                istep: 1.0,
+                maxmove: None,
+                ftol_rel: None,
+                noise_floor: None,
+                stop_norm: StopNorm::Two,
+            },
+            3,
+        );
+        solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
+        solver.set_accept(Accept::Step);
+        solver.set_atom_maxmove(0.2);
+        solver.set_lbfgs_neb_guards(guards);
+        solver
+    }
+
+    #[test]
+    fn distance_reset_second_step_follows_h0_times_the_force() {
+        let obj = guard_script();
+        let mut x = array![0.0, 0.0, 0.0];
+        let mut solver = guard_solver(true);
+        solver.step(&obj, &mut x).unwrap();
+        solver.step(&obj, &mut x).unwrap();
+        assert!((x[0] - 0.39998979774019283).abs() < 1e-9, "x0 {}", x[0]);
+        assert!((x[1] - (-0.002020098967072655)).abs() < 1e-9, "x1 {}", x[1]);
+        assert!(x[2].abs() < 1e-12, "x2 {}", x[2]);
+        let pairs = match &solver.inner {
+            Inner::Lbfgs(lbfgs) => lbfgs.len(),
+            _ => panic!("expected L-BFGS"),
+        };
+        assert_eq!(pairs, 1);
+    }
+
+    #[test]
+    fn without_the_guard_the_two_loop_step_is_kept() {
+        let obj = guard_script();
+        let mut x = array![0.0, 0.0, 0.0];
+        let mut solver = guard_solver(false);
+        solver.step(&obj, &mut x).unwrap();
+        solver.step(&obj, &mut x).unwrap();
+        assert!((x[0] - 0.3896090211663347).abs() < 1e-8, "x0 {}", x[0]);
+        assert!((x[1] - (-0.06362718831085057)).abs() < 1e-8, "x1 {}", x[1]);
+    }
+
+    /// Ill-conditioned diagonal quadratic. `P` is the Hessian, so
+    /// `P^{-1} g` is the Newton step and CG finishes in at most `n` steps.
+    #[test]
+    fn preconditioned_cg_on_a_diagonal_quadratic_finishes_within_n_steps() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let lam = [1.0e-4, 1.0e-2, 1.0, 1.0e2, 1.0e4, 1.0e6];
+        let n = lam.len();
+        let calls = AtomicUsize::new(0);
+        struct Quad<'a> {
+            lam: &'a [f64],
+            calls: &'a AtomicUsize,
+            bounds: eindir_core::Bounds<f64>,
+        }
+        impl Objective<f64> for Quad<'_> {
+            fn dim(&self) -> usize {
+                self.lam.len()
+            }
+            fn bounds(&self) -> &eindir_core::Bounds<f64> {
+                &self.bounds
+            }
+            fn eval(&self, x: ArrayView1<f64>) -> f64 {
+                self.value_and_gradient(x).0
             }
         }
-        assert!(worst <= TANGENT, "|x . v| / |v| reached {worst:.4e}");
-    }
-
-    #[test]
-    fn the_new_lbfgs_arms_refuse_a_fire_session_and_a_bad_ridge() {
-        let mut fire = Solver::new(Method::Fire { kind: FireKind::V1 }, Control::default(), 3);
-        assert!(fire.set_lbfgs_model_atom(true).is_err());
-        assert!(fire.set_lbfgs_compact_tr(true).is_err());
-        assert!(fire.set_lbfgs_skip_bad(true).is_err());
-        assert!(fire.set_lindh(None).is_err());
-        let mut lbfgs = Solver::new(Method::lbfgs(), Control::default(), 6);
-        assert!(
-            lbfgs
-                .set_lindh(Some(LindhSpec {
-                    z: vec![1],
-                    c_stab: 0.1,
-                    cell: [0.0; 3],
-                }))
-                .is_err()
+        impl eindir_core::Gradient<f64> for Quad<'_> {
+            fn dim(&self) -> usize {
+                self.lam.len()
+            }
+            fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+                self.value_and_gradient(x).1
+            }
+        }
+        impl DifferentiableObjective<f64> for Quad<'_> {
+            fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                let mut f = 0.0;
+                let mut g = Array1::zeros(self.lam.len());
+                for i in 0..self.lam.len() {
+                    f += 0.5 * self.lam[i] * x[i] * x[i];
+                    g[i] = self.lam[i] * x[i];
+                }
+                (f, g)
+            }
+        }
+        let obj = Quad {
+            lam: &lam,
+            calls: &calls,
+            bounds: eindir_core::Bounds::new(
+                Array1::from_elem(n, -1e6),
+                Array1::from_elem(n, 1e6),
+                0.0,
+            ),
+        };
+        let mut x = Array1::ones(n);
+        let mut solver = Solver::new(
+            Method::Nlcg {
+                conjugacy: Conjugacy::PolakRibierePlus,
+                restart: Restart::njws(),
+            },
+            Control {
+                maxiter: 1,
+                gtol: 1e-10,
+                istep: 0.01,
+                maxmove: None,
+                ftol_rel: None,
+                noise_floor: None,
+                stop_norm: StopNorm::Two,
+            },
+            n,
         );
+        // P^{-1} g is a Newton step longer than the default per-atom cap.
+        // Finite termination needs that step.
+        solver.set_atom_maxmove(0.0);
+        solver.set_linesearch(LineSearch::Wolfe {
+            c1: 1e-4,
+            c2: 0.1,
+            maxiter: 20,
+        });
+        solver.precon = Some(Slot::Exp(crate::precon::ExpState::holding_diagonal(
+            &lam,
+            x.view(),
+        )));
+        solver.metric_epoch = 1;
+        let mut steps = 0usize;
+        let mut used = 0usize;
+        let mut gnorm = f64::INFINITY;
+        for _ in 0..n + 2 {
+            let before = calls.load(Ordering::Relaxed);
+            let rep = solver.step(&obj, &mut x).unwrap();
+            used += calls.load(Ordering::Relaxed) - before;
+            steps += 1;
+            gnorm = rep.grad_norm;
+            if gnorm < 1e-8 {
+                break;
+            }
+        }
+        assert!(gnorm < 1e-8, "not converged, |g| {gnorm}, x {x:?}");
+        assert!(steps <= n, "steps {steps} exceed n {n}");
         assert!(
-            lbfgs
-                .set_lindh(Some(LindhSpec {
-                    z: vec![1, 1],
-                    c_stab: 0.0,
-                    cell: [0.0; 3],
-                }))
-                .is_err()
+            steps > 0 && used <= steps * 2,
+            "calls {used} over {steps} steps"
         );
-        lbfgs
-            .set_lindh(Some(LindhSpec {
-                z: vec![1, 8],
-                c_stab: 0.1,
-                cell: [0.0; 3],
-            }))
-            .unwrap();
-        lbfgs.set_lbfgs_model_atom(true).unwrap();
-        lbfgs.set_lbfgs_compact_tr(true).unwrap();
-        lbfgs.set_lbfgs_skip_bad(true).unwrap();
     }
 }

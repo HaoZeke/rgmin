@@ -579,11 +579,7 @@ fn start(unit: f64) -> Array1<f64> {
 }
 
 fn control(maxiter: usize, gtol: f64) -> Control {
-    Control {
-        maxiter,
-        gtol,
-        ..Default::default()
-    }
+    Control::default().with_maxiter(maxiter).with_gtol(gtol)
 }
 
 fn assert_at_minimum(x: &Array1<f64>, value: f64, what: &str) {
@@ -615,10 +611,7 @@ fn riemannian_lbfgs_and_gradient_descent_converge_on_the_hyperplane() {
     let problem = Hyperplane::new(1.0);
     // Gradient descent takes a fixed step below 2 / L for the largest
     // curvature in the product metric, with the energy test as safeguard.
-    let descent_control = Control {
-        istep: 0.1,
-        ..control(5000, 1e-8)
-    };
+    let descent_control = control(5000, 1e-8).with_istep(0.1);
     let mut descent = Solver::new(Method::Steepest, descent_control, 2 * N);
     descent
         .set_product(hyperplane_factors(POSITION_WEIGHT))

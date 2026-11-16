@@ -28,6 +28,22 @@ pub enum Error {
         /// Length of the working vector.
         got: usize,
     },
+    /// A manifold factory refused its shape.
+    #[error("{kind} rejected shape n = {n}, p = {p}")]
+    ManifoldShape {
+        /// Token (`stiefel`, `grassmann`, `unitary`).
+        kind: &'static str,
+        /// Ambient size.
+        n: usize,
+        /// Column or subspace count; `n` for a square factor.
+        p: usize,
+    },
+    /// The DLPack device tag names a backend this build does not carry.
+    #[error("DLPack device {device_type} has no kernel backend in this build (CPU only)")]
+    UnsupportedDevice {
+        /// The DLPack `DLDeviceType` discriminant that was refused.
+        device_type: i32,
+    },
     /// SCG cannot make progress (non-finite objective everywhere it
     /// can step, or damping at its limit).
     #[error("SCG stalled: {what}")]
@@ -49,13 +65,9 @@ pub enum Error {
         /// Outer iterations completed before the second refusal.
         steps: usize,
     },
-    /// The trust radius fell below its floor. Newton-CG reaches it
-    /// without an acceptable step: a non-finite gradient, a broken
-    /// curvature action, or an objective that rejects every trial the
-    /// model proposes. Session L-BFGS under
-    /// [`crate::Solver::set_lbfgs_trust_radius`] also returns it when an
-    /// accepted ratio leaves the Burdakov radius below `1e-15`, and
-    /// discards that trial.
+    /// The trust region collapsed without an acceptable step: a
+    /// non-finite gradient, a broken curvature action, or an
+    /// objective that rejects every trial the model proposes.
     #[error("trust region collapsed after {steps} steps")]
     TrustCollapsed {
         /// Outer iterations completed when the radius hit its floor.
@@ -77,17 +89,14 @@ pub enum Error {
         /// What the host callback failed to produce.
         what: &'static str,
     },
-    /// The exponential preconditioner rejected its inputs or its μ estimate.
-    #[error("exp preconditioner: {what}")]
-    Precon {
-        /// What the assembly or the estimate refused.
-        what: &'static str,
-    },
+    /// The dense QN family cannot resolve the requested trust radius.
+    #[error("restricted QN step did not converge")]
+    RestrictedStep,
     /// Named eigensolver is not linked in this build. Fail closed:
     /// the waist does not silently fall back to Lanczos.
     #[error("eigensolver {kind} is not linked in this build")]
     EigenUnavailable {
-        /// Closed-enum name (`elpa`, `primme`, ...).
+        /// Closed-enum name of the requested backend.
         kind: &'static str,
     },
     /// Block width is not in `1..=dim`.
@@ -104,6 +113,80 @@ pub enum Error {
         /// What was refused.
         what: &'static str,
     },
+    /// Linked SLEPc EPS rejected the typed configuration or the pair.
+    #[error("SLEPc: {what}")]
+    Slepc {
+        /// What the typed EPS/ST call failed to produce.
+        what: &'static str,
+    },
+    /// Linked PRIMME `dprimme` rejected the typed configuration or the pair.
+    #[error("PRIMME: {what}")]
+    Primme {
+        /// What the typed `primme_params` / `dprimme` call failed to produce.
+        what: &'static str,
+    },
+    /// Linked ChASE `dchase` rejected the assembled dense pair.
+    #[error("ChASE: {what}")]
+    Chase {
+        /// What the typed `dchase_init_` / `dchase_` call failed to produce.
+        what: &'static str,
+    },
+    /// Linked libkrylov `ckrylov_solve_real_equation` rejected the pair.
+    #[error("libkrylov: {what}")]
+    Libkrylov {
+        /// What the typed ckrylov call failed to produce.
+        what: &'static str,
+    },
+    /// Partial-spectrum window must start at the lowest pair.
+    #[error("eigensolver {kind} begin must be 0, got {begin}")]
+    EigenBegin {
+        /// Closed-enum name (`dlaFuture`, ...).
+        kind: &'static str,
+        /// Requested first index.
+        begin: usize,
+    },
+    /// Dense assembled-H backend is gated on [`crate::DENSE_EIGEN_CUTOFF`].
+    #[error("eigensolver {kind} needs n >= {cutoff}, got {n}")]
+    EigenDenseCutoff {
+        /// Closed-enum name (`dlaFuture`, ...).
+        kind: &'static str,
+        /// Matrix order.
+        n: usize,
+        /// Cutoff (`DENSE_EIGEN_CUTOFF`).
+        cutoff: usize,
+    },
+    /// Quick-min was asked for something its session does not hold.
+    #[error("quick-min: {what}")]
+    QuickMin {
+        /// What the call refused.
+        what: &'static str,
+    },
+    /// A geometry preconditioner rejected its inputs or its μ estimate.
+    #[error("preconditioner: {what}")]
+    Precon {
+        /// What the assembly or the estimate refused.
+        what: &'static str,
+    },
+    /// ECnoise was given a sample or a line probe it cannot run.
+    #[error("ecnoise: {what}")]
+    EcNoise {
+        /// What the call refused.
+        what: &'static str,
+    },
+    /// Named backend only computes the full spectrum. Partial `nev`
+    /// is refused rather than silently solved as `n` and trimmed.
+    #[error("eigensolver {kind} is full-spectrum only; nev {nev} < n {n}")]
+    EigenFullSpectrum {
+        /// Closed-enum name (`eigenExa`, ...).
+        kind: &'static str,
+        /// Requested pair count.
+        nev: usize,
+        /// Matrix order.
+        n: usize,
+    },
+    /// A CON checkpoint could not be written or read.
+    #[error("checkpoint: {0}")]
+    Checkpoint(String),
     /// [`crate::Method::from_name`] did not recognize the token.
     #[error("unknown method '{name}'")]
     UnknownMethod {
@@ -146,6 +229,9 @@ pub enum Error {
         /// What was refused.
         what: &'static str,
     },
+    /// [`crate::RiemannianManifold`] refused a shape, a point or a step.
+    #[error("manifold: {0}")]
+    ManifoldArgument(String),
     /// [`crate::manifold::ProductManifold::new`] refused a factor.
     #[error("product factor {index}: {what}")]
     ProductFactor {

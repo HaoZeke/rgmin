@@ -38,21 +38,19 @@ fn lj7_start() -> Array1<f64> {
 }
 
 fn lbfgs() -> Method {
-    Method::Lbfgs { memory: 20 }
+    Method::lbfgs_with_memory(20)
 }
 
 fn fire() -> Method {
-    Method::Fire { kind: FireKind::V1 }
+    Method::fire(FireKind::V1)
 }
 
 fn session(method: Method, gtol: f64, norm: Option<StopNorm>) -> Solver {
-    let control = Control {
-        maxiter: 2000,
-        gtol,
-        istep: 0.1,
-        maxmove: None,
-        ..Default::default()
-    };
+    let control = Control::default()
+        .with_maxiter(2000)
+        .with_gtol(gtol)
+        .with_istep(0.1)
+        .with_maxmove(None);
     let mut s = Solver::new(method, control, 21);
     s.set_atom_maxmove(0.2);
     if let Some(norm) = norm {
@@ -112,13 +110,11 @@ fn max_atom_session_stops_where_the_two_norm_session_moves() {
                 calls.fetch_add(1, Ordering::Relaxed);
                 (0.5 * x.dot(&x), x.to_owned())
             });
-            let control = Control {
-                maxiter: 10,
-                gtol: 1.0,
-                istep: 0.1,
-                maxmove: None,
-                ..Default::default()
-            };
+            let control = Control::default()
+                .with_maxiter(10)
+                .with_gtol(1.0)
+                .with_istep(0.1)
+                .with_maxmove(None);
             let mut s = Solver::new(method(), control, 12);
             s.set_stop_norm(norm);
             let mut x = start.clone();
@@ -149,8 +145,8 @@ fn report_carries_the_gradient_its_norm_measures() {
             let mut x = lj7_start();
             for _ in 0..25 {
                 let rep = s.step(&obj, &mut x).unwrap();
-                let grad = rep.grad.as_ref().expect("session report has a gradient");
-                assert_eq!(grad, &lj_cluster(rep.coords.view()).1);
+                let grad = rep.grad.expect("session report has a gradient");
+                assert_eq!(grad, lj_cluster(rep.coords.view()).1);
                 assert_eq!(rep.grad_norm, norm.unwrap_or_default().of(grad.view()));
                 assert_eq!(rep.stop_norm, norm.unwrap_or_default());
             }
@@ -191,13 +187,11 @@ fn max_atom_run_is_a_prefix_of_the_two_norm_run() {
 }
 
 fn from_control(method: Method, gtol: f64, norm: StopNorm) -> Solver {
-    let control = Control {
-        maxiter: 2000,
-        gtol,
-        istep: 0.1,
-        stop_norm: norm,
-        ..Default::default()
-    };
+    let control = Control::default()
+        .with_maxiter(2000)
+        .with_gtol(gtol)
+        .with_istep(0.1)
+        .with_stop_norm(norm);
     let mut s = Solver::new(method, control, 21);
     s.set_atom_maxmove(0.2);
     s
@@ -254,13 +248,14 @@ fn every_control_norm_stops_before_the_two_norm() {
 /// and reports the two-norm under the same `Control`.
 #[test]
 fn report_names_the_norm_of_grad_norm() {
-    let control = Control {
-        maxiter: 2000,
-        gtol: 0.01,
-        istep: 0.1,
-        maxmove: Some(0.2),
-        stop_norm: StopNorm::MaxAtom,
-    };
+    let control = Control::default()
+        .with_maxiter(2000)
+        .with_gtol(0.01)
+        .with_istep(0.1)
+        .with_maxmove(0.2)
+        .with_stop_norm(StopNorm::MaxAtom)
+        .with_ftol_rel(None)
+        .with_noise_floor(None);
     let obj = Oracle::unbounded(21, lj_cluster);
     let rep =
         rgmin::minimize_method(&obj, lj7_start(), &control, fire(), LineSearch::default()).unwrap();

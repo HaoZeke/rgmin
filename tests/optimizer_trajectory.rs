@@ -65,21 +65,18 @@ fn hash_report(mut hash: u64, value: f64, coords: &Array1<f64>, grad_norm: f64) 
 }
 
 fn control(steps: usize) -> Control {
-    Control {
-        maxiter: steps,
-        gtol: 0.0,
-        istep: 0.1,
-        maxmove: None,
-        stop_norm: rgmin::StopNorm::Two,
-    }
+    Control::default()
+        .with_maxiter(steps)
+        .with_gtol(0.0)
+        .with_istep(0.1)
+        .with_maxmove(None)
+        .with_stop_norm(rgmin::StopNorm::Two)
+        .with_ftol_rel(None)
+        .with_noise_floor(None)
 }
 
 fn wolfe() -> LineSearch {
-    LineSearch::Wolfe {
-        c1: 1e-4,
-        c2: 0.9,
-        maxiter: 20,
-    }
+    LineSearch::wolfe(1e-4, 0.9, 20)
 }
 
 fn hash_oneshot(method: Method, linesearch: LineSearch, natoms: usize, steps: usize) -> u64 {
@@ -136,25 +133,19 @@ fn morse_chain_iterates_stay_bit_identical() {
             hash_oneshot(Method::adam(), LineSearch::default(), N, STEPS),
         ),
         ("lbfgs-session", hash_session(Method::lbfgs(), N, STEPS)),
-        (
-            "fire1",
-            hash_session(Method::Fire { kind: FireKind::V1 }, N, STEPS),
-        ),
-        (
-            "fire2",
-            hash_session(Method::Fire { kind: FireKind::V2 }, N, STEPS),
-        ),
+        ("fire1", hash_session(Method::fire(FireKind::V1), N, STEPS)),
+        ("fire2", hash_session(Method::fire(FireKind::V2), N, STEPS)),
     ];
     for (name, hash) in got {
         let want = match name {
-            "lbfgs" => 0x20cce606614e993a,
-            "lbfgs-wolfe" => 0xc2156ead0b735471,
-            "nlcg" => 0xf79e4ea9957c7702,
-            "sd" => 0x2252179ee1695692,
-            "adam" => 0xbf23ac7de4adede3,
+            "lbfgs" => 0x8fa602d6fc6cce2d,
+            "lbfgs-wolfe" => 0x8fa602d6fc6cce2d,
+            "nlcg" => 0x0e21edbc2819e7a2,
+            "sd" => 0xe7a20697ff9ba6cc,
+            "adam" => 0x15b5731158a5e4f9,
             "lbfgs-session" => 0x2fcc34118a8f8315,
-            "fire1" => 0x91356a7e96d8c8d4,
-            "fire2" => 0xdbdb7fbf910adad6,
+            "fire1" => 0x9125a47e9685b768,
+            "fire2" => 0xdbccc6bf90cca531,
             _ => panic!("unknown {name}"),
         };
         assert_eq!(hash, want, "{name} trajectory hash {hash:#x} != {want:#x}");

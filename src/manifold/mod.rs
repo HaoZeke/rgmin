@@ -24,6 +24,9 @@
 //! [`ManifoldKind::SphereComplex`] is manopt `spherecomplexfactory`.
 //! [`ManifoldKind::Positive`] is manopt `positivefactory`.
 //! [`ManifoldKind::CenteredMatrix`] is manopt `centeredmatrixfactory`.
+//! [`RiemannianManifold`] is a runtime product of Stiefel and SPD factors
+//! on column-major buffers, with the exponential, logarithm, metric and
+//! parallel transport of each factor.
 //! [`ManifoldKind::Product`] is manopt `productmanifold` with a weight on
 //! each factor metric; [`ManifoldKind::power`] is `powermanifold`.
 //! [`ManifoldKind::SubspaceSphere`] is the unit sphere of a linear
@@ -63,6 +66,26 @@ macro_rules! with_kind {
             }
             ManifoldKind::MwRigid => {
                 let $f = MwRigid;
+                $body
+            }
+            ManifoldKind::Grassmann => {
+                let $f = GrassmannLine;
+                $body
+            }
+            ManifoldKind::GrassmannP { n, p } => {
+                let $f = Grassmann { n: *n, p: *p };
+                $body
+            }
+            ManifoldKind::Hyperbolic => {
+                let $f = Hyperbolic;
+                $body
+            }
+            ManifoldKind::PoincareBall => {
+                let $f = PoincareBall;
+                $body
+            }
+            ManifoldKind::Unitary { n } => {
+                let $f = Unitary { n: *n };
                 $body
             }
             ManifoldKind::Oblique { n, m } => {
@@ -184,13 +207,17 @@ mod complex_circle;
 mod constant;
 mod euclidean;
 mod euclidean_complex;
+mod grassmann;
+mod hyperbolic;
 mod multinomial;
 mod multinomial_ds;
 mod multinomial_sym;
 mod mw_rigid;
 mod oblique;
+mod poincare;
 mod positive;
 mod product;
+mod riemannian;
 mod rigid_quotient;
 mod se3;
 mod skewsymmetric;
@@ -201,10 +228,12 @@ mod sphere_complex;
 mod stiefel;
 mod subspace_sphere;
 mod symmetric;
+mod unitary;
 
 pub use centered::{
-    CenteredMatrix, inner as inner_centered, is_centered, pack as pack_centered,
-    typical_dist as typical_dist_centered, unpack as unpack_centered,
+    CenterMode, CenteredMatrix, inner as inner_centered, is_centered, is_centered_mode,
+    pack as pack_centered, typical_dist as typical_dist_centered,
+    typical_dist_mode as typical_dist_centered_mode, unpack as unpack_centered,
 };
 pub use complex_circle::ComplexCircle;
 pub use constant::{
@@ -214,6 +243,8 @@ pub use euclidean::Euclidean;
 pub use euclidean_complex::{
     EuclideanComplex, inner as inner_cplx, is_euclidean_complex, typical_dist as typical_dist_cplx,
 };
+pub use grassmann::Grassmann;
+pub use hyperbolic::{Hyperbolic, minkowski, pack, unpack};
 pub use multinomial::Multinomial;
 pub use multinomial_ds::{
     MultinomialDoublyStochastic, inner as inner_ds, is_doubly_stochastic, pack as pack_ds,
@@ -225,8 +256,10 @@ pub use multinomial_sym::{
 };
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
+pub use poincare::PoincareBall;
 pub use positive::{Positive, inner as inner_pos, is_positive, typical_dist as typical_dist_pos};
 pub use product::{ProductFactor, ProductManifold, TangentMetric};
+pub use riemannian::{ManifoldFactor, RiemannianManifold, SpdMetric, StiefelRetraction};
 pub use rigid_quotient::RigidQuotient;
 pub use se3::Se3;
 pub use skewsymmetric::{
@@ -244,6 +277,10 @@ pub use subspace_sphere::SubspaceSphere;
 pub use symmetric::{
     Symmetric, inner as inner_sym, is_symmetric, pack as pack_sym, side as side_sym,
     typical_dist as typical_dist_sym, unpack as unpack_sym,
+};
+pub use unitary::{
+    Unitary, inner as inner_unitary, is_unitary, pack as pack_unitary, side as side_unitary,
+    typical_dist as typical_dist_unitary, unpack as unpack_unitary,
 };
 
 /// Which embedded geometry a session retracts onto.
@@ -267,6 +304,24 @@ pub enum ManifoldKind {
     /// Mass-weighted Eckart: Sella IRC / Page–McIver metric on
     /// the same quotient. Masses from [`crate::Solver::set_masses`].
     MwRigid,
+    /// Real Grassmann Gr(n,1), or the session's configured factor shape.
+    Grassmann,
+    /// Real Grassmann Gr(n,p), packed column-major.
+    GrassmannP {
+        /// Ambient dimension.
+        n: usize,
+        /// Number of orthonormal columns.
+        p: usize,
+    },
+    /// Hyperboloid in the Minkowski metric, packed length at least two.
+    Hyperbolic,
+    /// Open unit ball with the Poincare metric.
+    PoincareBall,
+    /// Complex unitary U(n), interleaved row-major length 2*n*n.
+    Unitary {
+        /// Matrix side length.
+        n: usize,
+    },
     /// Product of `m` unit spheres in \(\mathbb{R}^n\). Packed
     /// column-major, length `n*m`. manopt `obliquefactory`.
     Oblique {
@@ -286,9 +341,8 @@ pub enum ManifoldKind {
         /// Orthonormal columns. Must be `> 1`.
         p: usize,
     },
-    /// Symmetric positive definite n-by-n, row-major n², in the Frobenius
-    /// metric. The set and retraction of manopt
-    /// `sympositivedefinitefactory`, whose metric is affine-invariant.
+    /// Symmetric positive definite n-by-n, row-major n².
+    /// manopt `sympositivedefinitefactory` (affine-invariant).
     Spd,
     /// Real symmetric n-by-n, row-major n².
     /// manopt `symmetricfactory` (Frobenius / Euclidean subspace).
@@ -366,6 +420,67 @@ pub enum ManifoldKind {
 }
 
 impl ManifoldKind {
+    /// True when the retraction is the translation `x + v`.
+    pub(crate) fn retract_is_translation(&self) -> bool {
+        matches!(self, Self::Euclidean | Self::RigidQuotient | Self::MwRigid)
+    }
+
+    /// Complex unitary U(n), interleaved row-major length 2*n*n.
+    pub fn unitary(n: usize) -> Self {
+        Self::Unitary { n }
+    }
+
+    /// Bind the Grassmann packing to Gr(n,p); no shape means Gr(len,1).
+    pub fn grassmann(shape: Option<(usize, usize)>, len: usize) -> Grassmann {
+        match shape {
+            Some((n, p)) => Grassmann { n, p },
+            None => Grassmann {
+                n: len.max(1),
+                p: 1,
+            },
+        }
+    }
+
+    /// Retract with an optional Grassmann factor shape.
+    pub fn retract_shaped(
+        &self,
+        shape: Option<(usize, usize)>,
+        x: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Array1<f64> {
+        match self {
+            Self::Grassmann => Self::grassmann(shape, x.len()).retract(x, v),
+            other => other.retract(x, v),
+        }
+    }
+
+    /// Project with an optional Grassmann factor shape.
+    pub fn project_shaped(
+        &self,
+        shape: Option<(usize, usize)>,
+        x: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Array1<f64> {
+        match self {
+            Self::Grassmann => Self::grassmann(shape, x.len()).project(x, v),
+            other => other.project(x, v),
+        }
+    }
+
+    /// Transport with an optional Grassmann factor shape.
+    pub fn transport_shaped(
+        &self,
+        shape: Option<(usize, usize)>,
+        x_from: &Array1<f64>,
+        x_to: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Array1<f64> {
+        match self {
+            Self::Grassmann => Self::grassmann(shape, x_to.len()).transport(x_from, x_to, v),
+            other => other.transport(x_from, x_to, v),
+        }
+    }
+
     /// Weighted product of `factors`. See [`ProductManifold::new`].
     pub fn product<I>(factors: I) -> crate::Result<Self>
     where
@@ -497,6 +612,11 @@ impl ManifoldKind {
             | Self::MultinomialSymmetric { .. }
             | Self::SphereComplex { .. }
             | Self::Positive { .. }
+            | Self::Grassmann
+            | Self::GrassmannP { .. }
+            | Self::Hyperbolic
+            | Self::PoincareBall
+            | Self::Unitary { .. }
             | Self::SubspaceSphere(_) => false,
         }
     }
@@ -511,6 +631,10 @@ impl ManifoldKind {
             Self::Se3 => "se3",
             Self::RigidQuotient => "rigid_quotient",
             Self::MwRigid => "mw_rigid",
+            Self::Grassmann | Self::GrassmannP { .. } => "grassmann",
+            Self::Hyperbolic => "hyperbolic",
+            Self::PoincareBall => "poincare_ball",
+            Self::Unitary { .. } => "unitary",
             Self::Oblique { .. } => "oblique",
             Self::Multinomial => "multinomial",
             Self::Spd => "spd",
@@ -648,6 +772,32 @@ pub trait Manifold {
     /// trust region starts from. The default is \(\sqrt{n}\).
     fn typical_dist(&self, n: usize) -> f64 {
         (n as f64).sqrt()
+    }
+}
+
+/// [`ManifoldKind::Grassmann`]: \(\mathrm{Gr}(n, 1)\) with `n` the packed
+/// length of each call, as [`ManifoldKind::grassmann`] binds it.
+struct GrassmannLine;
+
+impl Manifold for GrassmannLine {
+    fn required_dim(&self, n: usize) -> Result<(), usize> {
+        if n >= 2 { Ok(()) } else { Err(n) }
+    }
+
+    fn project(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+        ManifoldKind::grassmann(None, x.len()).project(x, v)
+    }
+
+    fn egrad2rgrad(&self, x: &Array1<f64>, egrad: &Array1<f64>) -> Array1<f64> {
+        ManifoldKind::grassmann(None, x.len()).egrad2rgrad(x, egrad)
+    }
+
+    fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+        ManifoldKind::grassmann(None, x.len()).retract(x, v)
+    }
+
+    fn transport(&self, x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+        ManifoldKind::grassmann(None, x_to.len()).transport(x_from, x_to, v)
     }
 }
 

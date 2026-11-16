@@ -17,13 +17,11 @@ fn rfo_minimization_selects_the_lowest_augmented_mode() {
     let report = minimize_newton(
         &objective,
         array![0.0],
-        &Control {
-            maxiter: 1,
-            gtol: 1e-12,
-            istep: 1.0,
-            maxmove: Some(0.2),
-            ..Default::default()
-        },
+        &Control::default()
+            .with_maxiter(1)
+            .with_gtol(1e-12)
+            .with_istep(1.0)
+            .with_maxmove(0.2),
         NewtonKind::Rfo,
     )
     .unwrap();
@@ -58,16 +56,12 @@ fn constrained_rfo_keeps_every_trial_inside_the_trust_and_box() {
         |x: ArrayView1<f64>| array![[3.0 * x[0] * x[0] - 1.0]],
     );
     let mut solver = Solver::new(
-        Method::Newton {
-            kind: NewtonKind::Rfo,
-        },
-        Control {
-            maxiter: 1,
-            gtol: 1e-12,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Method::newton(NewtonKind::Rfo),
+        Control::default()
+            .with_maxiter(1)
+            .with_gtol(1e-12)
+            .with_istep(1.0)
+            .with_maxmove(None),
         1,
     );
     solver.set_highs(true);
@@ -96,19 +90,17 @@ fn inactive_constraints_preserve_the_rfo_model() {
         |_x: ArrayView1<f64>| array![[2.0]],
     );
     let mut solver = Solver::new(
-        Method::Newton {
-            kind: NewtonKind::Rfo,
-        },
-        Control {
-            maxiter: 1,
-            gtol: 1e-12,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Method::newton(NewtonKind::Rfo),
+        Control::default()
+            .with_maxiter(1)
+            .with_gtol(1e-12)
+            .with_istep(1.0)
+            .with_maxmove(None),
         1,
     );
     solver.set_highs(true);
+    // The augmented step is (sqrt(5) - 1) / 2, past the default cap.
+    solver.set_atom_maxmove(0.0);
     assert!(solver.set_box(Some(vec![-2.0]), Some(vec![2.0])));
     let report = solver.step_hess(&objective, &mut array![0.0]).unwrap();
     let expected = (5.0_f64.sqrt() - 1.0) / 2.0;
@@ -136,16 +128,12 @@ fn constrained_rfo_rejects_without_an_unconstrained_fallback() {
         |x: ArrayView1<f64>| array![[12e30 * x[0] * x[0]]],
     );
     let mut solver = Solver::new(
-        Method::Newton {
-            kind: NewtonKind::Rfo,
-        },
-        Control {
-            maxiter: 1,
-            gtol: 1e-12,
-            istep: 1.0,
-            maxmove: None,
-            ..Default::default()
-        },
+        Method::newton(NewtonKind::Rfo),
+        Control::default()
+            .with_maxiter(1)
+            .with_gtol(1e-12)
+            .with_istep(1.0)
+            .with_maxmove(None),
         1,
     );
     solver.set_highs(true);

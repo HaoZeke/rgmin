@@ -199,35 +199,29 @@ where
         });
         let (method, istep) = match arm {
             Arm::Eon8 | Arm::Scaled | Arm::Wolfe | Arm::Geometry => {
-                (Method::Lbfgs { memory: 8 }, 1.0)
+                (Method::lbfgs_with_memory(8), 1.0)
             }
-            Arm::Eon20 => (Method::Lbfgs { memory: 20 }, 1.0),
-            Arm::Fire => (Method::Fire { kind: FireKind::V1 }, 1.0),
-            Arm::Fire2 => (Method::Fire { kind: FireKind::V2 }, 0.1),
-            Arm::Cg => (Method::Lbfgs { memory: 8 }, 1.0),
+            Arm::Eon20 => (Method::lbfgs_with_memory(20), 1.0),
+            Arm::Fire => (Method::fire(FireKind::V1), 1.0),
+            Arm::Fire2 => (Method::fire(FireKind::V2), 0.1),
+            Arm::Cg => (Method::lbfgs_with_memory(8), 1.0),
         };
-        let control = Control {
-            maxiter: BUDGET,
-            gtol: tol,
-            istep,
-            stop_norm: if cluster {
+        let control = Control::default()
+            .with_maxiter(BUDGET)
+            .with_gtol(tol)
+            .with_istep(istep)
+            .with_stop_norm(if cluster {
                 StopNorm::MaxAtom
             } else {
                 StopNorm::Inf
-            },
-            ..Control::default()
-        };
+            });
         let mut solver = Solver::new(method, control, x0.len());
         match arm {
             Arm::Eon8 | Arm::Eon20 => {
-                solver
-                    .set_lbfgs_step(LbfgsStep::Capped { max_atom: CAP })
-                    .unwrap();
+                solver.set_lbfgs_step(LbfgsStep::capped(CAP)).unwrap();
             }
             Arm::Scaled => {
-                solver
-                    .set_lbfgs_step(LbfgsStep::Scaled { max_atom: CAP })
-                    .unwrap();
+                solver.set_lbfgs_step(LbfgsStep::scaled(CAP)).unwrap();
             }
             Arm::Wolfe => {
                 solver.set_lbfgs_step(LbfgsStep::Wolfe).unwrap();
@@ -245,13 +239,12 @@ where
         let t0 = Instant::now();
         let converged = if matches!(arm, Arm::Cg) {
             let mut raw = x.to_vec();
-            let opts = EonCg {
-                max_move: CAP,
-                gtol: tol,
-                max_iter: BUDGET,
-                cluster,
-                atom_only: false,
-            };
+            let opts = EonCg::default()
+                .with_max_move(CAP)
+                .with_gtol(tol)
+                .with_max_iter(BUDGET)
+                .with_cluster(cluster)
+                .with_atom_only(false);
             let rep = minimize_eon_cg(
                 &mut raw,
                 |xs, gs| {

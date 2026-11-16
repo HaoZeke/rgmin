@@ -10,13 +10,11 @@ use rgmin::{
 };
 
 fn ctrl(maxiter: usize, gtol: f64) -> Control {
-    Control {
-        maxiter,
-        gtol,
-        istep: 1.0,
-        maxmove: None,
-        ..Default::default()
-    }
+    Control::default()
+        .with_maxiter(maxiter)
+        .with_gtol(gtol)
+        .with_istep(1.0)
+        .with_maxmove(None)
 }
 
 #[test]
@@ -129,7 +127,7 @@ fn a_hessian_action_drives_scg_exact_through_the_blanket() {
         &ctrl(200, 1e-8),
         &ScgParams::default(),
         Conjugacy::PolakRibiere,
-        Restart::Njws { threshold: 0.1 },
+        Restart::njws_at(0.1),
     )
     .unwrap();
     assert!(rep.value.abs() < 1e-10, "value {}", rep.value);

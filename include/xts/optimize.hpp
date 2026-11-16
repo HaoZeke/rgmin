@@ -25,11 +25,20 @@ using rgmin::minimize_eindir;
 using rgmin::optimize;
 using rgmin::borrow_cpu_f64;
 using rgmin::lowest_eigenpairs;
+using rgmin::lowest_eigenpairs_ex;
 using rgmin::Solver;
 using rgmin::ConstraintError;
 using rgmin::ConstraintSolver;
 using rgmin::DistanceConstraints;
 using rgmin::LbfgsPairs;
+using rgmin::Manifold;
+
+using rgmin::EigenKind;
+using rgmin::EigenParams;
+using rgmin::EigenOptions;
+using rgmin::lowest_eigenpair;
+using rgmin::Precon;
+using rgmin::SolverConfig;
 
 namespace minimize = rgmin::minimize;
 namespace nlcg = rgmin::nlcg;

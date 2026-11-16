@@ -33,7 +33,7 @@ from typing import Any
 
 import numpy as np
 
-from rgmin._core import Session
+from rgmin._maturin import Session
 
 RESTART_FORMAT = "rgmin-replay-1"
 
@@ -657,9 +657,11 @@ class BarzilaiBorwein(_Scaled):
 class Adam(_Scaled):
     """Kingma-Ba Adam (``beta1=0.9``, ``beta2=0.999``, ``eps=1e-8``).
 
-    The step is ``-learning_rate * mhat / (sqrt(vhat) + eps)``, so
-    each coordinate moves about ``learning_rate`` (Å) per step while
-    its gradient keeps its sign, whatever the gradient's size.
+    The 0.6.0 session scales that direction to unit per-atom length and
+    line-searches from ``learning_rate``, so the opening trial moves the
+    longest atom by about ``learning_rate`` rather than each coordinate
+    by ``learning_rate`` times the raw moment step. ``maxstep`` still
+    caps the longest atomic displacement.
     ``alpha`` scales the gradient, which Adam divides out, so it does
     not set the step here; ``maxstep`` still caps the longest atomic
     displacement. A ``learning_rate`` near ``maxstep`` makes every step

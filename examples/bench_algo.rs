@@ -216,26 +216,22 @@ fn run_arm(p: &Problem, arm: Arm) -> (usize, f64, f64, bool, Vec<EonFeat>) {
         Arm::Fire2 | Arm::FireAbc => 0.1,
         _ => 1.0,
     };
-    let control = Control {
-        maxiter: p.budget,
-        gtol: p.tol,
-        istep,
-        stop_norm: StopNorm::MaxAtom,
-        ..Control::default()
-    };
+    let control = Control::default()
+        .with_maxiter(p.budget)
+        .with_gtol(p.tol)
+        .with_istep(istep)
+        .with_stop_norm(StopNorm::MaxAtom);
     let method = match arm {
-        Arm::Fire | Arm::FireGlobal | Arm::FireExp => Method::Fire { kind: FireKind::V1 },
-        Arm::Fire2 | Arm::FireAbc => Method::Fire { kind: FireKind::V2 },
+        Arm::Fire | Arm::FireGlobal | Arm::FireExp => Method::fire(FireKind::V1),
+        Arm::Fire2 | Arm::FireAbc => Method::fire(FireKind::V2),
         Arm::Bb | Arm::BbNonmonotone => Method::Bb,
-        _ => Method::Lbfgs { memory: 20 },
+        _ => Method::lbfgs_with_memory(20),
     };
     let mut solver = Solver::new(method, control, n);
     match arm {
         Arm::FireGlobal => solver.set_maxmove(CAP),
         Arm::Bb | Arm::BbNonmonotone => solver.set_atom_maxmove(CAP),
-        Arm::Scaled => solver
-            .set_lbfgs_step(LbfgsStep::Scaled { max_atom: CAP })
-            .unwrap(),
+        Arm::Scaled => solver.set_lbfgs_step(LbfgsStep::scaled(CAP)).unwrap(),
         _ => solver.set_atom_maxmove(CAP),
     }
     if matches!(arm, Arm::FixedH0) {
@@ -259,11 +255,7 @@ fn run_arm(p: &Problem, arm: Arm) -> (usize, f64, f64, bool, Vec<EonFeat>) {
     }
     if matches!(arm, Arm::Exp | Arm::FireExp) {
         let nbr = neighbours(&p.x0, p.rc, p.cell);
-        let params = ExpParams {
-            mu: None,
-            r_cut: Some(p.rc),
-            ..ExpParams::default()
-        };
+        let params = ExpParams::default().with_mu(None).with_r_cut(p.rc);
         solver.set_exp(p.x0.view(), &nbr, &params).unwrap();
     }
     let log_steps = matches!(arm, Arm::Eon) && (p.name == "lj75" || p.name == "lj150");
@@ -1142,14 +1134,12 @@ fn run_beat(p: &Problem, opt: BeatOpt, gate_open: bool) -> (usize, f64, f64, boo
         probes = n;
     }
     let n = p.x0.len();
-    let control = Control {
-        maxiter: p.budget,
-        gtol: p.tol,
-        istep: 1.0,
-        stop_norm: StopNorm::MaxAtom,
-        ..Control::default()
-    };
-    let mut solver = Solver::new(Method::Lbfgs { memory: opt.memory }, control, n);
+    let control = Control::default()
+        .with_maxiter(p.budget)
+        .with_gtol(p.tol)
+        .with_istep(1.0)
+        .with_stop_norm(StopNorm::MaxAtom);
+    let mut solver = Solver::new(Method::lbfgs_with_memory(opt.memory), control, n);
     solver.set_atom_maxmove(opt.cap);
     if opt.model_atom {
         solver.set_lbfgs_model_atom(true).unwrap();
@@ -1162,20 +1152,12 @@ fn run_beat(p: &Problem, opt: BeatOpt, gate_open: bool) -> (usize, f64, f64, boo
     }
     if opt.lindh {
         solver
-            .set_lindh(Some(LindhSpec {
-                z: atomic_numbers(p),
-                c_stab: 0.1,
-                cell: p.cell,
-            }))
+            .set_lindh_model(Some(LindhSpec::new(atomic_numbers(p), 0.1, p.cell)))
             .unwrap();
     }
     if install_exp {
         let nbr = neighbours(&p.x0, p.rc, p.cell);
-        let params = ExpParams {
-            mu: None,
-            r_cut: Some(p.rc),
-            ..ExpParams::default()
-        };
+        let params = ExpParams::default().with_mu(None).with_r_cut(p.rc);
         solver.set_exp(p.x0.view(), &nbr, &params).unwrap();
     }
     let calls = AtomicUsize::new(0);
@@ -1221,13 +1203,12 @@ fn run_cg_atom(p: &Problem) -> (usize, f64, f64, bool, f64) {
     let kind = p.kind;
     let cell = p.cell;
     let mut raw = p.x0.to_vec();
-    let opts = EonCg {
-        max_move: CAP,
-        gtol: p.tol,
-        max_iter: p.budget,
-        cluster: true,
-        atom_only: true,
-    };
+    let opts = EonCg::default()
+        .with_max_move(CAP)
+        .with_gtol(p.tol)
+        .with_max_iter(p.budget)
+        .with_cluster(true)
+        .with_atom_only(true);
     let force_ns = std::sync::atomic::AtomicU64::new(0);
     let rep = minimize_eon_cg(
         &mut raw,
@@ -1494,25 +1475,19 @@ fn basin_log(problem: Option<&Problem>) -> String {
         ("lbfgs-lindh-atom", lindh_opt(true)),
     ] {
         let n = p.x0.len();
-        let control = Control {
-            maxiter: p.budget,
-            gtol: p.tol,
-            istep: 1.0,
-            stop_norm: StopNorm::MaxAtom,
-            ..Control::default()
-        };
-        let mut solver = Solver::new(Method::Lbfgs { memory: opt.memory }, control, n);
+        let control = Control::default()
+            .with_maxiter(p.budget)
+            .with_gtol(p.tol)
+            .with_istep(1.0)
+            .with_stop_norm(StopNorm::MaxAtom);
+        let mut solver = Solver::new(Method::lbfgs_with_memory(opt.memory), control, n);
         solver.set_atom_maxmove(opt.cap);
         if opt.model_atom {
             solver.set_lbfgs_model_atom(true).unwrap();
         }
         if opt.lindh {
             solver
-                .set_lindh(Some(LindhSpec {
-                    z: atomic_numbers(p),
-                    c_stab: 0.1,
-                    cell: p.cell,
-                }))
+                .set_lindh_model(Some(LindhSpec::new(atomic_numbers(p), 0.1, p.cell)))
                 .unwrap();
         }
         let oracle = Oracle::unbounded(n, |v: ArrayView1<f64>| {

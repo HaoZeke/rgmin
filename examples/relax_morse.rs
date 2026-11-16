@@ -90,9 +90,9 @@ fn main() {
     let f0 = StopNorm::MaxAtom.of(g0.view());
 
     let methods = [
-        ("lbfgs", Method::Lbfgs { memory: 20 }, 0.2),
-        ("fire", Method::Fire { kind: FireKind::V1 }, 0.1),
-        ("fire2", Method::Fire { kind: FireKind::V2 }, 0.1),
+        ("lbfgs", Method::lbfgs_with_memory(20), 0.2),
+        ("fire", Method::fire(FireKind::V1), 0.1),
+        ("fire2", Method::fire(FireKind::V2), 0.1),
     ];
     println!("method,step,force_calls,energy,fmax");
     for (name, method, istep) in methods {
@@ -101,13 +101,11 @@ fn main() {
             calls.fetch_add(1, Ordering::Relaxed);
             morse(x, cell)
         });
-        let control = Control {
-            maxiter: BUDGET,
-            gtol: FMAX,
-            istep,
-            maxmove: None,
-            ..Default::default()
-        };
+        let control = Control::default()
+            .with_maxiter(BUDGET)
+            .with_gtol(FMAX)
+            .with_istep(istep)
+            .with_maxmove(None);
         let mut solver = Solver::new(method, control, x0.len());
         solver.set_atom_maxmove(0.2);
         solver.set_stop_norm(StopNorm::MaxAtom);

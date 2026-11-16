@@ -16,16 +16,18 @@ use eindir_core::ffi::{
     eindir_objective_has_grad, eindir_objective_t, eindir_status_t,
 };
 use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
-use ndarray::{Array1, Array2, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
 use crate::holonomic::{ConstraintError, ConstraintSolver, DistanceConstraints};
 use crate::precon::{ExpParams, ExpState, Neighbours};
 use crate::{
-    Accept, ApplyHessian, Conjugacy, Control, DirectionalCurvature, EigenParams, EigensolverKind,
-    Error, HessianObjective, HessianOracle, HessianVector, HvpOracle, LbfgsH0, LbfgsPairs,
-    LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart, ScgParams, SearchStep,
-    Solver, StopNorm, SuppliedSearch, lowest_eigenpairs, lowest_mode, minimize_method,
-    minimize_method_hess, minimize_method_hvp, minimize_scg, minimize_scg_exact,
+    Accept, ApplyBlockPreconditioner, ApplyHessian, Conjugacy, Control, DirectionalCurvature,
+    EigenParams, EigensolverKind, Error, HessianObjective, HessianOracle, HessianVector, HvpOracle,
+    LbfgsH0, LbfgsPairs, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart,
+    RiemannianManifold, ScgOptions, ScgParams, ScgStepTolerance, SearchStep, Solver, SpdMetric,
+    StiefelRetraction, StopNorm, SuppliedSearch, lowest_eigenpairs, lowest_eigenpairs_precond,
+    lowest_mode, minimize_method, minimize_method_hess, minimize_method_hvp,
+    minimize_scg_exact_with_options, minimize_scg_with_options,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
@@ -50,10 +52,9 @@ pub enum rgmin_status_t {
 fn status_from_error(e: &Error) -> rgmin_status_t {
     set_last_error(&e.to_string());
     match e {
-        Error::Oracle { .. }
-        | Error::FireStalled { .. }
-        | Error::AcceptStalled { .. }
-        | Error::NoDescent { .. } => rgmin_status_t::RGMIN_INTERNAL_ERROR,
+        Error::Oracle { .. } | Error::FireStalled { .. } | Error::AcceptStalled { .. } => {
+            rgmin_status_t::RGMIN_INTERNAL_ERROR
+        }
         Error::EigenUnavailable { .. } => rgmin_status_t::RGMIN_UNAVAILABLE,
         Error::Constraint(c) => {
             LAST_CONSTRAINT.with(|kind| kind.set(constraint_kind(c)));
@@ -76,8 +77,8 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 41;
-pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 45;
+pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 5;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
 #[repr(C)]
@@ -125,14 +126,20 @@ pub enum rgmin_method_t {
     RGMIN_DOGLEG = 19,
     /// FIRE 2.0 (Guénolé 2020).
     RGMIN_FIRE2 = 20,
-    /// Steihaug-Toint Newton-CG. Hessian access is a product, not a matrix.
-    RGMIN_NEWTON_CG = 21,
-    /// Steihaug-Toint Newton-CG with a Nyström preconditioner.
-    RGMIN_NEWTON_PCG = 22,
-    /// Polak-Ribiere-Polyak, `max(0, β)`. SciPy `method="CG"`.
-    RGMIN_POLAK_RIBIERE_PLUS = 23,
-    /// Polak-Ribiere with the eOn Powell restart at threshold 0.5.
-    RGMIN_EON_CG = 24,
+    /// Quick-min. Released 0.5.2 discriminant.
+    RGMIN_QUICKMIN = 21,
+    /// Pulay residual subspace. `memory` 0 means 6 stored pairs.
+    RGMIN_DIIS = 22,
+    /// ODE12r: adaptive Euler on the (preconditioned) force.
+    RGMIN_ODE12R = 23,
+    /// Steihaug-Toint Newton-CG. Released 0.5.2 discriminant.
+    RGMIN_NEWTON_CG = 24,
+    /// Newton-CG with a Nyström preconditioner. Released 0.5.2 discriminant.
+    RGMIN_NEWTON_PCG = 25,
+    /// Polak-Ribiere-Polyak, `max(0, β)`. Develop surface, past the released slots.
+    RGMIN_POLAK_RIBIERE_PLUS = 26,
+    /// eOn Polak-Ribiere with the Powell restart at 0.5. Develop surface.
+    RGMIN_EON_CG = 27,
 }
 
 /// Closed leaf conjugacy. Integers match dest [`Conjugacy`] declaration
@@ -174,6 +181,20 @@ pub enum rgmin_highs_crossover_t {
     RGMIN_HIGHS_CROSSOVER_OFF = 2,
 }
 
+/// Why a finished minimization stopped. `Iterating` is not a C result.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum rgmin_stop_t {
+    /// `||g||` fell below `gtol`.
+    RGMIN_STOP_TOLERANCE = 0,
+    /// The stationarity measure fell below `c * sqrt(n_free) * noise_eps`.
+    RGMIN_STOP_NOISE_FLOOR = 1,
+    /// SCG stopped on its step or objective test with `||g||` still above `gtol`.
+    RGMIN_STOP_STEP_TOLERANCE = 2,
+    /// The iteration budget was spent above every stop.
+    RGMIN_STOP_BUDGET = 3,
+}
+
 /// Iteration controls. `memory` is used only by L-BFGS (0 means 10).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -189,8 +210,15 @@ pub struct rgmin_control_t {
     pub istep: f64,
     /// L-BFGS correction pairs; 0 selects 10.
     pub memory: usize,
-    /// Euclidean cap on each proposed step; non-positive disables the cap.
+    /// Euclidean cap. Positive is the cap. Zero or NaN keeps the
+    /// defaults, including the default per-atom cap. Negative or +inf
+    /// leaves every cap off (layout revision 5; the released 0.5.2
+    /// meaning).
     pub maxmove: f64,
+    /// Gradient-projection noise. Non-positive leaves the floor off.
+    pub noise_eps: f64,
+    /// Floor factor. Non-positive selects 3.
+    pub noise_c: f64,
 }
 
 /// Result written by [`rgmin_minimize`].
@@ -201,8 +229,10 @@ pub struct rgmin_report_t {
     pub value: f64,
     /// Outer iterations.
     pub steps: usize,
-    /// `||∇f||_2`.
+    /// Gradient norm at the accepted point.
     pub grad_norm: f64,
+    /// Which stop produced this report.
+    pub stop: rgmin_stop_t,
 }
 
 /// `f(x)` callback. `x` is a rank-1 f64 DLPack tensor.
@@ -282,6 +312,7 @@ pub enum rgmin_eigen_kind_t {
     RGMIN_EIGEN_DLA_FUTURE = 12,
     RGMIN_EIGEN_EIGENEXA = 13,
     RGMIN_EIGEN_DIMER = 14,
+    RGMIN_EIGEN_LIBKRYLOV = 15,
 }
 
 /// Typed lowest-mode parameters. No string fields. Null at the C
@@ -302,28 +333,6 @@ pub struct rgmin_eigen_params_t {
     pub tol: f64,
 }
 
-/// Separate backend settings. The base parameter record keeps its layout.
-/// Block LOBPCG ignores both fields. Null at the C entry is the default.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct rgmin_eigen_options_t {
-    /// ChASE filter degree. Zero selects a backend default.
-    pub degree: u32,
-    /// ChASE extra search dimensions. Zero selects a backend default.
-    pub extra: u32,
-}
-
-/// One pair from [`rgmin_lowest_eigenpairs`]. `actions` is the product
-/// count of the whole solve, the same value on every pair.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct rgmin_eigenpair_t {
-    /// Ritz value.
-    pub value: f64,
-    /// Hessian-vector products used by the solve.
-    pub actions: usize,
-}
-
 /// Result of [`rgmin_lowest_eigenpair`]. The vector is written to
 /// the caller tensor.
 #[repr(C)]
@@ -341,6 +350,15 @@ pub type rgmin_hvp_fn = unsafe extern "C" fn(
     x: *const DLManagedTensorVersioned,
     v: *const DLManagedTensorVersioned,
     hv_out: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t;
+
+/// Apply preconditioner `T` to one block. `block` and `out` are row-major
+/// n-by-m f64 tensors, rank 2 with shape `(n, m)`. A null function pointer
+/// at [`rgmin_lowest_eigenpairs_ex`] is the identity and is not called.
+pub type rgmin_precond_fn = unsafe extern "C" fn(
+    user: *mut c_void,
+    block: *const DLManagedTensorVersioned,
+    out: *mut DLManagedTensorVersioned,
 ) -> rgmin_status_t;
 
 thread_local! {
@@ -455,6 +473,11 @@ fn method_from_c(m: rgmin_method_t, memory: usize) -> Method {
         rgmin_method_t::RGMIN_FIRE2 => Method::Fire {
             kind: crate::FireKind::V2,
         },
+        rgmin_method_t::RGMIN_QUICKMIN => Method::QuickMin,
+        rgmin_method_t::RGMIN_ODE12R => Method::Ode12r,
+        rgmin_method_t::RGMIN_DIIS => Method::Diis {
+            memory: if memory == 0 { 6 } else { memory },
+        },
         rgmin_method_t::RGMIN_NEWTON_CG => Method::NewtonCg,
         rgmin_method_t::RGMIN_NEWTON_PCG => Method::NewtonPcg,
         rgmin_method_t::RGMIN_POLAK_RIBIERE_PLUS => Method::polak_ribiere_plus(),
@@ -498,6 +521,9 @@ fn method_to_c(method: &Method) -> Result<rgmin_method_t, ()> {
         },
         Method::Bb => rgmin_method_t::RGMIN_BB,
         Method::Dogleg => rgmin_method_t::RGMIN_DOGLEG,
+        Method::QuickMin => rgmin_method_t::RGMIN_QUICKMIN,
+        Method::Ode12r => rgmin_method_t::RGMIN_ODE12R,
+        Method::Diis { .. } => rgmin_method_t::RGMIN_DIIS,
         Method::NewtonCg => rgmin_method_t::RGMIN_NEWTON_CG,
         Method::NewtonPcg => rgmin_method_t::RGMIN_NEWTON_PCG,
     };
@@ -578,16 +604,20 @@ fn eigen_params_from_c(raw: *const rgmin_eigen_params_t) -> Result<EigenParams, 
         return Ok(EigenParams::default());
     }
     let p = unsafe { *raw };
-    let kind = EigensolverKind::from_ordinal(p.kind as u8).ok_or_else(|| {
-        set_last_error(&format!("rgmin_eigen_kind_t unknown ordinal {}", p.kind));
-        rgmin_status_t::RGMIN_INVALID_PARAMETER
-    })?;
+    let kind = u8::try_from(p.kind)
+        .ok()
+        .and_then(EigensolverKind::from_ordinal)
+        .ok_or_else(|| {
+            set_last_error(&format!("rgmin_eigen_kind_t unknown ordinal {}", p.kind));
+            rgmin_status_t::RGMIN_INVALID_PARAMETER
+        })?;
     Ok(EigenParams {
         kind,
         nev: p.nev as usize,
         krylov: p.krylov as usize,
         max_iter: p.max_iter as usize,
         tol: p.tol,
+        ..EigenParams::default()
     })
 }
 
@@ -618,6 +648,37 @@ impl ApplyHessian for CHvp {
     }
 }
 
+struct CPrecond<'a> {
+    precond: rgmin_precond_fn,
+    user: *mut c_void,
+    failed: &'a Cell<bool>,
+}
+
+impl ApplyBlockPreconditioner for CPrecond<'_> {
+    fn apply_block_preconditioner(&self, block: ArrayView2<f64>) -> Array2<f64> {
+        let (n, m) = block.dim();
+        let mut input = block.to_owned();
+        let mut output = Array2::zeros((n, m));
+        let (Some(input_slice), Some(output_slice)) = (input.as_slice_mut(), output.as_slice_mut())
+        else {
+            self.failed.set(true);
+            return Array2::from_elem((n, m), f64::NAN);
+        };
+        let inn = unsafe { borrow_f64_matrix(input_slice.as_mut_ptr(), n, m) };
+        let out = unsafe { borrow_f64_matrix(output_slice.as_mut_ptr(), n, m) };
+        let status = unsafe { (self.precond)(self.user, inn, out) };
+        unsafe {
+            rgmin_tensor_free(inn);
+            rgmin_tensor_free(out);
+        }
+        if status != rgmin_status_t::RGMIN_SUCCESS {
+            self.failed.set(true);
+            return Array2::from_elem((n, m), f64::NAN);
+        }
+        output
+    }
+}
+
 /// Matrix-free lowest Hessian eigenpair. `params == NULL` is Lanczos.
 /// Unlinked kinds return [`rgmin_status_t::RGMIN_UNAVAILABLE`].
 ///
@@ -634,306 +695,17 @@ pub unsafe extern "C" fn rgmin_lowest_eigenpair(
     params: *const rgmin_eigen_params_t,
     out: *mut rgmin_lowest_mode_t,
 ) -> rgmin_status_t {
-    let Some(hvp) = hvp else {
-        set_last_error("rgmin_lowest_eigenpair: null hvp");
-        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-    };
-    if out.is_null() {
-        set_last_error("rgmin_lowest_eigenpair: null out");
-        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-    }
-    let xs = match cpu_f64_slice(x, "x") {
-        Ok(s) => s,
-        Err(st) => return st,
-    };
-    let seed_s = match cpu_f64_slice(seed, "seed") {
-        Ok(s) => s,
-        Err(st) => return st,
-    };
-    let mode_s = match cpu_f64_slice_mut(mode_out, "mode_out") {
-        Ok(s) => s,
-        Err(st) => return st,
-    };
-    if xs.len() != seed_s.len() || xs.len() != mode_s.len() {
-        set_last_error("rgmin_lowest_eigenpair: x/seed/mode length mismatch");
-        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-    }
-    let typed = match eigen_params_from_c(params) {
-        Ok(p) => p,
-        Err(st) => return st,
-    };
-    let apply = CHvp { hvp, user };
-    let x_arr = Array1::from(xs.to_vec());
-    let seed_arr = Array1::from(seed_s.to_vec());
-    match lowest_mode(&apply, x_arr.view(), seed_arr.view(), &typed) {
-        Ok(mode) => {
-            mode_s.copy_from_slice(mode.vector.as_slice().unwrap_or(&[]));
-            unsafe {
-                *out = rgmin_lowest_mode_t {
-                    value: mode.value,
-                    actions: mode.actions,
-                };
-            }
-            rgmin_status_t::RGMIN_SUCCESS
-        }
-        Err(e) => status_from_error(&e),
-    }
-}
-
-fn cpu_dl<'a>(
-    tensor: *const DLManagedTensorVersioned,
-    name: &str,
-) -> Result<&'a DLTensor, rgmin_status_t> {
-    if tensor.is_null() {
-        set_last_error(&format!("{name}: null tensor"));
-        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
-    }
-    let dl = unsafe { &(*tensor).dl_tensor };
-    if dl.device.device_type != DLDeviceType::kDLCPU {
-        set_last_error(&format!(
-            "{name}: device {:?} not supported in this build (CPU only)",
-            dl.device.device_type as i32
-        ));
-        return Err(rgmin_status_t::RGMIN_UNSUPPORTED_DEVICE);
-    }
-    if dl.dtype.code != DLDataTypeCode::kDLFloat
-        || dl.dtype.bits != 64
-        || dl.dtype.lanes != 1
-        || dl.shape.is_null()
-        || dl.data.is_null()
-        || dl.ndim < 1
-    {
-        set_last_error(&format!("{name}: need an f64 DLPack tensor"));
-        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
-    }
-    Ok(dl)
-}
-
-fn block_strides(
-    dl: &DLTensor,
-    n: usize,
-    k: usize,
-    name: &str,
-) -> Result<(isize, isize), rgmin_status_t> {
-    let shape = unsafe { slice::from_raw_parts(dl.shape, dl.ndim as usize) };
-    if shape.iter().any(|dim| *dim < 0) {
-        set_last_error(&format!("{name}: negative dimension"));
-        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
-    }
-    let strides = if dl.strides.is_null() {
-        None
-    } else {
-        Some(unsafe { slice::from_raw_parts(dl.strides, dl.ndim as usize) })
-    };
-    if let Some(strides) = strides
-        && strides.iter().any(|stride| *stride < 0)
-    {
-        set_last_error(&format!("{name}: negative stride"));
-        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
-    }
-    if dl.ndim == 1 {
-        let len = shape[0] as usize;
-        let expect = match n.checked_mul(k) {
-            Some(expect) => expect,
-            None => {
-                set_last_error(&format!("{name}: block is too large"));
-                return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
-            }
-        };
-        if len != expect {
-            set_last_error(&format!("{name}: length {len} is not n*k = {expect}"));
-            return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
-        }
-        if let Some(strides) = strides
-            && strides[0] != 1
-        {
-            set_last_error(&format!("{name}: non-unit stride"));
-            return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
-        }
-        return Ok((k as isize, 1));
-    }
-    if dl.ndim == 2 {
-        if shape[0] as usize != n || shape[1] as usize != k {
-            set_last_error(&format!(
-                "{name}: shape ({}, {}) is not ({n}, {k})",
-                shape[0], shape[1]
-            ));
-            return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
-        }
-        let row = strides.map_or(k as i64, |s| s[0]);
-        let col = strides.map_or(1, |s| s[1]);
-        return Ok((row as isize, col as isize));
-    }
-    set_last_error(&format!("{name}: need rank 1 or rank 2"));
-    Err(rgmin_status_t::RGMIN_INVALID_PARAMETER)
-}
-
-fn f64_base(dl: &DLTensor) -> *const f64 {
-    unsafe { (dl.data as *const u8).add(dl.byte_offset as usize).cast() }
-}
-
-fn read_block(
-    tensor: *const DLManagedTensorVersioned,
-    n: usize,
-    k: usize,
-    name: &str,
-) -> Result<Array2<f64>, rgmin_status_t> {
-    let dl = cpu_dl(tensor, name)?;
-    let (row_stride, col_stride) = block_strides(dl, n, k, name)?;
-    let base = f64_base(dl);
-    let mut out = Array2::zeros((n, k));
-    for i in 0..n {
-        for j in 0..k {
-            let offset = (i as isize * row_stride + j as isize * col_stride) as usize;
-            let value = unsafe { *base.add(offset) };
-            out[(i, j)] = value;
-        }
-    }
-    Ok(out)
-}
-
-fn write_block(
-    tensor: *mut DLManagedTensorVersioned,
-    block: &Array2<f64>,
-    name: &str,
-) -> Result<(), rgmin_status_t> {
-    let (n, k) = block.dim();
-    let dl = cpu_dl(tensor.cast(), name)?;
-    let (row_stride, col_stride) = block_strides(dl, n, k, name)?;
-    let base = f64_base(dl) as *mut f64;
-    for i in 0..n {
-        for j in 0..k {
-            let offset = (i as isize * row_stride + j as isize * col_stride) as usize;
-            unsafe { *base.add(offset) = block[(i, j)] };
-        }
-    }
-    Ok(())
-}
-
-/// k lowest eigenpairs of a symmetric product. Block LOBPCG
-/// (Knyazev 2001). `seed` and `modes_out` are row-major n-by-k: rank 2
-/// with shape `(n, k)`, or rank 1 of length `n * k`. `values_out` and
-/// `pairs_out` have length k, values ascending. Each `actions` field is
-/// the product count of the solve. `params == NULL` selects tol `1e-8`
-/// and `max_iter = max(n, 8)`. `options == NULL` is accepted; this
-/// matrix-free solve ignores ChASE `degree` and `extra`. An unlinked
-/// `params->kind` returns [`rgmin_status_t::RGMIN_UNAVAILABLE`].
-/// `k == 0`, `k > n`, and non-finite input return
-/// [`rgmin_status_t::RGMIN_INVALID_PARAMETER`].
-///
-/// # Safety
-/// `hvp` is callable for this call. `x` is a rank-1 f64 CPU tensor of
-/// length n. `seed` and `modes_out` describe the same n-by-k block and
-/// may alias. `values_out` is rank-1 length k. `pairs_out` points at k
-/// writable records. `params` and `options` are null or readable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_lowest_eigenpairs(
-    hvp: Option<rgmin_hvp_fn>,
-    user: *mut c_void,
-    x: *const DLManagedTensorVersioned,
-    seed: *const DLManagedTensorVersioned,
-    modes_out: *mut DLManagedTensorVersioned,
-    values_out: *mut DLManagedTensorVersioned,
-    params: *const rgmin_eigen_params_t,
-    options: *const rgmin_eigen_options_t,
-    pairs_out: *mut rgmin_eigenpair_t,
-    k: usize,
-) -> rgmin_status_t {
-    let Some(hvp) = hvp else {
-        set_last_error("rgmin_lowest_eigenpairs: null hvp");
-        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-    };
-    if modes_out.is_null() || values_out.is_null() || pairs_out.is_null() {
-        set_last_error("rgmin_lowest_eigenpairs: null output");
-        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-    }
-    if k == 0 {
-        set_last_error("rgmin_lowest_eigenpairs: k = 0 is outside 1..=n");
-        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-    }
-    let xs = match cpu_f64_slice(x, "x") {
-        Ok(s) => s,
-        Err(st) => return st,
-    };
-    let n = xs.len();
-    if k > n {
-        set_last_error(&format!(
-            "rgmin_lowest_eigenpairs: k = {k} is outside 1..={n}"
-        ));
-        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-    }
-    let seed_block = match read_block(seed, n, k, "seed") {
-        Ok(block) => block,
-        Err(st) => return st,
-    };
-    let values = match cpu_f64_slice_mut(values_out, "values_out") {
-        Ok(s) => s,
-        Err(st) => return st,
-    };
-    if values.len() != k {
-        set_last_error("rgmin_lowest_eigenpairs: values_out length is not k");
-        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-    }
-    let typed = match eigen_params_from_c(params) {
-        Ok(p) => p,
-        Err(st) => return st,
-    };
-    if !typed.kind.is_linked() {
-        return status_from_error(&Error::EigenUnavailable {
-            kind: typed.kind.name(),
-        });
-    }
-    if !options.is_null() {
-        let opts = unsafe { *options };
-        let _ = (opts.degree, opts.extra);
-    }
-    if !typed.tol.is_finite() {
-        set_last_error("rgmin_lowest_eigenpairs: tolerance is non-finite");
-        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-    }
-    let tol = if typed.tol > 0.0 { typed.tol } else { 1e-8 };
-    let max_iter = if typed.max_iter == 0 {
-        n.max(8)
-    } else {
-        typed.max_iter
-    };
-    let apply = CHvp { hvp, user };
-    let x_arr = Array1::from(xs.to_vec());
-    let solved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        lowest_eigenpairs(&apply, x_arr.view(), seed_block.view(), tol, max_iter)
-    }));
-    let found = match solved {
-        Ok(Ok(found)) => found,
-        Ok(Err(err)) => return status_from_error(&err),
-        Err(_) => {
-            set_last_error("rgmin_lowest_eigenpairs: panicked");
-            return rgmin_status_t::RGMIN_INTERNAL_ERROR;
-        }
-    };
-    if found.pairs.len() != k {
-        set_last_error("rgmin_lowest_eigenpairs: solve returned the wrong block width");
-        return rgmin_status_t::RGMIN_INTERNAL_ERROR;
-    }
-    let mut modes = Array2::zeros((n, k));
-    for (j, pair) in found.pairs.iter().enumerate() {
-        if pair.vector.len() != n {
-            set_last_error("rgmin_lowest_eigenpairs: mode length does not match n");
-            return rgmin_status_t::RGMIN_INTERNAL_ERROR;
-        }
-        for i in 0..n {
-            modes[(i, j)] = pair.vector[i];
-        }
-        values[j] = pair.value;
-        unsafe {
-            *pairs_out.add(j) = rgmin_eigenpair_t {
-                value: pair.value,
-                actions: found.actions,
-            };
-        }
-    }
-    match write_block(modes_out, &modes, "modes_out") {
-        Ok(()) => rgmin_status_t::RGMIN_SUCCESS,
-        Err(st) => st,
+    unsafe {
+        rgmin_lowest_eigenpair_with_options(
+            hvp,
+            user,
+            x,
+            seed,
+            mode_out,
+            params,
+            std::ptr::null(),
+            out,
+        )
     }
 }
 
@@ -1260,17 +1032,7 @@ pub unsafe extern "C" fn rgmin_minimize(
         let n = init.len();
         let obj = c_oracle(eval, grad, user, n);
         let c = unsafe { &*ctrl };
-        let control = Control {
-            maxiter: c.maxiter,
-            gtol: c.gtol,
-            istep: if c.istep > 0.0 { c.istep } else { 1.0 },
-            maxmove: if c.maxmove > 0.0 {
-                Some(c.maxmove)
-            } else {
-                None
-            },
-            stop_norm: StopNorm::Two,
-        };
+        let control = control_from_c(c);
         match minimize_method(
             &obj,
             Array1::from(init),
@@ -1289,6 +1051,7 @@ pub unsafe extern "C" fn rgmin_minimize(
                         value: rep.value,
                         steps: rep.steps,
                         grad_norm: rep.grad_norm,
+                        stop: stop_from_status(rep.status),
                     };
                 }
                 rgmin_status_t::RGMIN_SUCCESS
@@ -1322,103 +1085,18 @@ pub unsafe extern "C" fn rgmin_minimize_scg(
     params: *const rgmin_scg_params_t,
     out: *mut rgmin_report_t,
 ) -> rgmin_status_t {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let eval = match eval {
-            Some(f) => f,
-            None => {
-                set_last_error("rgmin_minimize_scg: eval is NULL");
-                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-            }
-        };
-        let grad = match grad {
-            Some(f) => f,
-            None => {
-                set_last_error("rgmin_minimize_scg: grad is NULL");
-                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-            }
-        };
-        if ctrl.is_null() || out.is_null() {
-            set_last_error("rgmin_minimize_scg: ctrl/out null");
-            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
-        }
-        let init = match cpu_f64_slice_mut(x, "x") {
-            Ok(s) => s.to_vec(),
-            Err(st) => return st,
-        };
-        let n = init.len();
-        let c = unsafe { &*ctrl };
-        let control = Control {
-            maxiter: c.maxiter,
-            gtol: c.gtol,
-            istep: if c.istep > 0.0 { c.istep } else { 1.0 },
-            maxmove: if c.maxmove > 0.0 {
-                Some(c.maxmove)
-            } else {
-                None
-            },
-            stop_norm: StopNorm::Two,
-        };
-        let (scg, conjugacy) = if params.is_null() {
-            (ScgParams::default(), Conjugacy::PolakRibiere)
-        } else {
-            let p = unsafe { &*params };
-            match conjugacy_from_c(p.conjugacy) {
-                Ok(c) => (
-                    ScgParams {
-                        sigma0: p.sigma0,
-                        lambda: p.lambda,
-                        lambda_limit: p.lambda_limit,
-                        tol_sol: p.tol_sol,
-                        tol_func: p.tol_func,
-                    },
-                    c,
-                ),
-                Err(st) => return st,
-            }
-        };
-        let restart = Restart::Never;
-        let obj = ScgFfiOracle {
-            inner: c_oracle(eval, grad, user, n),
-            curv: curv.map(|f| f as usize),
-            user: user as usize,
-            scratch: Scratch::new(),
-        };
-        let report = if obj.curv.is_some() {
-            minimize_scg_exact(&obj, Array1::from(init), &control, &scg, conjugacy, restart)
-        } else {
-            minimize_scg(
-                &obj.inner,
-                Array1::from(init),
-                &control,
-                &scg,
-                conjugacy,
-                restart,
-            )
-        };
-        match report {
-            Ok(rep) => {
-                let dest = match cpu_f64_slice_mut(x, "x") {
-                    Ok(s) => s,
-                    Err(st) => return st,
-                };
-                dest.copy_from_slice(rep.coords.as_slice().expect("contiguous"));
-                unsafe {
-                    *out = rgmin_report_t {
-                        value: rep.value,
-                        steps: rep.steps,
-                        grad_norm: rep.grad_norm,
-                    };
-                }
-                rgmin_status_t::RGMIN_SUCCESS
-            }
-            Err(e) => status_from_error(&e),
-        }
-    })) {
-        Ok(s) => s,
-        Err(_) => {
-            set_last_error("rgmin_minimize_scg: panic");
-            rgmin_status_t::RGMIN_INTERNAL_ERROR
-        }
+    unsafe {
+        rgmin_minimize_scg_with_options(
+            eval,
+            grad,
+            curv,
+            user,
+            x,
+            ctrl,
+            params,
+            std::ptr::null(),
+            out,
+        )
     }
 }
 
@@ -1473,17 +1151,7 @@ pub unsafe extern "C" fn rgmin_minimize_hess(
         let n = init.len();
         let obj = c_oracle_hess(eval, grad, hess, user, n);
         let c = unsafe { &*ctrl };
-        let control = Control {
-            maxiter: c.maxiter,
-            gtol: c.gtol,
-            istep: if c.istep > 0.0 { c.istep } else { 1.0 },
-            maxmove: if c.maxmove > 0.0 {
-                Some(c.maxmove)
-            } else {
-                None
-            },
-            stop_norm: StopNorm::Two,
-        };
+        let control = control_from_c(c);
         let rust_method = method_from_c(method, c.memory);
         match minimize_method_hess(
             &obj,
@@ -1503,6 +1171,7 @@ pub unsafe extern "C" fn rgmin_minimize_hess(
                         value: rep.value,
                         steps: rep.steps,
                         grad_norm: rep.grad_norm,
+                        stop: stop_from_status(rep.status),
                     };
                 }
                 rgmin_status_t::RGMIN_SUCCESS
@@ -1569,17 +1238,7 @@ pub unsafe extern "C" fn rgmin_minimize_hvp(
         let n = init.len();
         let obj = c_oracle_hvp(eval, grad, hvp, user, n);
         let c = unsafe { &*ctrl };
-        let control = Control {
-            maxiter: c.maxiter,
-            gtol: c.gtol,
-            istep: if c.istep > 0.0 { c.istep } else { 1.0 },
-            maxmove: if c.maxmove > 0.0 {
-                Some(c.maxmove)
-            } else {
-                None
-            },
-            stop_norm: StopNorm::Two,
-        };
+        let control = control_from_c(c);
         match minimize_method_hvp(
             &obj,
             Array1::from(init),
@@ -1598,6 +1257,7 @@ pub unsafe extern "C" fn rgmin_minimize_hvp(
                         value: rep.value,
                         steps: rep.steps,
                         grad_norm: rep.grad_norm,
+                        stop: stop_from_status(rep.status),
                     };
                 }
                 rgmin_status_t::RGMIN_SUCCESS
@@ -1680,17 +1340,7 @@ pub unsafe extern "C" fn rgmin_minimize_eindir(
             (value, gradient)
         });
         let c = unsafe { &*ctrl };
-        let control = Control {
-            maxiter: c.maxiter,
-            gtol: c.gtol,
-            istep: if c.istep > 0.0 { c.istep } else { 1.0 },
-            maxmove: if c.maxmove > 0.0 {
-                Some(c.maxmove)
-            } else {
-                None
-            },
-            stop_norm: StopNorm::Two,
-        };
+        let control = control_from_c(c);
         match minimize_method(
             &obj,
             Array1::from(init),
@@ -1709,6 +1359,7 @@ pub unsafe extern "C" fn rgmin_minimize_eindir(
                         value: rep.value,
                         steps: rep.steps,
                         grad_norm: rep.grad_norm,
+                        stop: stop_from_status(rep.status),
                     };
                 }
                 rgmin_status_t::RGMIN_SUCCESS
@@ -1733,6 +1384,17 @@ pub struct rgmin_solver_t {
 
 /// Allocate a session. `dim` is the length of `x`. Null on bad arguments.
 ///
+/// Since 0.6.0 the session opens with [`Accept::Energy`]
+/// (`RGMIN_ACCEPT_ENERGY`), where 0.5 opened with `RGMIN_ACCEPT_NONE`.
+/// The default L-BFGS step is the eOn cap, which runs no energy test
+/// under either. Line searches take the same value window under both.
+/// Under the energy policy a step that is not line-searched backtracks on
+/// a rise, a non-positive `istep` opens steepest descent, unpreconditioned
+/// nonlinear CG, BFGS, SR1, SR2 and BB with a unit-length step, and BFGS,
+/// SR1 and SR2 rescale their first step.
+/// [`rgmin_solver_set_accept`] with `RGMIN_ACCEPT_NONE` restores the 0.5
+/// behaviour.
+///
 /// # Safety
 /// `ctrl` is null or points to a readable [`rgmin_control_t`].
 #[unsafe(no_mangle)]
@@ -1752,17 +1414,7 @@ pub unsafe extern "C" fn rgmin_solver_create(
         // Allowed: step_hess is the verb. Create still succeeds.
     }
     let c = unsafe { &*ctrl };
-    let control = Control {
-        maxiter: c.maxiter,
-        gtol: c.gtol,
-        istep: if c.istep > 0.0 { c.istep } else { 1.0 },
-        maxmove: if c.maxmove > 0.0 {
-            Some(c.maxmove)
-        } else {
-            None
-        },
-        stop_norm: StopNorm::Two,
-    };
+    let control = control_from_c(c);
     let mut solver = Solver::new(method_from_c(method, c.memory), control, dim).with_gtol(c.gtol);
     solver.set_accept(Accept::Energy);
     if c.istep <= 0.0 {
@@ -1811,6 +1463,8 @@ pub unsafe extern "C" fn rgmin_solver_rebase(solver: *mut rgmin_solver_t) {
 }
 
 /// Set the Euclidean step cap used by the next [`rgmin_solver_step`].
+/// Positive and finite is the cap, zero or NaN keeps the defaults, and a
+/// negative or infinite value turns every step cap off.
 ///
 /// # Safety
 /// `solver` is null or a live session from [`rgmin_solver_create`].
@@ -2049,6 +1703,8 @@ pub enum rgmin_accept_t {
     RGMIN_ACCEPT_ENERGY = 1,
     /// Grippo window of the last five accepted values.
     RGMIN_ACCEPT_NONMONOTONE = 2,
+    /// Clipped quasi-Newton step, one oracle, no line search. Released 0.5.2.
+    RGMIN_ACCEPT_STEP = 3,
 }
 
 /// eOn `lbfgs_accept`. Legal on any session.
@@ -2067,6 +1723,7 @@ pub unsafe extern "C" fn rgmin_solver_set_accept(
         rgmin_accept_t::RGMIN_ACCEPT_ENERGY => Accept::Energy,
         rgmin_accept_t::RGMIN_ACCEPT_NONMONOTONE => Accept::Nonmonotone,
         rgmin_accept_t::RGMIN_ACCEPT_NONE => Accept::None,
+        rgmin_accept_t::RGMIN_ACCEPT_STEP => Accept::Step,
     };
     unsafe { (*solver).solver.set_accept(a) };
 }
@@ -2259,6 +1916,37 @@ pub unsafe extern "C" fn rgmin_solver_set_lbfgs_wolfe(solver: *mut rgmin_solver_
     }
 }
 
+/// Burdakov ray-truncation radius for session L-BFGS. A non-positive,
+/// NaN or infinite radius turns it off and still returns 0. This is
+/// not [`crate::Solver::set_lbfgs_trust`]. ABI minor 45.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_lbfgs_trust(
+    solver: *mut rgmin_solver_t,
+    radius: f64,
+) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_lbfgs_trust: null solver");
+        return 1;
+    }
+    unsafe { (*solver).solver.set_lbfgs_trust_radius(radius) };
+    0
+}
+
+/// Current Burdakov radius, or 0 when it is off or `solver` is null.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_lbfgs_trust_radius(solver: *const rgmin_solver_t) -> f64 {
+    if solver.is_null() {
+        return 0.0;
+    }
+    unsafe { (*solver).solver.lbfgs_trust_radius().unwrap_or(0.0) }
+}
+
 /// Per-atom cap (eOn `maxAtomMotionAppliedV`). While the L-BFGS step is
 /// the default cap, this replaces that cap. After
 /// [`rgmin_solver_set_lbfgs_wolfe`], and without a distance constraint
@@ -2271,7 +1959,7 @@ pub unsafe extern "C" fn rgmin_solver_set_lbfgs_wolfe(solver: *mut rgmin_solver_
 /// Ordinary starts use `0.1 I` and a five-value nonmonotone window.
 /// An installed exponential preconditioner replaces that scalar seed,
 /// including the steepest fallbacks. Newton and dogleg scale a saddle
-/// kick to this length. Non-positive clears it.
+/// kick to this length. Non-positive or non-finite clears it.
 ///
 /// # Safety
 /// `solver` is null or a live session from [`rgmin_solver_create`].
@@ -2321,37 +2009,6 @@ pub unsafe extern "C" fn rgmin_solver_set_cautious(
         return;
     }
     unsafe { (*solver).solver.set_cautious(eps, alpha) };
-}
-
-/// Burdakov ray-truncation radius for session L-BFGS. A non-positive,
-/// NaN or infinite radius turns it off and still returns 0. This is
-/// not `Solver::set_lbfgs_trust`.
-///
-/// # Safety
-/// `solver` is null or a live session from [`rgmin_solver_create`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_lbfgs_trust(
-    solver: *mut rgmin_solver_t,
-    radius: f64,
-) -> i32 {
-    if solver.is_null() {
-        set_last_error("rgmin_solver_set_lbfgs_trust: null solver");
-        return 1;
-    }
-    unsafe { (*solver).solver.set_lbfgs_trust_radius(radius) };
-    0
-}
-
-/// Current Burdakov radius, or 0 when it is off or `solver` is null.
-///
-/// # Safety
-/// `solver` is null or a live session from [`rgmin_solver_create`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_lbfgs_trust_radius(solver: *const rgmin_solver_t) -> f64 {
-    if solver.is_null() {
-        return 0.0;
-    }
-    unsafe { (*solver).solver.lbfgs_trust_radius().unwrap_or(0.0) }
 }
 
 /// HiGHS feasible-set step. Returns 1 when this build has no `highs` feature.
@@ -2587,7 +2244,7 @@ pub unsafe extern "C" fn rgmin_solver_set_highs_crossover(
 /// # Safety
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 /// A non-null `cb` must stay callable with `user` until it is cleared or
-/// the session is freed.
+/// the session is freed, from any thread that steps the session.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_highs_callback(
     solver: *mut rgmin_solver_t,
@@ -2600,7 +2257,8 @@ pub unsafe extern "C" fn rgmin_solver_set_highs_callback(
     }
     #[cfg(feature = "highs")]
     {
-        let _ = unsafe { (*solver).solver.set_highs_callback(cb, user) };
+        let callback = cb.map(|function| unsafe { crate::HighsCallback::new(function, user) });
+        let _ = unsafe { (*solver).solver.set_highs_callback(callback) };
         0
     }
     #[cfg(not(feature = "highs"))]
@@ -2658,8 +2316,18 @@ pub enum rgmin_manifold_t {
     RGMIN_MANIFOLD_POSITIVE = 21,
     /// Centered m-by-n matrices, packed m*n. Token defaults to
     /// 2-by-2 centered columns; use rgmin_solver_set_centered_matrix.
-    /// Reserved 7-10 unused.
+    /// Symmetric positive definite matrices. Released 0.5.2 token 7.
+    RGMIN_MANIFOLD_SPD = 7,
+    /// Real Grassmann. Released 0.5.2 token 8.
+    RGMIN_MANIFOLD_GRASSMANN = 8,
+    /// Hyperboloid. Released 0.5.2 token 9.
+    RGMIN_MANIFOLD_HYPERBOLIC = 9,
+    /// Poincare ball. Released 0.5.2 token 10.
+    RGMIN_MANIFOLD_POINCARE = 10,
+    /// Centered m-by-n matrices.
     RGMIN_MANIFOLD_CENTERED_MATRIX = 22,
+    /// Complex unitary matrices. Released 0.5.2 token 23.
+    RGMIN_MANIFOLD_UNITARY = 23,
 }
 
 /// Select the session manifold by token.
@@ -2681,6 +2349,11 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
         rgmin_manifold_t::RGMIN_MANIFOLD_SE3 => ManifoldKind::Se3,
         rgmin_manifold_t::RGMIN_MANIFOLD_RIGID_QUOTIENT => ManifoldKind::RigidQuotient,
         rgmin_manifold_t::RGMIN_MANIFOLD_MW_RIGID => ManifoldKind::MwRigid,
+        rgmin_manifold_t::RGMIN_MANIFOLD_SPD => ManifoldKind::Spd,
+        rgmin_manifold_t::RGMIN_MANIFOLD_GRASSMANN => ManifoldKind::Grassmann,
+        rgmin_manifold_t::RGMIN_MANIFOLD_HYPERBOLIC => ManifoldKind::Hyperbolic,
+        rgmin_manifold_t::RGMIN_MANIFOLD_POINCARE => ManifoldKind::PoincareBall,
+        rgmin_manifold_t::RGMIN_MANIFOLD_UNITARY => ManifoldKind::Unitary { n: 1 },
         rgmin_manifold_t::RGMIN_MANIFOLD_OBLIQUE => ManifoldKind::Oblique { n: 0, m: 0 },
         rgmin_manifold_t::RGMIN_MANIFOLD_MULTINOMIAL => ManifoldKind::Multinomial,
         rgmin_manifold_t::RGMIN_MANIFOLD_COMPLEX_CIRCLE => ManifoldKind::ComplexCircle { n: 1 },
@@ -2848,7 +2521,7 @@ pub unsafe extern "C" fn rgmin_solver_set_centered_matrix(
 /// [`rgmin_solver_set_masses`] as one molecule reused on every copy or
 /// as every copy's masses in order. Returns 0, or 1 on a null session, a
 /// token whose shape needs its own setter, or a block the factor cannot
-/// hold; the manifold is then unchanged. ABI minor 41.
+/// hold; the manifold is then unchanged. ABI minor 44.
 ///
 /// # Safety
 /// `solver` is null or a live session from [`rgmin_solver_create`].
@@ -3678,6 +3351,27 @@ pub unsafe extern "C" fn rgmin_solver_report_gradient(
     rgmin_status_t::RGMIN_SUCCESS
 }
 
+/// Line-search kind. Integers match the C enum `rgmin_linesearch_kind_t`.
+/// `rgmin_linesearch_create` takes the integer. [`rgmin_solver_set_linesearch`]
+/// takes this enum. The C typedef `rgmin_linesearch_t` is the opaque handle.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum rgmin_linesearch_kind_t {
+    /// Brent on a golden bracket.
+    RGMIN_LINESEARCH_BRENT = 0,
+    /// Armijo backtracking.
+    RGMIN_LINESEARCH_BACKTRACKING = 1,
+    /// Goldstein two-sided condition.
+    RGMIN_LINESEARCH_GOLDSTEIN = 2,
+    /// Strong Wolfe with zoom.
+    RGMIN_LINESEARCH_WOLFE = 3,
+}
+
+/// Same discriminants as [`rgmin_linesearch_kind_t`]. Tests and the 0.5.2
+/// setter spell the kind this way. The C header reserves `rgmin_linesearch_t`
+/// for the opaque search handle.
+pub type rgmin_linesearch_t = rgmin_linesearch_kind_t;
+
 /// Caller-driven line search. It does not call an objective.
 pub struct rgmin_linesearch {
     search: SuppliedSearch,
@@ -4126,8 +3820,9 @@ fn write_report(
             value: rep.value,
             steps: rep.steps,
             grad_norm: rep.grad_norm,
+            stop: stop_from_status(rep.status),
         };
-        (*solver).grad = rep.grad.clone();
+        (*solver).grad = rep.grad;
     }
     rgmin_status_t::RGMIN_SUCCESS
 }
@@ -4179,17 +3874,64 @@ pub unsafe extern "C" fn rgmin_lbfgs_pairs_push(
     n: usize,
     stored: *mut i32,
 ) -> rgmin_status_t {
+    unsafe { lbfgs_pairs_push_c("rgmin_lbfgs_pairs_push", pairs, s, y, None, n, stored) }
+}
+
+/// Append one pair with the caller's `rho` in place of `1 / (s · y)`.
+/// `stored`, when non-null, is 1 if the pair was kept. The pair passes
+/// the curvature gate of [`rgmin_lbfgs_pairs_push`] first, and a `rho`
+/// that is not finite and positive is declined. A declined pair returns
+/// success and sets `stored` to 0. ABI minor 43.
+///
+/// # Safety
+/// `pairs` is null or a live handle from [`rgmin_lbfgs_pairs_create`].
+/// `s` and `y` are null or point at `n` readable doubles. `stored` is
+/// null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_lbfgs_pairs_push_rho(
+    pairs: *mut rgmin_lbfgs_pairs,
+    s: *const f64,
+    y: *const f64,
+    rho: f64,
+    n: usize,
+    stored: *mut i32,
+) -> rgmin_status_t {
+    unsafe {
+        lbfgs_pairs_push_c(
+            "rgmin_lbfgs_pairs_push_rho",
+            pairs,
+            s,
+            y,
+            Some(rho),
+            n,
+            stored,
+        )
+    }
+}
+
+/// # Safety
+/// The pointer contract of [`rgmin_lbfgs_pairs_push`].
+unsafe fn lbfgs_pairs_push_c(
+    name: &str,
+    pairs: *mut rgmin_lbfgs_pairs,
+    s: *const f64,
+    y: *const f64,
+    rho: Option<f64>,
+    n: usize,
+    stored: *mut i32,
+) -> rgmin_status_t {
     if pairs.is_null() || s.is_null() || y.is_null() {
-        set_last_error("rgmin_lbfgs_pairs_push: null argument");
+        set_last_error(&format!("{name}: null argument"));
         return rgmin_status_t::RGMIN_INVALID_PARAMETER;
     }
-    let s = unsafe { slice::from_raw_parts(s, n) };
-    let y = unsafe { slice::from_raw_parts(y, n) };
-    match unsafe {
-        (*pairs)
-            .pairs
-            .push(ArrayView1::from(s), ArrayView1::from(y))
-    } {
+    let s = ArrayView1::from(unsafe { slice::from_raw_parts(s, n) });
+    let y = ArrayView1::from(unsafe { slice::from_raw_parts(y, n) });
+    let handle = unsafe { &mut (*pairs).pairs };
+    let pushed = match rho {
+        Some(rho) => handle.push_rho(s, y, rho),
+        None => handle.push(s, y),
+    };
+    match pushed {
         Ok(kept) => {
             if !stored.is_null() {
                 unsafe { *stored = i32::from(kept) };
@@ -4238,6 +3980,12 @@ pub unsafe extern "C" fn rgmin_lbfgs_pairs_free(pairs: *mut rgmin_lbfgs_pairs) {
 /// Direction `-H g`. Pass either `h0_diag` or `apply_h0`, not both.
 /// An empty memory writes `-H0 g`. The call does not evaluate an
 /// objective. ABI minor 38.
+///
+/// A diagonal whose entries are all `γ` is `H0 = γ I`. `apply_h0` is
+/// called once, on the residual of the backward loop that starts from
+/// `grad`; the direction is `-H g` when that map is linear. Pairs
+/// stored by [`rgmin_lbfgs_pairs_push_rho`] enter with their own `rho`.
+/// The result is [`LbfgsPairs::direction`] for the same pairs and `H0`.
 ///
 /// # Safety
 /// `pairs` is null or a live handle from [`rgmin_lbfgs_pairs_create`].
@@ -4332,6 +4080,451 @@ fn lbfgs_direction_c(
     }
 }
 
+/// `rgmin_control_t.maxmove`: positive is the Euclidean cap, zero leaves
+/// the caps at their defaults, and negative leaves both the Euclidean cap
+/// and the default per-atom cap off.
+fn maxmove_from_c(maxmove: f64) -> Option<f64> {
+    if maxmove > 0.0 {
+        Some(maxmove)
+    } else if maxmove < 0.0 {
+        Some(f64::INFINITY)
+    } else {
+        None
+    }
+}
+
+fn noise_floor_from_c(c: &rgmin_control_t) -> Option<crate::NoiseFloor> {
+    if !(c.noise_eps.is_finite() && c.noise_eps > 0.0) {
+        return None;
+    }
+    let mut floor = crate::NoiseFloor::new(c.noise_eps);
+    if c.noise_c.is_finite() && c.noise_c > 0.0 {
+        floor = floor.with_c(c.noise_c);
+    }
+    Some(floor)
+}
+
+fn control_from_c(c: &rgmin_control_t) -> Control {
+    Control {
+        maxiter: c.maxiter,
+        gtol: c.gtol,
+        istep: if c.istep > 0.0 { c.istep } else { 1.0 },
+        maxmove: maxmove_from_c(c.maxmove),
+        stop_norm: StopNorm::Two,
+        ftol_rel: None,
+        noise_floor: noise_floor_from_c(c),
+    }
+}
+
+fn stop_from_status(status: crate::Status) -> rgmin_stop_t {
+    match status {
+        crate::Status::Tolerance => rgmin_stop_t::RGMIN_STOP_TOLERANCE,
+        crate::Status::NoiseFloor => rgmin_stop_t::RGMIN_STOP_NOISE_FLOOR,
+        crate::Status::StepTolerance => rgmin_stop_t::RGMIN_STOP_STEP_TOLERANCE,
+        crate::Status::Budget | crate::Status::Iterating => rgmin_stop_t::RGMIN_STOP_BUDGET,
+    }
+}
+
+/// Retraction of a Stiefel handle from [`rgmin_manifold_stiefel`].
+/// The C entry takes the integer. ABI minor 41.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum rgmin_stiefel_retraction_t {
+    /// Q factor of `X + V` with a positive diagonal R.
+    RGMIN_STIEFEL_QR = 0,
+    /// Polar factor of `X + V`.
+    RGMIN_STIEFEL_POLAR = 1,
+}
+
+/// Metric of an SPD handle from [`rgmin_manifold_spd`].
+/// The C entry takes the integer. ABI minor 41.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum rgmin_spd_metric_t {
+    /// `<U, V>_X = tr(X^-1 U X^-1 V)`.
+    RGMIN_SPD_AFFINE_INVARIANT = 0,
+    /// `<U, V>_X = <Dlog(X)[U], Dlog(X)[V]>`.
+    RGMIN_SPD_LOG_EUCLIDEAN = 1,
+}
+
+/// Opaque Stiefel, SPD or product manifold. Every buffer it reads or
+/// writes is caller-owned, column-major, of length
+/// [`rgmin_manifold_len`]. ABI minor 41.
+pub struct rgmin_manifold_handle {
+    manifold: RiemannianManifold,
+}
+
+fn boxed_manifold(made: crate::Result<RiemannianManifold>) -> *mut rgmin_manifold_handle {
+    match made {
+        Ok(manifold) => Box::into_raw(Box::new(rgmin_manifold_handle { manifold })),
+        Err(err) => {
+            set_last_error(&err.to_string());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// \(\mathrm{St}(n, p)\), `1 <= p <= n`, packed column-major `n x p`.
+/// `retraction` is an [`rgmin_stiefel_retraction_t`] value. Null on a bad
+/// shape or an unknown retraction. ABI minor 41.
+#[unsafe(no_mangle)]
+pub extern "C" fn rgmin_manifold_stiefel(
+    n: usize,
+    p: usize,
+    retraction: i32,
+) -> *mut rgmin_manifold_handle {
+    let retraction = match retraction {
+        0 => StiefelRetraction::Qr,
+        1 => StiefelRetraction::Polar,
+        other => {
+            set_last_error(&format!(
+                "rgmin_manifold_stiefel: unknown retraction {other}"
+            ));
+            return std::ptr::null_mut();
+        }
+    };
+    boxed_manifold(RiemannianManifold::stiefel(n, p, retraction))
+}
+
+/// \(\mathrm{SPD}(p)\), `p >= 1`, packed column-major `p x p`. `metric` is
+/// an [`rgmin_spd_metric_t`] value. The retraction is the exponential of
+/// the metric. Null on `p = 0` or an unknown metric. ABI minor 41.
+#[unsafe(no_mangle)]
+pub extern "C" fn rgmin_manifold_spd(p: usize, metric: i32) -> *mut rgmin_manifold_handle {
+    let metric = match metric {
+        0 => SpdMetric::AffineInvariant,
+        1 => SpdMetric::LogEuclidean,
+        other => {
+            set_last_error(&format!("rgmin_manifold_spd: unknown metric {other}"));
+            return std::ptr::null_mut();
+        }
+    };
+    boxed_manifold(RiemannianManifold::spd(p, metric))
+}
+
+/// Product of `count` handles in order. The factors are copied; the caller
+/// still frees each one. A factor that is itself a product contributes its
+/// factors. Null on a null array, a null entry or `count = 0`.
+/// ABI minor 41.
+///
+/// # Safety
+/// `factors` is null or points at `count` pointers, each null or a live
+/// handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_product(
+    factors: *const *const rgmin_manifold_handle,
+    count: usize,
+) -> *mut rgmin_manifold_handle {
+    if factors.is_null() || count == 0 {
+        set_last_error("rgmin_manifold_product: need at least one factor");
+        return std::ptr::null_mut();
+    }
+    let handles = unsafe { slice::from_raw_parts(factors, count) };
+    let mut parts = Vec::with_capacity(count);
+    for (i, h) in handles.iter().enumerate() {
+        if h.is_null() {
+            set_last_error(&format!("rgmin_manifold_product: factor {i} is null"));
+            return std::ptr::null_mut();
+        }
+        parts.push(unsafe { (**h).manifold.clone() });
+    }
+    boxed_manifold(RiemannianManifold::product(parts))
+}
+
+/// Release a manifold handle. Null is a no-op. ABI minor 41.
+///
+/// # Safety
+/// `manifold` is null or a handle that has not been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_free(manifold: *mut rgmin_manifold_handle) {
+    if !manifold.is_null() {
+        drop(unsafe { Box::from_raw(manifold) });
+    }
+}
+
+/// Packed length of one point: `n p` for Stiefel, `p^2` for SPD, the sum
+/// for a product. A null handle returns zero. ABI minor 41.
+///
+/// # Safety
+/// `manifold` is null or a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_len(manifold: *const rgmin_manifold_handle) -> usize {
+    if manifold.is_null() {
+        0
+    } else {
+        unsafe { (*manifold).manifold.packed_len() }
+    }
+}
+
+type ManifoldOp<'a> =
+    dyn FnOnce(&RiemannianManifold, &[Vec<f64>], &mut [Vec<f64>]) -> crate::Result<()> + 'a;
+
+/// Copy the inputs, run `op`, and write the outputs only on success, so an
+/// output may alias an input.
+fn manifold_call(
+    func: &str,
+    manifold: *const rgmin_manifold_handle,
+    len: usize,
+    inputs: &[(&str, *const f64)],
+    outputs: &[(&str, *mut f64)],
+    op: Box<ManifoldOp<'_>>,
+) -> rgmin_status_t {
+    if manifold.is_null() {
+        set_last_error(&format!("{func}: null manifold"));
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let m = unsafe { &(*manifold).manifold };
+    if len != m.packed_len() {
+        set_last_error(&format!(
+            "{func}: len {len} is not the packed length {}",
+            m.packed_len()
+        ));
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let named = inputs
+        .iter()
+        .map(|(name, ptr)| (*name, ptr.is_null()))
+        .chain(outputs.iter().map(|(name, ptr)| (*name, ptr.is_null())));
+    for (name, null) in named {
+        if null {
+            set_last_error(&format!("{func}: null {name}"));
+            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        }
+    }
+    let copies: Vec<Vec<f64>> = inputs
+        .iter()
+        .map(|(_, ptr)| unsafe { slice::from_raw_parts(*ptr, len) }.to_vec())
+        .collect();
+    let mut outs = vec![vec![0.0; len]; outputs.len()];
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(m, &copies, &mut outs))) {
+        Ok(Ok(())) => {
+            for ((_, ptr), values) in outputs.iter().zip(&outs) {
+                unsafe { slice::from_raw_parts_mut(*ptr, len) }.copy_from_slice(values);
+            }
+            rgmin_status_t::RGMIN_SUCCESS
+        }
+        Ok(Err(err)) => {
+            let status = status_from_error(&err);
+            set_last_error(&format!("{func}: {err}"));
+            status
+        }
+        Err(_) => {
+            set_last_error(&format!("{func}: panic"));
+            rgmin_status_t::RGMIN_INTERNAL_ERROR
+        }
+    }
+}
+
+/// Tangent projection of the ambient `v` at `x` into `out`. Stiefel:
+/// `V - X sym(X^T V)`. SPD: `sym(V)`. ABI minor 41.
+///
+/// # Safety
+/// `manifold` is null or a live handle. `x`, `v` and `out` are null or
+/// point at `len` doubles; `out` is writable and may alias an input.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_project(
+    manifold: *const rgmin_manifold_handle,
+    x: *const f64,
+    v: *const f64,
+    out: *mut f64,
+    len: usize,
+) -> rgmin_status_t {
+    manifold_call(
+        "rgmin_manifold_project",
+        manifold,
+        len,
+        &[("x", x), ("v", v)],
+        &[("out", out)],
+        Box::new(|m, i, o| m.project(&i[0], &i[1], &mut o[0])),
+    )
+}
+
+/// Riemannian gradient at `x` from the Euclidean gradient `egrad`.
+/// Stiefel: the projection. SPD affine-invariant: `X sym(G) X`. SPD
+/// log-Euclidean: `Dlog(X)^-2 [sym(G)]`. ABI minor 41.
+///
+/// # Safety
+/// As [`rgmin_manifold_project`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_egrad_to_rgrad(
+    manifold: *const rgmin_manifold_handle,
+    x: *const f64,
+    egrad: *const f64,
+    out: *mut f64,
+    len: usize,
+) -> rgmin_status_t {
+    manifold_call(
+        "rgmin_manifold_egrad_to_rgrad",
+        manifold,
+        len,
+        &[("x", x), ("egrad", egrad)],
+        &[("out", out)],
+        Box::new(|m, i, o| m.egrad_to_rgrad(&i[0], &i[1], &mut o[0])),
+    )
+}
+
+/// Retraction of the step `v` at `x` into `out`. Stiefel uses the
+/// handle's QR or polar retraction; SPD uses the exponential of its
+/// metric. ABI minor 41.
+///
+/// # Safety
+/// As [`rgmin_manifold_project`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_retract(
+    manifold: *const rgmin_manifold_handle,
+    x: *const f64,
+    v: *const f64,
+    out: *mut f64,
+    len: usize,
+) -> rgmin_status_t {
+    manifold_call(
+        "rgmin_manifold_retract",
+        manifold,
+        len,
+        &[("x", x), ("v", v)],
+        &[("out", out)],
+        Box::new(|m, i, o| m.retract(&i[0], &i[1], &mut o[0])),
+    )
+}
+
+/// Riemannian exponential at `x`; `v` is projected to the tangent space
+/// first. ABI minor 41.
+///
+/// # Safety
+/// As [`rgmin_manifold_project`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_exp(
+    manifold: *const rgmin_manifold_handle,
+    x: *const f64,
+    v: *const f64,
+    out: *mut f64,
+    len: usize,
+) -> rgmin_status_t {
+    manifold_call(
+        "rgmin_manifold_exp",
+        manifold,
+        len,
+        &[("x", x), ("v", v)],
+        &[("out", out)],
+        Box::new(|m, i, o| m.exp(&i[0], &i[1], &mut o[0])),
+    )
+}
+
+/// Riemannian logarithm of `y` at `x`. A handle with a Stiefel factor
+/// returns `RGMIN_INVALID_PARAMETER`. ABI minor 41.
+///
+/// # Safety
+/// As [`rgmin_manifold_project`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_log(
+    manifold: *const rgmin_manifold_handle,
+    x: *const f64,
+    y: *const f64,
+    out: *mut f64,
+    len: usize,
+) -> rgmin_status_t {
+    manifold_call(
+        "rgmin_manifold_log",
+        manifold,
+        len,
+        &[("x", x), ("y", y)],
+        &[("out", out)],
+        Box::new(|m, i, o| m.log(&i[0], &i[1], &mut o[0])),
+    )
+}
+
+/// Vector transport of `v` from `x_from` to `x_to`. Stiefel: projection
+/// at `x_to`. SPD: parallel transport of the metric. ABI minor 41.
+///
+/// # Safety
+/// As [`rgmin_manifold_project`], with `x_from` and `x_to` in place of `x`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_transport(
+    manifold: *const rgmin_manifold_handle,
+    x_from: *const f64,
+    x_to: *const f64,
+    v: *const f64,
+    out: *mut f64,
+    len: usize,
+) -> rgmin_status_t {
+    manifold_call(
+        "rgmin_manifold_transport",
+        manifold,
+        len,
+        &[("x_from", x_from), ("x_to", x_to), ("v", v)],
+        &[("out", out)],
+        Box::new(|m, i, o| m.transport(&i[0], &i[1], &i[2], &mut o[0])),
+    )
+}
+
+/// Riemannian inner product of the tangents `u` and `v` at `x`, written to
+/// `*out`. ABI minor 41.
+///
+/// # Safety
+/// `manifold` is null or a live handle. `x`, `u` and `v` are null or point
+/// at `len` readable doubles. `out` is null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_inner(
+    manifold: *const rgmin_manifold_handle,
+    x: *const f64,
+    u: *const f64,
+    v: *const f64,
+    out: *mut f64,
+    len: usize,
+) -> rgmin_status_t {
+    if out.is_null() {
+        set_last_error("rgmin_manifold_inner: null out");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let mut value = 0.0;
+    let status = manifold_call(
+        "rgmin_manifold_inner",
+        manifold,
+        len,
+        &[("x", x), ("u", u), ("v", v)],
+        &[],
+        Box::new(|m, i, _| {
+            value = m.inner(&i[0], &i[1], &i[2])?;
+            Ok(())
+        }),
+    );
+    if status == rgmin_status_t::RGMIN_SUCCESS {
+        unsafe { *out = value };
+    }
+    status
+}
+
+/// One Riemannian gradient step: `rgrad_out` is the Riemannian gradient of
+/// `egrad` at `x`, and `x_out` is the retraction of `-t rgrad_out` at `x`.
+/// `t` must be finite. ABI minor 41.
+///
+/// # Safety
+/// `manifold` is null or a live handle. `x` and `egrad` are null or point
+/// at `len` readable doubles. `rgrad_out` and `x_out` are null or point at
+/// `len` writable doubles and may alias the inputs, not each other.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_manifold_gradient_step(
+    manifold: *const rgmin_manifold_handle,
+    x: *const f64,
+    egrad: *const f64,
+    t: f64,
+    rgrad_out: *mut f64,
+    x_out: *mut f64,
+    len: usize,
+) -> rgmin_status_t {
+    manifold_call(
+        "rgmin_manifold_gradient_step",
+        manifold,
+        len,
+        &[("x", x), ("egrad", egrad)],
+        &[("rgrad_out", rgrad_out), ("x_out", x_out)],
+        Box::new(move |m, i, o| {
+            let (rgrad, rest) = o.split_at_mut(1);
+            m.gradient_step(&i[0], &i[1], t, &mut rgrad[0], &mut rest[0])
+        }),
+    )
+}
+
 #[cfg(test)]
 mod device_tests {
     use super::*;
@@ -4363,6 +4556,18 @@ mod conjugacy_abi_tests {
         assert_eq!(offset_of!(rgmin_scg_params_t, tol_sol), 24);
         assert_eq!(offset_of!(rgmin_scg_params_t, tol_func), 32);
         assert_eq!(offset_of!(rgmin_scg_params_t, conjugacy), 40);
+    }
+
+    #[test]
+    fn eigenpair_ex_extends_the_minor_39_record() {
+        assert_eq!(offset_of!(rgmin_eigenpair_t, value), 0);
+        assert_eq!(offset_of!(rgmin_eigenpair_t, actions), 8);
+        assert_eq!(size_of::<rgmin_eigenpair_t>(), 16);
+        assert_eq!(offset_of!(rgmin_eigenpair_ex_t, value), 0);
+        assert_eq!(offset_of!(rgmin_eigenpair_ex_t, actions), 8);
+        assert_eq!(offset_of!(rgmin_eigenpair_ex_t, residual), 16);
+        assert_eq!(offset_of!(rgmin_eigenpair_ex_t, converged), 24);
+        assert_eq!(size_of::<rgmin_eigenpair_ex_t>(), 32);
     }
 
     #[test]
@@ -4409,4 +4614,1767 @@ mod conjugacy_abi_tests {
             );
         }
     }
+}
+
+// --- 0.5.2 surface joined at ABI minor 40. Minor 39 is rgmin_lowest_eigenpairs. ---
+
+pub const RGMIN_PRECON_NONE: u32 = 0;
+/// Packwood exponential metric.
+pub const RGMIN_PRECON_EXP: u32 = 1;
+/// Lindh model Hessian.
+pub const RGMIN_PRECON_LINDH: u32 = 2;
+/// Bonded metric.
+pub const RGMIN_PRECON_FF: u32 = 3;
+/// [`crate::select_precon`].
+pub const RGMIN_PRECON_AUTO: u32 = 4;
+
+/// Periodic bulk, for [`rgmin_precon_t::geometry_kind`].
+pub const RGMIN_GEOM_BULK: i32 = 0;
+/// Slab or surface.
+pub const RGMIN_GEOM_SURFACE: i32 = 1;
+/// Isolated molecule.
+pub const RGMIN_GEOM_MOLECULE: i32 = 2;
+/// Finite cluster.
+pub const RGMIN_GEOM_CLUSTER: i32 = 3;
+
+/// One description of every geometry preconditioner. ABI minor 32.
+///
+/// `struct_size` is `sizeof` on the caller side. A shorter value is
+/// rejected. Bytes past the fields this build knows are ignored.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct rgmin_precon_t {
+    /// `sizeof(rgmin_precon_t)` as the caller compiled it.
+    pub struct_size: u32,
+    /// [`RGMIN_PRECON_NONE`] through [`RGMIN_PRECON_AUTO`].
+    pub kind: u32,
+    /// Diagonal stabilization. NaN or <= 0 selects the default.
+    pub c_stab: f64,
+    /// Energy scale. NaN or <= 0 estimates it.
+    pub mu: f64,
+    /// Cutoff. NaN or <= 0 leaves the cutoff open.
+    pub r_cut: f64,
+    /// Orthorhombic lengths. A component <= 0 leaves that axis open.
+    pub cell: [f64; 3],
+    /// Atomic numbers, length `natoms`. Lindh and AUTO.
+    pub numbers: *const i32,
+    /// Free atoms. Lindh and AUTO require `3 * natoms == dim`.
+    pub natoms: usize,
+    /// Ghost atomic numbers, length `nghost`.
+    pub ghost_z: *const i32,
+    /// Ghost coordinates, length `3 * nghost`.
+    pub ghost_pos: *const f64,
+    /// Frozen atoms.
+    pub nghost: usize,
+    /// Exp neighbour index, length `npairs`.
+    pub nbr_i: *const usize,
+    /// Exp neighbour index, length `npairs`.
+    pub nbr_j: *const usize,
+    /// Exp pair distance. Null takes Cartesian distances on the next step.
+    pub nbr_r: *const f64,
+    /// Exp pairs.
+    pub npairs: usize,
+    /// Free atom bonded to a frozen atom.
+    pub anchor_i: *const usize,
+    /// Distance of that bond.
+    pub anchor_r: *const f64,
+    /// Anchor bonds.
+    pub nanchor: usize,
+    /// Exp exponent A. NaN or <= 0 selects 3.
+    pub exp_a: f64,
+    /// Harmonic bonds.
+    pub bonds: *const rgmin_bond_t,
+    /// Bond count.
+    pub nbonds: usize,
+    /// Harmonic angles.
+    pub angles: *const rgmin_angle_t,
+    /// Angle count.
+    pub nangles: usize,
+    /// Nonzero adds the Lindh torsion term.
+    pub dihedrals: i32,
+    /// [`RGMIN_GEOM_BULK`] and the three companions. AUTO only.
+    pub geometry_kind: i32,
+}
+
+/// Optional SCG policies, separate from the stable parameter record.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct rgmin_scg_options_t {
+    /// Literal [`rgmin_scg_step_tolerance_t`]. Unknown values are rejected.
+    pub step_tolerance: i32,
+}
+
+/// Accepted-step SCG convergence rule.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum rgmin_scg_step_tolerance_t {
+    RGMIN_SCG_ABSOLUTE_INFINITY = 0,
+    RGMIN_SCG_RELATIVE_EUCLIDEAN = 1,
+}
+
+/// Optional backend settings, separate from the stable base parameters.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct rgmin_eigen_options_t {
+    /// ChASE filter degree. Zero selects the backend default.
+    pub degree: u32,
+    /// ChASE extra search dimensions. Zero selects the backend default.
+    pub extra: u32,
+}
+
+/// Lowest Hessian eigenpair with separate optional backend settings.
+/// Matrix-free backends ignore the ChASE degree and extra dimensions.
+/// A null options pointer selects the backend defaults.
+///
+/// # Safety
+/// The tensor and callback requirements are those of [`rgmin_lowest_eigenpair`].
+/// Non-null parameter and options pointers refer to their declared C records.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_lowest_eigenpair_with_options(
+    hvp: Option<rgmin_hvp_fn>,
+    user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    seed: *const DLManagedTensorVersioned,
+    mode_out: *mut DLManagedTensorVersioned,
+    params: *const rgmin_eigen_params_t,
+    options: *const rgmin_eigen_options_t,
+    out: *mut rgmin_lowest_mode_t,
+) -> rgmin_status_t {
+    let Some(hvp) = hvp else {
+        set_last_error("rgmin_lowest_eigenpair: null hvp");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    };
+    if out.is_null() {
+        set_last_error("rgmin_lowest_eigenpair: null out");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let xs = match cpu_f64_slice(x, "x") {
+        Ok(s) => s,
+        Err(st) => return st,
+    };
+    let seed_s = match cpu_f64_slice(seed, "seed") {
+        Ok(s) => s,
+        Err(st) => return st,
+    };
+    let x_arr = Array1::from(xs.to_vec());
+    let seed_arr = Array1::from(seed_s.to_vec());
+    let mode_s = match cpu_f64_slice_mut(mode_out, "mode_out") {
+        Ok(s) => s,
+        Err(st) => return st,
+    };
+    if x_arr.len() != seed_arr.len() || x_arr.len() != mode_s.len() {
+        set_last_error("rgmin_lowest_eigenpair: x/seed/mode length mismatch");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let mut typed = match eigen_params_from_c(params) {
+        Ok(p) => p,
+        Err(st) => return st,
+    };
+    if let Some(options) = unsafe { options.as_ref() } {
+        typed.degree = options.degree as usize;
+        typed.extra = options.extra as usize;
+    }
+    let apply = CHvp { hvp, user };
+    match lowest_mode(&apply, x_arr.view(), seed_arr.view(), &typed) {
+        Ok(mode) => {
+            mode_s.copy_from_slice(mode.vector.as_slice().unwrap_or(&[]));
+            unsafe {
+                *out = rgmin_lowest_mode_t {
+                    value: mode.value,
+                    actions: mode.actions,
+                };
+            }
+            rgmin_status_t::RGMIN_SUCCESS
+        }
+        Err(e) => status_from_error(&e),
+    }
+}
+
+/// Møller SCG with an explicit accepted-step convergence rule.
+/// A null options pointer selects the absolute infinity-norm rule.
+///
+/// # Safety
+/// The tensor and callback requirements are those of [`rgmin_minimize_scg`].
+/// A non-null options pointer refers to an initialized C options record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_minimize_scg_with_options(
+    eval: Option<rgmin_eval_fn>,
+    grad: Option<rgmin_grad_fn>,
+    curv: Option<rgmin_curv_fn>,
+    user: *mut c_void,
+    x: *mut DLManagedTensorVersioned,
+    ctrl: *const rgmin_control_t,
+    params: *const rgmin_scg_params_t,
+    options: *const rgmin_scg_options_t,
+    out: *mut rgmin_report_t,
+) -> rgmin_status_t {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let eval = match eval {
+            Some(f) => f,
+            None => {
+                set_last_error("rgmin_minimize_scg: eval is NULL");
+                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+            }
+        };
+        let grad = match grad {
+            Some(f) => f,
+            None => {
+                set_last_error("rgmin_minimize_scg: grad is NULL");
+                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+            }
+        };
+        if ctrl.is_null() || out.is_null() {
+            set_last_error("rgmin_minimize_scg: ctrl/out null");
+            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        }
+        let init = match cpu_f64_slice_mut(x, "x") {
+            Ok(s) => s.to_vec(),
+            Err(st) => return st,
+        };
+        let n = init.len();
+        let c = unsafe { &*ctrl };
+        let control = control_from_c(c);
+        let (scg, conjugacy) = if params.is_null() {
+            (ScgParams::default(), Conjugacy::PolakRibiere)
+        } else {
+            let p = unsafe { &*params };
+            match conjugacy_from_c(p.conjugacy) {
+                Ok(c) => (
+                    ScgParams {
+                        sigma0: p.sigma0,
+                        lambda: p.lambda,
+                        lambda_limit: p.lambda_limit,
+                        tol_sol: p.tol_sol,
+                        tol_func: p.tol_func,
+                    },
+                    c,
+                ),
+                Err(st) => return st,
+            }
+        };
+        let step_tolerance = match unsafe { options.as_ref() }.map_or(0, |o| o.step_tolerance) {
+            0 => ScgStepTolerance::AbsoluteInfinity,
+            1 => ScgStepTolerance::RelativeEuclidean,
+            other => {
+                set_last_error(&format!(
+                    "rgmin_minimize_scg: unknown step tolerance {other}"
+                ));
+                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+            }
+        };
+        let options = ScgOptions { step_tolerance };
+        let restart = Restart::Never;
+        let obj = ScgFfiOracle {
+            inner: c_oracle(eval, grad, user, n),
+            curv: curv.map(|f| f as usize),
+            user: user as usize,
+            scratch: Scratch::new(),
+        };
+        let report = if obj.curv.is_some() {
+            minimize_scg_exact_with_options(
+                &obj,
+                Array1::from(init),
+                &control,
+                &scg,
+                conjugacy,
+                restart,
+                &options,
+            )
+        } else {
+            minimize_scg_with_options(
+                &obj.inner,
+                Array1::from(init),
+                &control,
+                &scg,
+                conjugacy,
+                restart,
+                &options,
+            )
+        };
+        match report {
+            Ok(rep) => {
+                let dest = match cpu_f64_slice_mut(x, "x") {
+                    Ok(s) => s,
+                    Err(st) => return st,
+                };
+                dest.copy_from_slice(rep.coords.as_slice().expect("contiguous"));
+                unsafe {
+                    *out = rgmin_report_t {
+                        value: rep.value,
+                        steps: rep.steps,
+                        grad_norm: rep.grad_norm,
+                        stop: stop_from_status(rep.status),
+                    };
+                }
+                rgmin_status_t::RGMIN_SUCCESS
+            }
+            Err(e) => status_from_error(&e),
+        }
+    })) {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("rgmin_minimize_scg: panic");
+            rgmin_status_t::RGMIN_INTERNAL_ERROR
+        }
+    }
+}
+
+/// Geometry preconditioner. ABI minor 32.
+///
+/// Field names that already existed on the old exponential parameters
+/// keep those names: `c_stab`, `mu`, `r_cut`. `exp_a` is the old `a`.
+/// `cell` replaces the three lattice lengths.
+///
+/// Morse bonds and FF harmonic torsions are not on this struct. They
+/// stay on [`crate::PreconSpec::Ff`]. Lindh's torsion term is
+/// `dihedrals`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct rgmin_bond_t {
+    /// Free-atom index.
+    pub i: u32,
+    /// Free-atom index.
+    pub j: u32,
+    /// Harmonic curvature.
+    pub k: f64,
+}
+
+/// One harmonic angle. `vertex` is the centre atom.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct rgmin_angle_t {
+    /// Free-atom index.
+    pub i: u32,
+    /// Free-atom index of the vertex.
+    pub vertex: u32,
+    /// Free-atom index.
+    pub k: u32,
+    /// Harmonic angle curvature.
+    pub k_theta: f64,
+}
+
+fn precon_blank(kind: u32) -> rgmin_precon_t {
+    rgmin_precon_t {
+        struct_size: std::mem::size_of::<rgmin_precon_t>() as u32,
+        kind,
+        c_stab: f64::NAN,
+        mu: f64::NAN,
+        r_cut: f64::NAN,
+        cell: [0.0, 0.0, 0.0],
+        numbers: std::ptr::null(),
+        natoms: 0,
+        ghost_z: std::ptr::null(),
+        ghost_pos: std::ptr::null(),
+        nghost: 0,
+        nbr_i: std::ptr::null(),
+        nbr_j: std::ptr::null(),
+        nbr_r: std::ptr::null(),
+        npairs: 0,
+        anchor_i: std::ptr::null(),
+        anchor_r: std::ptr::null(),
+        nanchor: 0,
+        exp_a: f64::NAN,
+        bonds: std::ptr::null(),
+        nbonds: 0,
+        angles: std::ptr::null(),
+        nangles: 0,
+        dihedrals: 0,
+        geometry_kind: 0,
+    }
+}
+
+/// Fill `p` with defaults for `kind`.
+///
+/// # Safety
+///
+/// `p` is null or valid for a write of [`rgmin_precon_t`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_precon_init(p: *mut rgmin_precon_t, kind: u32) {
+    if p.is_null() {
+        return;
+    }
+    unsafe { p.write(precon_blank(kind)) };
+}
+
+fn load_precon(p: *const rgmin_precon_t) -> std::result::Result<rgmin_precon_t, &'static str> {
+    if p.is_null() {
+        return Err("rgmin_solver_set_precon: null params");
+    }
+    let got = unsafe { (*p).struct_size } as usize;
+    let full = std::mem::size_of::<rgmin_precon_t>();
+    if got < full {
+        return Err("rgmin_solver_set_precon: struct_size is too small");
+    }
+    let mut local = precon_blank(RGMIN_PRECON_NONE);
+    let n = full;
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            p.cast::<u8>(),
+            (&mut local as *mut rgmin_precon_t).cast::<u8>(),
+            n,
+        );
+    }
+    Ok(local)
+}
+
+/// Install the geometry preconditioner described by `params`.
+///
+/// Every neighbour, anchor, bond, and angle index is checked against
+/// `dim / 3` before the session stores the list. A bad index does not
+/// wait for the next step.
+///
+/// # Safety
+///
+/// `solver` is null or a live session. `params` is null or readable
+/// for `params->struct_size` bytes, and every pointer it holds is null
+/// or valid for the count beside it.
+#[unsafe(no_mangle)]
+fn install_auto(solver: *mut rgmin_solver_t, p: &rgmin_precon_t, atoms: usize) -> rgmin_status_t {
+    if p.numbers.is_null() || p.natoms != atoms {
+        set_last_error("rgmin_solver_set_precon: AUTO needs one atomic number per free atom");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let z = unsafe { slice::from_raw_parts(p.numbers, p.natoms) };
+    let kind = match p.geometry_kind {
+        RGMIN_GEOM_BULK => crate::GeometryKind::Bulk,
+        RGMIN_GEOM_SURFACE => crate::GeometryKind::Surface,
+        RGMIN_GEOM_MOLECULE => crate::GeometryKind::Molecule,
+        RGMIN_GEOM_CLUSTER => crate::GeometryKind::Cluster,
+        _ => {
+            set_last_error("rgmin_solver_set_precon: unknown geometry_kind");
+            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        }
+    };
+    let has_ff = p.nbonds > 0 || p.nangles > 0;
+    let family = unsafe { (*solver).solver.optimizer_family() };
+    match crate::select_precon(kind, z, has_ff, family) {
+        crate::PreconChoice::Identity => {
+            unsafe { (*solver).solver.clear_precon() };
+            rgmin_status_t::RGMIN_SUCCESS
+        }
+        crate::PreconChoice::Exp => {
+            if p.npairs == 0 && p.nanchor == 0 {
+                set_last_error(
+                    "rgmin_solver_set_precon: AUTO selected Exp and the neighbour list is empty",
+                );
+                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+            }
+            install_exp(solver, p, atoms)
+        }
+        crate::PreconChoice::Lindh => install_lindh(solver, p, atoms),
+        crate::PreconChoice::Ff => install_ff(solver, p, atoms),
+    }
+}
+
+fn install_exp(solver: *mut rgmin_solver_t, p: &rgmin_precon_t, atoms: usize) -> rgmin_status_t {
+    if p.npairs > 0 && (p.nbr_i.is_null() || p.nbr_j.is_null()) {
+        set_last_error("rgmin_solver_set_precon: null neighbour list");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    if p.nanchor > 0 && (p.anchor_i.is_null() || p.anchor_r.is_null()) {
+        set_last_error("rgmin_solver_set_precon: null anchor list");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    if p.natoms != 0 && p.natoms != atoms {
+        set_last_error("rgmin_solver_set_precon: natoms is not dim / 3");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let i = if p.npairs == 0 {
+        Vec::new()
+    } else {
+        unsafe { slice::from_raw_parts(p.nbr_i, p.npairs) }.to_vec()
+    };
+    let j = if p.npairs == 0 {
+        Vec::new()
+    } else {
+        unsafe { slice::from_raw_parts(p.nbr_j, p.npairs) }.to_vec()
+    };
+    for (&a, &b) in i.iter().zip(&j) {
+        if !index_ok(a, atoms) || !index_ok(b, atoms) {
+            set_last_error("rgmin_solver_set_precon: neighbour index is out of range");
+            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        }
+    }
+    let r = if p.nbr_r.is_null() || p.npairs == 0 {
+        Vec::new()
+    } else {
+        unsafe { slice::from_raw_parts(p.nbr_r, p.npairs) }.to_vec()
+    };
+    let mut anchor = Vec::with_capacity(p.nanchor);
+    if p.nanchor > 0 {
+        let ai = unsafe { slice::from_raw_parts(p.anchor_i, p.nanchor) };
+        let ar = unsafe { slice::from_raw_parts(p.anchor_r, p.nanchor) };
+        for k in 0..p.nanchor {
+            if !index_ok(ai[k], atoms) {
+                set_last_error("rgmin_solver_set_precon: anchor index is out of range");
+                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+            }
+            anchor.push((ai[k], ar[k]));
+        }
+    }
+    let neighbours = crate::Neighbours { i, j, r, anchor };
+    let mut params = ExpParams::default();
+    if let Some(a) = optional_positive(p.exp_a) {
+        params.a = a;
+    }
+    if let Some(c) = optional_positive(p.c_stab) {
+        params.c_stab = c;
+    }
+    params.mu = optional_positive(p.mu);
+    params.r_cut = optional_positive(p.r_cut);
+    params.lengths = cell_of(p.cell);
+    if neighbours.r.is_empty() {
+        match crate::precon::ExpState::deferred(neighbours, params) {
+            Ok(state) => {
+                unsafe { (*solver).solver.set_exp_deferred(state) };
+                rgmin_status_t::RGMIN_SUCCESS
+            }
+            Err(e) => {
+                set_last_error(&e.to_string());
+                rgmin_status_t::RGMIN_INVALID_PARAMETER
+            }
+        }
+    } else {
+        let positions = vec![0.0; atoms * 3];
+        match unsafe {
+            (*solver)
+                .solver
+                .set_exp(ndarray::ArrayView1::from(&positions), &neighbours, &params)
+        } {
+            Ok(()) => rgmin_status_t::RGMIN_SUCCESS,
+            Err(e) => {
+                set_last_error(&e.to_string());
+                rgmin_status_t::RGMIN_INVALID_PARAMETER
+            }
+        }
+    }
+}
+
+fn install_lindh(solver: *mut rgmin_solver_t, p: &rgmin_precon_t, atoms: usize) -> rgmin_status_t {
+    if p.numbers.is_null() || p.natoms == 0 {
+        set_last_error("rgmin_solver_set_precon: null atomic numbers");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    if p.natoms != atoms {
+        set_last_error("rgmin_solver_set_precon: dimension is not 3 * natoms");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    if p.nghost > 0 && (p.ghost_z.is_null() || p.ghost_pos.is_null()) {
+        set_last_error("rgmin_solver_set_precon: null ghost list");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let z = unsafe { slice::from_raw_parts(p.numbers, p.natoms) }.to_vec();
+    let mut ghosts = Vec::with_capacity(p.nghost);
+    if p.nghost > 0 {
+        let gz = unsafe { slice::from_raw_parts(p.ghost_z, p.nghost) };
+        let gp = unsafe { slice::from_raw_parts(p.ghost_pos, 3 * p.nghost) };
+        for i in 0..p.nghost {
+            ghosts.push(crate::Ghost {
+                z: gz[i],
+                position: [gp[3 * i], gp[3 * i + 1], gp[3 * i + 2]],
+            });
+        }
+    }
+    let mut params = crate::LindhParams::default();
+    if let Some(c) = optional_positive(p.c_stab) {
+        params.c_stab = c;
+    }
+    params.r_cut = optional_positive(p.r_cut);
+    params.mu = optional_positive(p.mu);
+    params.lengths = cell_of(p.cell);
+    params.dihedrals = p.dihedrals != 0;
+    match crate::precon::LindhState::deferred(z, ghosts, params) {
+        Ok(state) => {
+            unsafe { (*solver).solver.set_lindh_deferred(state) };
+            rgmin_status_t::RGMIN_SUCCESS
+        }
+        Err(e) => {
+            set_last_error(&e.to_string());
+            rgmin_status_t::RGMIN_INVALID_PARAMETER
+        }
+    }
+}
+
+fn install_ff(solver: *mut rgmin_solver_t, p: &rgmin_precon_t, atoms: usize) -> rgmin_status_t {
+    if p.nbonds > 0 && p.bonds.is_null() {
+        set_last_error("rgmin_solver_set_precon: null bond list");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    if p.nangles > 0 && p.angles.is_null() {
+        set_last_error("rgmin_solver_set_precon: null angle list");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let mut bonds = Vec::with_capacity(p.nbonds);
+    if p.nbonds > 0 {
+        let raw = unsafe { slice::from_raw_parts(p.bonds, p.nbonds) };
+        for b in raw {
+            if !index_ok(b.i as usize, atoms) || !index_ok(b.j as usize, atoms) {
+                set_last_error("rgmin_solver_set_precon: bond index is out of range");
+                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+            }
+            bonds.push(crate::BondTerm {
+                i: b.i as usize,
+                j: b.j as usize,
+                k: b.k,
+            });
+        }
+    }
+    let mut angles = Vec::with_capacity(p.nangles);
+    if p.nangles > 0 {
+        let raw = unsafe { slice::from_raw_parts(p.angles, p.nangles) };
+        for a in raw {
+            if !index_ok(a.i as usize, atoms)
+                || !index_ok(a.vertex as usize, atoms)
+                || !index_ok(a.k as usize, atoms)
+            {
+                set_last_error("rgmin_solver_set_precon: angle index is out of range");
+                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+            }
+            angles.push(crate::AngleTerm {
+                i: a.i as usize,
+                vertex: a.vertex as usize,
+                k: a.k as usize,
+                k_theta: a.k_theta,
+            });
+        }
+    }
+    let mut params = crate::FfParams::default();
+    if let Some(c) = optional_positive(p.c_stab) {
+        params.c_stab = c;
+    }
+    params.r_cut = optional_positive(p.r_cut);
+    params.mu = optional_positive(p.mu);
+    params.lengths = cell_of(p.cell);
+    match crate::precon::FfState::deferred(bonds, angles, params) {
+        Ok(state) => {
+            unsafe { (*solver).solver.set_ff_deferred(state) };
+            rgmin_status_t::RGMIN_SUCCESS
+        }
+        Err(e) => {
+            set_last_error(&e.to_string());
+            rgmin_status_t::RGMIN_INVALID_PARAMETER
+        }
+    }
+}
+
+fn rigid_masses<'a>(
+    masses: *const f64,
+    n_mass: usize,
+    n: usize,
+) -> Result<&'a [f64], rgmin_status_t> {
+    if masses.is_null() || n_mass == 0 {
+        Ok(&[])
+    } else if n_mass != n / 3 {
+        Err(rgmin_status_t::RGMIN_INVALID_PARAMETER)
+    } else {
+        Ok(unsafe { slice::from_raw_parts(masses, n_mass) })
+    }
+}
+
+/// Install a geometry preconditioner.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+/// `params` is null or a `rgmin_precon_t` the caller initialized.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_precon(
+    solver: *mut rgmin_solver_t,
+    params: *const rgmin_precon_t,
+) -> rgmin_status_t {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_precon: null solver");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let p = match load_precon(params) {
+        Ok(p) => p,
+        Err(e) => {
+            set_last_error(e);
+            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        }
+    };
+    let dim = unsafe { (*solver).solver.dim() };
+    if dim % 3 != 0 || dim == 0 {
+        set_last_error("rgmin_solver_set_precon: dimension is not a positive multiple of 3");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let atoms = dim / 3;
+    match p.kind {
+        RGMIN_PRECON_NONE => {
+            unsafe { (*solver).solver.clear_precon() };
+            rgmin_status_t::RGMIN_SUCCESS
+        }
+        RGMIN_PRECON_EXP => install_exp(solver, &p, atoms),
+        RGMIN_PRECON_LINDH => install_lindh(solver, &p, atoms),
+        RGMIN_PRECON_FF => install_ff(solver, &p, atoms),
+        RGMIN_PRECON_AUTO => install_auto(solver, &p, atoms),
+        _ => {
+            set_last_error("rgmin_solver_set_precon: unknown kind");
+            rgmin_status_t::RGMIN_INVALID_PARAMETER
+        }
+    }
+}
+
+/// Drop whichever geometry preconditioner is installed.
+///
+/// # Safety
+///
+/// `solver` is null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_clear_precon(solver: *mut rgmin_solver_t) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.clear_precon() };
+}
+
+/// Energy scale of the installed geometry preconditioner, or NaN.
+///
+/// # Safety
+///
+/// `solver` is null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_precon_scale(solver: *const rgmin_solver_t) -> f64 {
+    if solver.is_null() {
+        return f64::NAN;
+    }
+    unsafe { (*solver).solver.precon_scale().unwrap_or(f64::NAN) }
+}
+
+/// FIRE schedule of a FIRE session (see [`crate::FireVariant`]).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum rgmin_fire_variant_t {
+    /// The session's FIRE kind with rgmin's parameters.
+    RGMIN_FIRE_RGMIN = 0,
+    /// FIRE 2.0 as Guénolé et al. 2020 algorithm 2 publishes it.
+    RGMIN_FIRE_GUENOLE2020 = 1,
+}
+
+/// Select the FIRE schedule; a no-op on a non-FIRE session.
+///
+/// # Safety
+///
+/// `solver` must be null or a live handle from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_fire_variant(
+    solver: *mut rgmin_solver_t,
+    variant: rgmin_fire_variant_t,
+) {
+    if solver.is_null() {
+        return;
+    }
+    let v = match variant {
+        rgmin_fire_variant_t::RGMIN_FIRE_RGMIN => crate::FireVariant::Rgmin,
+        rgmin_fire_variant_t::RGMIN_FIRE_GUENOLE2020 => crate::FireVariant::Guenole2020,
+    };
+    unsafe { (*solver).solver.set_fire_variant(v) };
+}
+
+/// Split a quick-min session into atoms `[0, at)` and cell `[at, n)`.
+///
+/// # Safety
+///
+/// `solver` must be null or a live handle from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_quickmin_cell(
+    solver: *mut rgmin_solver_t,
+    at: usize,
+) -> rgmin_status_t {
+    if solver.is_null() {
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    match unsafe { (*solver).solver.set_quickmin_cell(at) } {
+        Ok(()) => rgmin_status_t::RGMIN_SUCCESS,
+        Err(_) => rgmin_status_t::RGMIN_INVALID_PARAMETER,
+    }
+}
+
+/// Quick-min options of a quick-min session (see [`crate::QuickMinOptions`]).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum rgmin_quickmin_variant_t {
+    /// [`crate::QuickMinOptions::rgmin`]: FIRE time step, clamp rescale.
+    RGMIN_QUICKMIN_RGMIN = 0,
+    /// [`crate::QuickMinOptions::eon`]: fixed time step, no rescale.
+    RGMIN_QUICKMIN_EON = 1,
+    /// [`crate::QuickMinOptions::per_atom`]: one projection per atom.
+    RGMIN_QUICKMIN_PER_ATOM = 2,
+}
+
+/// Select the quick-min options; a no-op on any other session. The
+/// velocity and the time step restart; the cell split stays.
+///
+/// # Safety
+///
+/// `solver` must be null or a live handle from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_quickmin_variant(
+    solver: *mut rgmin_solver_t,
+    variant: rgmin_quickmin_variant_t,
+) {
+    if solver.is_null() {
+        return;
+    }
+    let options = match variant {
+        rgmin_quickmin_variant_t::RGMIN_QUICKMIN_RGMIN => crate::QuickMinOptions::rgmin(),
+        rgmin_quickmin_variant_t::RGMIN_QUICKMIN_EON => crate::QuickMinOptions::eon(),
+        rgmin_quickmin_variant_t::RGMIN_QUICKMIN_PER_ATOM => crate::QuickMinOptions::per_atom(),
+    };
+    unsafe { (*solver).solver.set_quickmin_options(options) };
+}
+
+/// Set the session's line search (see [`crate::Solver::set_linesearch`]).
+///
+/// Returns `RGMIN_INVALID_PARAMETER` and leaves the session unchanged
+/// when `maxiter` is zero or the constants leave their ranges: Wolfe
+/// needs `0 < c1 < c2 < 1`, backtracking `0 < c1 < 1` and
+/// `0 < c2 < 1`, Goldstein `0 < c1 < 0.5` and `0 < c2 < 1`, Brent a
+/// positive tolerance `c1`.
+///
+/// # Safety
+///
+/// `solver` must be null or a live handle from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_linesearch(
+    solver: *mut rgmin_solver_t,
+    kind: rgmin_linesearch_t,
+    c1: f64,
+    c2: f64,
+    maxiter: usize,
+) -> rgmin_status_t {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_linesearch: null solver");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let unit = |v: f64| v > 0.0 && v < 1.0;
+    let ls = match kind {
+        rgmin_linesearch_t::RGMIN_LINESEARCH_WOLFE if unit(c1) && unit(c2) && c1 < c2 => {
+            Some(LineSearch::Wolfe { c1, c2, maxiter })
+        }
+        rgmin_linesearch_t::RGMIN_LINESEARCH_BACKTRACKING if unit(c1) && unit(c2) => {
+            Some(LineSearch::Backtracking {
+                c: c1,
+                beta: c2,
+                maxiter,
+            })
+        }
+        rgmin_linesearch_t::RGMIN_LINESEARCH_GOLDSTEIN if c1 > 0.0 && c1 < 0.5 && unit(c2) => {
+            Some(LineSearch::Goldstein {
+                c: c1,
+                beta: c2,
+                maxiter,
+            })
+        }
+        rgmin_linesearch_t::RGMIN_LINESEARCH_BRENT if c1 > 0.0 && c1.is_finite() => {
+            Some(LineSearch::Brent { maxiter, tol: c1 })
+        }
+        _ => None,
+    };
+    match ls {
+        Some(ls) if maxiter > 0 => {
+            unsafe { (*solver).solver.set_linesearch(ls) };
+            rgmin_status_t::RGMIN_SUCCESS
+        }
+        _ => {
+            set_last_error("rgmin_solver_set_linesearch: constants out of range");
+            rgmin_status_t::RGMIN_INVALID_PARAMETER
+        }
+    }
+}
+
+/// Configure approximate Wolfe values for the session's Euclidean line
+/// searches under every [`rgmin_accept_t`].
+/// Negative or nonfinite relative windows leave the session unchanged.
+///
+/// # Safety
+/// `solver` must be null or a live handle from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_objective_roundoff(
+    solver: *mut rgmin_solver_t,
+    relative: f64,
+) -> rgmin_status_t {
+    let Some(solver) = (unsafe { solver.as_mut() }) else {
+        set_last_error("rgmin_solver_set_objective_roundoff: null solver");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    };
+    if solver.solver.set_objective_roundoff(relative) {
+        rgmin_status_t::RGMIN_SUCCESS
+    } else {
+        set_last_error("rgmin_solver_set_objective_roundoff: invalid relative window");
+        rgmin_status_t::RGMIN_INVALID_PARAMETER
+    }
+}
+
+/// Capped Cartesian L-BFGS takes the geometry step (eOn's L-BFGS with a
+/// finite-difference or `sy/yy` initial curvature, resets, and an energy
+/// test). Nonzero turns it on. Off, the per-atom cap only clips the
+/// two-loop trial. Needs a per-atom cap. Unset, a Wolfe session with an
+/// explicit per-atom cap takes this step; off keeps its strong Wolfe
+/// search under the cap.
+///
+/// # Safety
+///
+/// A non-null `solver` must be a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_geometry_step(solver: *mut rgmin_solver_t, enabled: i32) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_geometry_step(enabled != 0) };
+}
+
+/// `0` off, `1` auto, `2` translation, `3` translation and rotation.
+///
+/// # Safety
+///
+/// A non-null `solver` must be a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_rigid_mode(solver: *mut rgmin_solver_t, mode: i32) {
+    if solver.is_null() {
+        return;
+    }
+    let Some(mode) = crate::RigidMode::from_i32(mode) else {
+        set_last_error("rgmin_solver_set_rigid_mode: mode is not 0, 1, 2, or 3");
+        return;
+    };
+    unsafe { (*solver).solver.set_rigid_mode(mode) };
+}
+
+/// Cartesian mass inner product. A raw force leaves this at zero.
+///
+/// # Safety
+///
+/// A non-null `solver` must be a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_rigid_mass_metric(
+    solver: *mut rgmin_solver_t,
+    enabled: i32,
+) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_rigid_mass_metric(enabled != 0) };
+}
+
+/// Coordinates store `q_i = sqrt(m_i) x_i`. Not both this and the mass metric.
+///
+/// # Safety
+///
+/// A non-null `solver` must be a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_rigid_mass_weighted(
+    solver: *mut rgmin_solver_t,
+    enabled: i32,
+) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_rigid_mass_weighted(enabled != 0) };
+}
+
+/// Periodic axes. A slab is `(1, 1, 0)`.
+///
+/// # Safety
+///
+/// A non-null `solver` must be a live session from [`rgmin_solver_create`]; pointer arguments are null or valid for the documented length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_pbc_axes(
+    solver: *mut rgmin_solver_t,
+    x: i32,
+    y: i32,
+    z: i32,
+) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_pbc_axes(x != 0, y != 0, z != 0) };
+}
+
+/// Length `3N`. A nonzero byte freezes that coordinate. Null or `len == 0` clears it.
+///
+/// # Safety
+///
+/// A non-null `solver` must be a live session from [`rgmin_solver_create`]; pointer arguments are null or valid for the documented length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_frozen(
+    solver: *mut rgmin_solver_t,
+    frozen: *const u8,
+    len: usize,
+) {
+    if solver.is_null() {
+        return;
+    }
+    if frozen.is_null() || len == 0 {
+        unsafe { (*solver).solver.set_frozen(&[]) };
+        return;
+    }
+    let slice = unsafe { slice::from_raw_parts(frozen, len) };
+    unsafe { (*solver).solver.set_frozen(slice) };
+}
+
+/// Broken translations, then broken rotations. The host sets both.
+///
+/// # Safety
+///
+/// A non-null `solver` must be a live session from [`rgmin_solver_create`]; pointer arguments are null or valid for the documented length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_broken_axes(
+    solver: *mut rgmin_solver_t,
+    tx: i32,
+    ty: i32,
+    tz: i32,
+    rx: i32,
+    ry: i32,
+    rz: i32,
+) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe {
+        (*solver)
+            .solver
+            .set_broken_axes(tx != 0, ty != 0, tz != 0, rx != 0, ry != 0, rz != 0);
+    }
+}
+
+/// Alias for [`rgmin_solver_set_trust`].
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_highs_trust(
+    solver: *mut rgmin_solver_t,
+    radius: f64,
+) -> i32 {
+    unsafe { rgmin_solver_set_trust(solver, radius) }
+}
+
+/// Configure the factor shape geometry.
+///
+/// # Safety
+/// `solver` must be null or a live handle from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_factor_shape(
+    solver: *mut rgmin_solver_t,
+    n: usize,
+    p: usize,
+) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_factor_shape(n, p) };
+}
+
+/// Configure the unitary geometry.
+///
+/// # Safety
+/// `solver` must be null or a live handle from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_unitary(solver: *mut rgmin_solver_t, n: usize) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_unitary(n) };
+}
+
+/// Caller-owned Eckart buffers. One per image. Not thread-local.
+pub struct rgmin_rigid_workspace_t {
+    inner: crate::RigidWorkspace,
+}
+
+/// Empty workspace.
+///
+/// # Safety
+///
+/// The returned workspace is owned by the caller and released with [`rgmin_rigid_workspace_free`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_rigid_workspace_new() -> *mut rgmin_rigid_workspace_t {
+    Box::into_raw(Box::new(rgmin_rigid_workspace_t {
+        inner: crate::RigidWorkspace::new(),
+    }))
+}
+
+/// Free a workspace from [`rgmin_rigid_workspace_new`].
+///
+/// # Safety
+///
+/// `ws` is null or a workspace from [`rgmin_rigid_workspace_new`] that has not been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_rigid_workspace_free(ws: *mut rgmin_rigid_workspace_t) {
+    if !ws.is_null() {
+        drop(unsafe { Box::from_raw(ws) });
+    }
+}
+
+/// Rank of the last project or project-hessian on this workspace.
+///
+/// # Safety
+///
+/// `ws` is null or a live workspace from [`rgmin_rigid_workspace_new`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_rigid_workspace_rank(ws: *const rgmin_rigid_workspace_t) -> usize {
+    if ws.is_null() {
+        0
+    } else {
+        unsafe { (*ws).inner.rank() }
+    }
+}
+
+/// `P v` in place. `n_mass == 0` is unit mass. A null `frozen` is no freeze.
+///
+/// # Safety
+///
+/// `ws` is a live workspace from [`rgmin_rigid_workspace_new`]; every pointer argument is null or valid for the documented length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_rigid_project(
+    ws: *mut rgmin_rigid_workspace_t,
+    v: *mut f64,
+    n: usize,
+    pos: *const f64,
+    masses: *const f64,
+    n_mass: usize,
+    mode: i32,
+    mass_weighted_coords: i32,
+    mass_metric: i32,
+    pbc_x: i32,
+    pbc_y: i32,
+    pbc_z: i32,
+    frozen: *const u8,
+    broken_tx: i32,
+    broken_ty: i32,
+    broken_tz: i32,
+    broken_rx: i32,
+    broken_ry: i32,
+    broken_rz: i32,
+) -> rgmin_status_t {
+    if ws.is_null() || v.is_null() || pos.is_null() || n == 0 || !n.is_multiple_of(3) {
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let Some(mode) = crate::RigidMode::from_i32(mode) else {
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    };
+    let mass = match rigid_masses(masses, n_mass, n) {
+        Ok(m) => m,
+        Err(st) => return st,
+    };
+    let v = unsafe { slice::from_raw_parts_mut(v, n) };
+    let pos = unsafe { slice::from_raw_parts(pos, n) };
+    let frozen = if frozen.is_null() {
+        None
+    } else {
+        Some(unsafe { slice::from_raw_parts(frozen, n) })
+    };
+    let req = crate::RigidRequest {
+        pos,
+        masses: if mass.is_empty() { None } else { Some(mass) },
+        mass_weighted_coords: mass_weighted_coords != 0,
+        mass_metric: mass_metric != 0 && mass_weighted_coords == 0,
+        mode,
+        pbc: [pbc_x != 0, pbc_y != 0, pbc_z != 0],
+        frozen,
+        broken_translation: [broken_tx != 0, broken_ty != 0, broken_tz != 0],
+        broken_rotation: [broken_rx != 0, broken_ry != 0, broken_rz != 0],
+    };
+    unsafe { (*ws).inner.project(v, &req) };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+/// Replace row-major `H` (`n * n`) with `P H P`.
+///
+/// # Safety
+///
+/// `ws` is a live workspace from [`rgmin_rigid_workspace_new`]; every pointer argument is null or valid for the documented length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_rigid_project_hessian(
+    ws: *mut rgmin_rigid_workspace_t,
+    h: *mut f64,
+    n: usize,
+    pos: *const f64,
+    masses: *const f64,
+    n_mass: usize,
+    mode: i32,
+    mass_weighted_coords: i32,
+    mass_metric: i32,
+    pbc_x: i32,
+    pbc_y: i32,
+    pbc_z: i32,
+    frozen: *const u8,
+    broken_tx: i32,
+    broken_ty: i32,
+    broken_tz: i32,
+    broken_rx: i32,
+    broken_ry: i32,
+    broken_rz: i32,
+) -> rgmin_status_t {
+    if ws.is_null() || h.is_null() || pos.is_null() || n == 0 || !n.is_multiple_of(3) {
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let Some(mode) = crate::RigidMode::from_i32(mode) else {
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    };
+    let mass = match rigid_masses(masses, n_mass, n) {
+        Ok(m) => m,
+        Err(st) => return st,
+    };
+    let h = unsafe { slice::from_raw_parts_mut(h, n * n) };
+    let pos = unsafe { slice::from_raw_parts(pos, n) };
+    let frozen = if frozen.is_null() {
+        None
+    } else {
+        Some(unsafe { slice::from_raw_parts(frozen, n) })
+    };
+    let req = crate::RigidRequest {
+        pos,
+        masses: if mass.is_empty() { None } else { Some(mass) },
+        mass_weighted_coords: mass_weighted_coords != 0,
+        mass_metric: mass_metric != 0 && mass_weighted_coords == 0,
+        mode,
+        pbc: [pbc_x != 0, pbc_y != 0, pbc_z != 0],
+        frozen,
+        broken_translation: [broken_tx != 0, broken_ty != 0, broken_tz != 0],
+        broken_rotation: [broken_rx != 0, broken_ry != 0, broken_rz != 0],
+    };
+    unsafe { (*ws).inner.project_hessian(h, &req) };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+/// Horn / Coutsias alignment. Any periodic axis skips the rotation.
+/// Writes the RMSD when `rmsd` is non-null.
+///
+/// # Safety
+///
+/// Every pointer argument is null or valid for the documented length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_rigid_align(
+    mobile: *mut f64,
+    reference: *const f64,
+    n: usize,
+    masses: *const f64,
+    n_mass: usize,
+    pbc_x: i32,
+    pbc_y: i32,
+    pbc_z: i32,
+    rmsd: *mut f64,
+) -> rgmin_status_t {
+    if mobile.is_null() || reference.is_null() || n == 0 || !n.is_multiple_of(3) {
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let mass = match rigid_masses(masses, n_mass, n) {
+        Ok(m) => m,
+        Err(st) => return st,
+    };
+    let mobile = unsafe { slice::from_raw_parts_mut(mobile, n) };
+    let reference = unsafe { slice::from_raw_parts(reference, n) };
+    let value = crate::align_rigid(
+        mobile,
+        reference,
+        if mass.is_empty() { None } else { Some(mass) },
+        [pbc_x != 0, pbc_y != 0, pbc_z != 0],
+    );
+    if !rmsd.is_null() {
+        unsafe { *rmsd = value };
+    }
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+/// Drop only the cached evaluation (`Solver::forget_evaluation`): the
+/// next step evaluates the objective at the current `x`, and the method
+/// memory, the step scale and the acceptance window stay. For a host
+/// whose oracle changes between steps at the same point, such as a
+/// min-mode effective gradient after the mode moves or a band that arms
+/// its climbing image. ABI minor 28.
+///
+/// # Safety
+///
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_forget_evaluation(solver: *mut rgmin_solver_t) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.forget_evaluation() };
+}
+
+/// Opt-in L-BFGS NEB guards (`Solver::set_lbfgs_neb_guards`): distance,
+/// angle and curvature resets of the pair memory, and an empty-memory
+/// scale of 0.01. Nonzero enables them; zero restores scale one. Other
+/// methods ignore the setting. ABI minor 28.
+///
+/// # Safety
+///
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_lbfgs_neb_guards(
+    solver: *mut rgmin_solver_t,
+    enabled: i32,
+) {
+    if solver.is_null() {
+        return;
+    }
+    unsafe { (*solver).solver.set_lbfgs_neb_guards(enabled != 0) };
+}
+
+fn optional_positive(v: f64) -> Option<f64> {
+    if v.is_finite() && v > 0.0 {
+        Some(v)
+    } else {
+        None
+    }
+}
+
+fn cell_of(cell: [f64; 3]) -> Option<[f64; 3]> {
+    if cell.iter().any(|v| v.is_finite() && *v > 0.0) {
+        Some(cell)
+    } else {
+        None
+    }
+}
+
+fn index_ok(i: usize, natoms: usize) -> bool {
+    i < natoms
+}
+
+/// One pair from [`rgmin_lowest_eigenpairs`]. `actions` is the product
+/// count of the whole solve. ABI minor 39.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct rgmin_eigenpair_t {
+    /// Ritz value.
+    pub value: f64,
+    /// Hessian-vector products used by the solve.
+    pub actions: usize,
+}
+
+/// One pair from [`rgmin_lowest_eigenpairs_ex`]. The first two fields
+/// match [`rgmin_eigenpair_t`]. `residual` is `||Hv − θv||₂` and
+/// `converged` is 1 when that residual met the tolerance. ABI minor 42.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct rgmin_eigenpair_ex_t {
+    /// Ritz value.
+    pub value: f64,
+    /// Hessian-vector products used by the solve.
+    pub actions: usize,
+    /// `||Hv − θv||₂` for this pair.
+    pub residual: f64,
+    /// 1 when `residual` met the tolerance, otherwise 0.
+    pub converged: i32,
+}
+
+fn cpu_dl<'a>(
+    tensor: *const DLManagedTensorVersioned,
+    name: &str,
+) -> Result<&'a DLTensor, rgmin_status_t> {
+    if tensor.is_null() {
+        set_last_error(&format!("{name}: null tensor"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
+    let dl = unsafe { &(*tensor).dl_tensor };
+    if dl.device.device_type != DLDeviceType::kDLCPU {
+        set_last_error(&format!(
+            "{name}: device {:?} not supported in this build (CPU only)",
+            dl.device.device_type as i32
+        ));
+        return Err(rgmin_status_t::RGMIN_UNSUPPORTED_DEVICE);
+    }
+    if dl.dtype.code != DLDataTypeCode::kDLFloat
+        || dl.dtype.bits != 64
+        || dl.dtype.lanes != 1
+        || dl.shape.is_null()
+        || dl.data.is_null()
+        || dl.ndim < 1
+    {
+        set_last_error(&format!("{name}: need an f64 DLPack tensor"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
+    Ok(dl)
+}
+
+fn block_strides(
+    dl: &DLTensor,
+    n: usize,
+    k: usize,
+    name: &str,
+) -> Result<(isize, isize), rgmin_status_t> {
+    let shape = unsafe { slice::from_raw_parts(dl.shape, dl.ndim as usize) };
+    if shape.iter().any(|dim| *dim < 0) {
+        set_last_error(&format!("{name}: negative dimension"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
+    let strides = if dl.strides.is_null() {
+        None
+    } else {
+        Some(unsafe { slice::from_raw_parts(dl.strides, dl.ndim as usize) })
+    };
+    if let Some(strides) = strides
+        && strides.iter().any(|stride| *stride < 0)
+    {
+        set_last_error(&format!("{name}: negative stride"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
+    if dl.ndim == 1 {
+        let len = shape[0] as usize;
+        let expect = match n.checked_mul(k) {
+            Some(expect) => expect,
+            None => {
+                set_last_error(&format!("{name}: block is too large"));
+                return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+            }
+        };
+        if len != expect {
+            set_last_error(&format!("{name}: length {len} is not n*k = {expect}"));
+            return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+        }
+        if let Some(strides) = strides
+            && strides[0] != 1
+        {
+            set_last_error(&format!("{name}: non-unit stride"));
+            return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+        }
+        return Ok((k as isize, 1));
+    }
+    if dl.ndim == 2 {
+        if shape[0] as usize != n || shape[1] as usize != k {
+            set_last_error(&format!(
+                "{name}: shape ({}, {}) is not ({n}, {k})",
+                shape[0], shape[1]
+            ));
+            return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+        }
+        let row = strides.map_or(k as i64, |s| s[0]);
+        let col = strides.map_or(1, |s| s[1]);
+        return Ok((row as isize, col as isize));
+    }
+    set_last_error(&format!("{name}: need rank 1 or rank 2"));
+    Err(rgmin_status_t::RGMIN_INVALID_PARAMETER)
+}
+
+fn f64_base(dl: &DLTensor) -> *const f64 {
+    unsafe { (dl.data as *const u8).add(dl.byte_offset as usize).cast() }
+}
+
+fn read_block(
+    tensor: *const DLManagedTensorVersioned,
+    n: usize,
+    k: usize,
+    name: &str,
+) -> Result<Array2<f64>, rgmin_status_t> {
+    let dl = cpu_dl(tensor, name)?;
+    let (row_stride, col_stride) = block_strides(dl, n, k, name)?;
+    let base = f64_base(dl);
+    let mut out = Array2::zeros((n, k));
+    for i in 0..n {
+        for j in 0..k {
+            let offset = (i as isize * row_stride + j as isize * col_stride) as usize;
+            let value = unsafe { *base.add(offset) };
+            out[(i, j)] = value;
+        }
+    }
+    Ok(out)
+}
+
+fn write_block(
+    tensor: *mut DLManagedTensorVersioned,
+    block: &Array2<f64>,
+    name: &str,
+) -> Result<(), rgmin_status_t> {
+    let (n, k) = block.dim();
+    let dl = cpu_dl(tensor.cast(), name)?;
+    let (row_stride, col_stride) = block_strides(dl, n, k, name)?;
+    let base = f64_base(dl) as *mut f64;
+    for i in 0..n {
+        for j in 0..k {
+            let offset = (i as isize * row_stride + j as isize * col_stride) as usize;
+            unsafe { *base.add(offset) = block[(i, j)] };
+        }
+    }
+    Ok(())
+}
+
+unsafe fn borrow_f64_matrix(data: *mut f64, n: usize, m: usize) -> *mut DLManagedTensorVersioned {
+    struct Ctx {
+        shape: [i64; 2],
+        strides: [i64; 2],
+    }
+
+    unsafe extern "C" fn deleter(ptr: *mut DLManagedTensorVersioned) {
+        if ptr.is_null() {
+            return;
+        }
+        let ctx = unsafe { (*ptr).manager_ctx.cast::<Ctx>() };
+        if !ctx.is_null() {
+            drop(unsafe { Box::from_raw(ctx) });
+        }
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+
+    let mut ctx = Box::new(Ctx {
+        shape: [n as i64, m as i64],
+        strides: [m as i64, 1],
+    });
+    let dl_tensor = DLTensor {
+        data: data.cast(),
+        device: DLDevice {
+            device_type: DLDeviceType::kDLCPU,
+            device_id: 0,
+        },
+        ndim: 2,
+        dtype: DLDataType {
+            code: DLDataTypeCode::kDLFloat,
+            bits: 64,
+            lanes: 1,
+        },
+        shape: ctx.shape.as_mut_ptr(),
+        strides: ctx.strides.as_mut_ptr(),
+        byte_offset: 0,
+    };
+    let managed = Box::new(DLManagedTensorVersioned {
+        version: DLPackVersion { major: 1, minor: 0 },
+        manager_ctx: Box::into_raw(ctx).cast(),
+        deleter: Some(deleter),
+        flags: 0,
+        dl_tensor,
+    });
+    Box::into_raw(managed)
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn run_lowest_eigenpairs(
+    label: &str,
+    hvp: Option<rgmin_hvp_fn>,
+    user: *mut c_void,
+    precond: Option<rgmin_precond_fn>,
+    precond_user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    seed: *const DLManagedTensorVersioned,
+    modes_out: *mut DLManagedTensorVersioned,
+    values_out: *mut DLManagedTensorVersioned,
+    params: *const rgmin_eigen_params_t,
+    options: *const rgmin_eigen_options_t,
+    k: usize,
+) -> Result<crate::Eigenpairs, rgmin_status_t> {
+    let Some(hvp) = hvp else {
+        set_last_error(&format!("{label}: null hvp"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    };
+    if modes_out.is_null() || values_out.is_null() {
+        set_last_error(&format!("{label}: null output"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
+    if k == 0 {
+        set_last_error(&format!("{label}: k = 0 is outside 1..=n"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
+    let xs = cpu_f64_slice(x, "x")?;
+    let n = xs.len();
+    if k > n {
+        set_last_error(&format!("{label}: k = {k} is outside 1..={n}"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
+    let seed_block = read_block(seed, n, k, "seed")?;
+    let values = cpu_f64_slice_mut(values_out, "values_out")?;
+    if values.len() != k {
+        set_last_error(&format!("{label}: values_out length is not k"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
+    let typed = eigen_params_from_c(params)?;
+    if !typed.kind.is_linked() {
+        return Err(status_from_error(&Error::EigenUnavailable {
+            kind: typed.kind.name(),
+        }));
+    }
+    if !options.is_null() {
+        let opts = unsafe { *options };
+        let _ = (opts.degree, opts.extra);
+    }
+    if !typed.tol.is_finite() {
+        set_last_error(&format!("{label}: tolerance is non-finite"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
+    let tol = if typed.tol > 0.0 { typed.tol } else { 1e-8 };
+    let max_iter = if typed.max_iter == 0 {
+        n.max(8)
+    } else {
+        typed.max_iter
+    };
+    let apply = CHvp { hvp, user };
+    let x_arr = Array1::from(xs.to_vec());
+    let failed = Cell::new(false);
+    let solved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(callback) = precond {
+            let op = CPrecond {
+                precond: callback,
+                user: precond_user,
+                failed: &failed,
+            };
+            lowest_eigenpairs_precond(
+                &apply,
+                Some(&op),
+                x_arr.view(),
+                seed_block.view(),
+                tol,
+                max_iter,
+            )
+        } else {
+            lowest_eigenpairs(&apply, x_arr.view(), seed_block.view(), tol, max_iter)
+        }
+    }));
+    let found = match solved {
+        Ok(Ok(found)) => found,
+        Ok(Err(err)) => {
+            if failed.get() {
+                set_last_error(&format!("{label}: preconditioner failed"));
+                return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+            }
+            return Err(status_from_error(&err));
+        }
+        Err(_) => {
+            set_last_error(&format!("{label}: panicked"));
+            return Err(rgmin_status_t::RGMIN_INTERNAL_ERROR);
+        }
+    };
+    if found.pairs.len() != k {
+        set_last_error(&format!("{label}: solve returned the wrong block width"));
+        return Err(rgmin_status_t::RGMIN_INTERNAL_ERROR);
+    }
+    let mut modes = Array2::zeros((n, k));
+    for (j, pair) in found.pairs.iter().enumerate() {
+        if pair.vector.len() != n {
+            set_last_error(&format!("{label}: mode length does not match n"));
+            return Err(rgmin_status_t::RGMIN_INTERNAL_ERROR);
+        }
+        for i in 0..n {
+            modes[(i, j)] = pair.vector[i];
+        }
+        values[j] = pair.value;
+    }
+    write_block(modes_out, &modes, "modes_out")?;
+    Ok(found)
+}
+
+/// k lowest eigenpairs of a symmetric product. Block LOBPCG
+/// (Knyazev 2001). `seed` and `modes_out` are row-major n-by-k: rank 2
+/// with shape `(n, k)`, or rank 1 of length `n * k`. `values_out` and
+/// `pairs_out` have length k, values ascending. Each `actions` field is
+/// the product count of the solve. `params == NULL` selects tol `1e-8`
+/// and `max_iter = max(n, 8)`. `options == NULL` is accepted; this
+/// matrix-free solve ignores ChASE `degree` and `extra`. An unlinked
+/// `params->kind` returns [`rgmin_status_t::RGMIN_UNAVAILABLE`].
+/// `k == 0`, `k > n`, and non-finite input return
+/// [`rgmin_status_t::RGMIN_INVALID_PARAMETER`].
+/// [`rgmin_eigenpair_t`] keeps this layout. Residuals and a preconditioner
+/// are [`rgmin_lowest_eigenpairs_ex`].
+///
+/// # Safety
+/// `hvp` is callable for this call. `x` is a rank-1 f64 CPU tensor of
+/// length n. `seed` and `modes_out` describe the same n-by-k block and
+/// may alias. `values_out` is rank-1 length k. `pairs_out` points at k
+/// writable records. `params` and `options` are null or readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_lowest_eigenpairs(
+    hvp: Option<rgmin_hvp_fn>,
+    user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    seed: *const DLManagedTensorVersioned,
+    modes_out: *mut DLManagedTensorVersioned,
+    values_out: *mut DLManagedTensorVersioned,
+    params: *const rgmin_eigen_params_t,
+    options: *const rgmin_eigen_options_t,
+    pairs_out: *mut rgmin_eigenpair_t,
+    k: usize,
+) -> rgmin_status_t {
+    if pairs_out.is_null() {
+        set_last_error("rgmin_lowest_eigenpairs: null output");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let found = match unsafe {
+        run_lowest_eigenpairs(
+            "rgmin_lowest_eigenpairs",
+            hvp,
+            user,
+            None,
+            std::ptr::null_mut(),
+            x,
+            seed,
+            modes_out,
+            values_out,
+            params,
+            options,
+            k,
+        )
+    } {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    for (j, pair) in found.pairs.iter().enumerate() {
+        unsafe {
+            *pairs_out.add(j) = rgmin_eigenpair_t {
+                value: pair.value,
+                actions: found.actions,
+            };
+        }
+    }
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+/// [`rgmin_lowest_eigenpairs`] plus each pair's residual and a converged
+/// flag, and an optional preconditioner. `precond == NULL` is the identity
+/// and is not called; the values and vectors then match
+/// [`rgmin_lowest_eigenpairs`] bit for bit. `precond` applies `T` to one
+/// row-major n-by-m block per expansion. `pairs_out` is
+/// [`rgmin_eigenpair_ex_t`], length k. ABI minor 42. The minor-39 record
+/// [`rgmin_eigenpair_t`] is unchanged.
+///
+/// # Safety
+/// Same tensor rules as [`rgmin_lowest_eigenpairs`]. `precond` is null or
+/// callable for this solve. `pairs_out` points at k writable extended records.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_lowest_eigenpairs_ex(
+    hvp: Option<rgmin_hvp_fn>,
+    user: *mut c_void,
+    precond: Option<rgmin_precond_fn>,
+    precond_user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    seed: *const DLManagedTensorVersioned,
+    modes_out: *mut DLManagedTensorVersioned,
+    values_out: *mut DLManagedTensorVersioned,
+    params: *const rgmin_eigen_params_t,
+    options: *const rgmin_eigen_options_t,
+    pairs_out: *mut rgmin_eigenpair_ex_t,
+    k: usize,
+) -> rgmin_status_t {
+    if pairs_out.is_null() {
+        set_last_error("rgmin_lowest_eigenpairs_ex: null output");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    let found = match unsafe {
+        run_lowest_eigenpairs(
+            "rgmin_lowest_eigenpairs_ex",
+            hvp,
+            user,
+            precond,
+            precond_user,
+            x,
+            seed,
+            modes_out,
+            values_out,
+            params,
+            options,
+            k,
+        )
+    } {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    for (j, pair) in found.pairs.iter().enumerate() {
+        unsafe {
+            *pairs_out.add(j) = rgmin_eigenpair_ex_t {
+                value: pair.value,
+                actions: found.actions,
+                residual: pair.residual,
+                converged: i32::from(pair.converged),
+            };
+        }
+    }
+    rgmin_status_t::RGMIN_SUCCESS
 }

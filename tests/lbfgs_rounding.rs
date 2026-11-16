@@ -16,16 +16,14 @@ fn wolfe(approx_wolfe: f64) -> Lbfgs {
     opt
 }
 
-/// Returns a bowl above an offset of 1, plus a value error of up to 1e-14.
-/// The error depends on the bits of `x`, like the rounding of a long sum.
-/// The gradient is exact.
+/// A scaled bowl whose reported value is quantized to `1e-8`.
+/// The gradient is exact. Near the minimum the strict decrease test
+/// fails on that grid; a band of `1e-6 |f|` still contains it.
 fn noisy(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
     let g = Array1::from_shape_fn(x.len(), |i| SCALE[i % 4] * x[i]);
-    let h = x.iter().fold(0x9e37_79b9_7f4a_7c15_u64, |h, v| {
-        (h ^ v.to_bits()).wrapping_mul(0x0100_0000_01b3)
-    });
-    let noise = 1e-14 * ((h >> 11) as f64 / (1u64 << 53) as f64 - 0.5);
-    (1.0 + 0.5 * g.dot(&x) + noise, g)
+    let f = 1.0 + 0.5 * g.dot(&x);
+    let grid = 1e-8;
+    ((f / grid).round() * grid, g)
 }
 
 fn rosen(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
@@ -54,8 +52,8 @@ fn rounding_noise_stops_the_strict_search_but_not_the_approximate_one() {
         ginf(noisy, &x)
     };
     assert_eq!(Lbfgs::default().approx_wolfe, 0.0);
-    assert!(run(0.0) > 1e-9, "strict: {}", run(0.0));
-    assert!(run(1e-12) < 1e-9, "approximate: {}", run(1e-12));
+    assert!(run(0.0) > 1e-6, "strict: {}", run(0.0));
+    assert!(run(1e-6) < 1e-8, "approximate: {}", run(1e-6));
 }
 
 #[test]
@@ -70,8 +68,8 @@ fn the_box_mode_also_needs_the_approximate_test_under_noise() {
         });
         ginf(noisy, &x)
     };
-    assert!(run(0.0) > 1e-9, "strict: {}", run(0.0));
-    assert!(run(1e-12) < 1e-9, "approximate: {}", run(1e-12));
+    assert!(run(0.0) > 1e-6, "strict: {}", run(0.0));
+    assert!(run(1e-6) < 1e-8, "approximate: {}", run(1e-6));
 }
 
 #[test]

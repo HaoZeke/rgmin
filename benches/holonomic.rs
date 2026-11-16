@@ -587,12 +587,8 @@ fn arms(spce: bool) -> Vec<Arm> {
         arm("cg-pr", Method::polak_ribiere, Accept::Energy),
         arm("steepest", || Method::Steepest, Accept::Energy),
         arm("bfgs", || Method::Bfgs, Accept::Energy),
-        arm("fire", || Method::Fire { kind: FireKind::V1 }, Accept::None),
-        arm(
-            "fire2",
-            || Method::Fire { kind: FireKind::V2 },
-            Accept::None,
-        ),
+        arm("fire", || Method::fire(FireKind::V1), Accept::None),
+        arm("fire2", || Method::fire(FireKind::V2), Accept::None),
         arm("newton-cg", || Method::NewtonCg, Accept::None),
     ];
     if spce {
@@ -741,13 +737,11 @@ fn main() {
             stops[0] = floor;
         }
         if !spce {
-            let control = Control {
-                maxiter: BUDGET,
-                gtol: stops[0],
-                istep,
-                maxmove: None,
-                ..Default::default()
-            };
+            let control = Control::default()
+                .with_maxiter(BUDGET)
+                .with_gtol(stops[0])
+                .with_istep(istep)
+                .with_maxmove(None);
             let free = ["steepest", "cg-pr", "lbfgs"];
             for arm in arms(false)
                 .into_iter()
@@ -767,13 +761,11 @@ fn main() {
             sets.push(("real", unit.clone().with_masses(m.clone()).unwrap()));
         }
         for &stop in &stops {
-            let control = Control {
-                maxiter: BUDGET,
-                gtol: stop,
-                istep,
-                maxmove: None,
-                ..Default::default()
-            };
+            let control = Control::default()
+                .with_maxiter(BUDGET)
+                .with_gtol(stop)
+                .with_istep(istep)
+                .with_maxmove(None);
             for (masses, set) in &sets {
                 for arm in arms(spce) {
                     // The first round keeps the end point for the table.

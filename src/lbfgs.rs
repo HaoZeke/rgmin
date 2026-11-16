@@ -1,17 +1,18 @@
 //! Persistent limited-memory BFGS (Nocedal-Wright 7.4, scaling 7.20).
 //!
 //! The default step is the line-search-free cap of the eOn client
-//! ([`EON_MAX_MOVE`], no line search). The first step estimates
-//! curvature with a finite difference of length [`EON_FINITE_DIFFERENCE`]
-//! and sets `H0 = 1/C`. Later steps use `(s·y)/(y·y)` when that
-//! quotient is positive, and [`EON_INVERSE_CURVATURE`] otherwise.
-//! A proposal whose longest atom move is at least the cap clears the
-//! memory and steps along `H0` times the force (`distance_reset`).
-//! A direction that is not descent does the same (`angle_reset`).
-//! Negative curvature clears the memory and steps along the force at
-//! the cap. The cap only shortens a step. [`LbfgsStep::Scaled`] is the
-//! ASE length control: shorten the two-loop step and keep the pairs.
-//! [`LbfgsStep::Wolfe`] is the strong Wolfe search.
+//! ([`LbfgsStep::Capped`], [`EON_MAX_MOVE`], [`Lbfgs::default`]). The
+//! first step estimates curvature with a finite difference of length
+//! [`EON_FINITE_DIFFERENCE`] and sets `H0 = 1/C`. Later steps use
+//! `(s·y)/(y·y)` when that quotient is positive, and
+//! [`EON_INVERSE_CURVATURE`] otherwise. A proposal whose longest atom
+//! move is at least the cap clears the memory and steps along `H0`
+//! times the force (`distance_reset`). A direction that is not descent
+//! does the same (`angle_reset`). Negative curvature clears the memory
+//! and steps along the force at the cap. The cap only shortens a step.
+//! [`LbfgsStep::Scaled`] is the ASE length control: shorten the two-loop
+//! step and keep the pairs. [`LbfgsStep::Wolfe`] is the strong Wolfe
+//! search, and it is opt-in.
 //! [`LbfgsPairs`] and [`lbfgs_direction`] are the same two-loop with a
 //! caller-supplied `H0`. They return `-H g` and do not evaluate an
 //! objective.
@@ -32,12 +33,12 @@ use ndarray::{Array1, ArrayView1};
 
 use crate::control::{Control, StopNorm};
 use crate::error::{Error, Result};
-use crate::linesearch::LineSearch;
-use crate::qn::solve_dense;
+use crate::linesearch::{LineSearch, LineSearchOptions};
+use crate::qn::solve_spd;
 use crate::report::Report;
 use crate::step::{
-    cap_displacement_atom, finite, l2, max_atom_displacement, next_istep,
-    scale_displacement_to_atom_cap, start_answer, take_step_reuse,
+    cap_displacement_atom, finite, l2, max_atom_displacement, max_atom_norm, qn_istep,
+    scale_displacement_to_atom_cap, take_step_with_options,
 };
 use eindir_core::{DifferentiableObjective, Objective};
 
@@ -67,7 +68,7 @@ const EON_STEEP_SCALE: f64 = 1000.0;
 /// How [`Lbfgs`] chooses the length of a step.
 ///
 /// [`LbfgsStep::Capped`] is the default: the eOn step, no line search.
-/// [`LbfgsStep::Wolfe`] is the strong Wolfe search.
+/// [`LbfgsStep::Wolfe`] is the strong Wolfe search, and it is opt-in.
 /// [`LbfgsStep::Scaled`] is the ASE length control.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LbfgsStep {
@@ -77,6 +78,7 @@ pub enum LbfgsStep {
     /// eOn `LBFGS::getStep` with the client's default switches:
     /// `auto_scale`, `distance_reset`, `angle_reset`, curvature `reset`.
     /// No line search. See the module docs.
+    #[non_exhaustive]
     Capped {
         /// Longest displacement of one atom, in the coordinate length.
         max_atom: f64,
@@ -86,6 +88,7 @@ pub enum LbfgsStep {
     /// and keep the pairs. An empty memory follows the force and the
     /// step has that length. A direction that is not descent clears the
     /// memory. This is not the eOn step and not the default.
+    #[non_exhaustive]
     Scaled {
         /// Longest displacement of one atom, in the coordinate length.
         max_atom: f64,
@@ -225,6 +228,16 @@ impl LbfgsBuilder {
 }
 
 impl LbfgsStep {
+    /// The eOn step: no line search, capped at `max_atom` per atom.
+    pub const fn capped(max_atom: f64) -> Self {
+        Self::Capped { max_atom }
+    }
+
+    /// No line search, the whole step scaled to `max_atom` per atom.
+    pub const fn scaled(max_atom: f64) -> Self {
+        Self::Scaled { max_atom }
+    }
+
     /// Positive finite cap of a line-search-free rule.
     #[must_use]
     pub fn capped_limit(self) -> Option<f64> {
@@ -314,16 +327,21 @@ fn max_atom_slice(step: &[f64]) -> f64 {
     max_atom
 }
 
-/// Two-loop into `q`, using the same dot and axpy as [`Lbfgs::direction_h0`].
+/// Nocedal and Wright algorithm 7.4 in place: `q` enters as `g` and
+/// leaves as `-H g`.
+///
+/// Pairs are oldest first, and the newest is replayed `extra` more times
+/// (Al-Baali). `middle` applies `H0` to the residual of the backward
+/// loop. An error from `middle` skips the forward loop and is returned;
+/// `q` is then unspecified. Every L-BFGS direction in the crate, the
+/// session step, [`Lbfgs::two_loop`] and [`LbfgsPairs`], runs here.
 #[allow(clippy::needless_range_loop)]
-fn two_loop_vecops(
+fn two_loop_in_place<E>(
     memory: &[Pair],
     extra: usize,
     q: &mut Array1<f64>,
-    h0: f64,
-    lin: Option<&crate::lindh::LindhFactor>,
-) {
-    let _phase = crate::phase::Guard::two_loop();
+    middle: impl FnOnce(&mut Array1<f64>) -> std::result::Result<(), E>,
+) -> std::result::Result<(), E> {
     let m = memory.len();
     let total = if m == 0 { 0 } else { m + extra };
     let mut stack = [0.0; 64];
@@ -341,13 +359,7 @@ fn two_loop_vecops(
         alpha[k] = a;
         crate::vecops::axpy(-a, p.y.view(), q);
     }
-    if let Some(lin) = lin {
-        if !lin.solve_into(q) {
-            *q *= h0;
-        }
-    } else {
-        *q *= h0;
-    }
+    middle(q)?;
     for k in 0..total {
         let i = if k < m { k } else { m - 1 };
         let p = &memory[i];
@@ -355,6 +367,7 @@ fn two_loop_vecops(
         crate::vecops::axpy(alpha[k] - b, p.s.view(), q);
     }
     q.mapv_inplace(|v| -v);
+    Ok(())
 }
 
 /// The value and slope of a line-search probe, `(+inf, NaN)` when the
@@ -450,6 +463,23 @@ enum CappedProbe {
     Stop,
 }
 
+/// Installed \(H_0 = P^{-1}\). An exponential factor and a geometry
+/// metric share the two-loop middle product.
+enum InitialInverse {
+    #[allow(dead_code)]
+    Exp(crate::precon::Exp),
+    Metric(crate::precon::Metric),
+}
+
+impl InitialInverse {
+    fn solve(&self, rhs: ArrayView1<'_, f64>) -> Option<Array1<f64>> {
+        match self {
+            Self::Exp(exp) => exp.solve(rhs),
+            Self::Metric(metric) => metric.solve(rhs),
+        }
+    }
+}
+
 /// L-BFGS whose curvature pairs survive between calls.
 ///
 /// A hopping chain relaxes thousands of times from perturbations of an
@@ -474,9 +504,8 @@ pub struct Lbfgs {
     /// Nocedal, Algorithm 778, <https://doi.org/10.1145/279232.279236>).
     /// A line-search step from `f_k`
     /// to `f_{k+1}` ends [`Lbfgs::minimize`], [`Lbfgs::minimize_watched`],
-    /// [`Lbfgs::minimize_on`], [`Lbfgs::minimize_recognized`],
-    /// [`Lbfgs::minimize_box`], [`Lbfgs::minimize_box_watched`] and
-    /// [`Lbfgs::minimize_box_on`] at the new iterate when
+    /// [`Lbfgs::minimize_recognized`], [`Lbfgs::minimize_box`] and
+    /// [`Lbfgs::minimize_box_watched`] at the new iterate when
     /// `f_k - f_{k+1} <= ftol * max(|f_k|, |f_{k+1}|, 1)`.
     /// Zero, the default, turns the test off, as does any value that is
     /// not positive. [`LBFGSB_FTOL`] is the SciPy default.
@@ -502,14 +531,31 @@ pub struct Lbfgs {
     pub cautious_eps: f64,
     /// Li-Fukushima cautious `α`.
     pub cautious_alpha: f64,
+    /// Reset direct NEB-step history when its largest atom reaches the cap.
+    pub distance_reset: bool,
+    /// Reset a direct NEB direction that does not face the force.
+    pub angle_reset: bool,
+    /// Retain a negative newest pair for a direct NEB force-step reset.
+    pub curvature_reset: bool,
+    /// Empty-memory scale; a non-positive or non-finite value selects one.
+    /// `1`, the default, leaves an empty two-loop unscaled.
+    pub inverse_curvature: f64,
     /// When set, each direction is the HiGHS QP on the compact Hessian
     /// rather than the two-loop recursion.
     #[cfg(feature = "highs")]
     pub highs: Option<crate::lbfgs_qp::HighsStep>,
-    /// \(H_0 = P^{-1}\) from an assembled exponential preconditioner.
-    /// A dense matrix passed to [`Self::direction_with_precon`] is the
-    /// pair / Lindh hook and wins over this factor.
-    h0: Option<crate::precon::Exp>,
+    /// Coordinate box copied in for a constrained two-loop projection.
+    #[cfg(feature = "highs")]
+    pub(crate) coordinate_box: Option<eindir_core::Bounds<f64>>,
+    /// Engine and callback policies for constrained solves.
+    #[cfg(feature = "highs")]
+    pub highs_options: crate::HighsOptions,
+    /// Times a supplied \(H_0^{-1}\) was not SPD and the two-loop fell
+    /// back to `γ I`.
+    precon_fallbacks: std::sync::atomic::AtomicUsize,
+    /// \(H_0 = P^{-1}\) from an assembled geometry preconditioner.
+    /// A dense matrix passed to [`Self::direction_with_precon`] wins.
+    h0: Option<InitialInverse>,
     /// `s·y` of the latest geometry step, stored even when the pair is dropped.
     pub(crate) last_sy: f64,
     /// `y·y` of the latest geometry step.
@@ -522,8 +568,6 @@ pub struct Lbfgs {
     work: Array1<f64>,
     /// Curvature vectors waiting to be written again.
     pool: Vec<Array1<f64>>,
-    /// Empty pair list with `max_pairs` capacity, swapped in by [`Self::forget_txn`].
-    memory_spare: Vec<Pair>,
     /// The last [`Self::forget_txn`] cleared the pairs.
     pub(crate) forgot: bool,
     /// Cap the whole displacement by its Euclidean length.
@@ -544,15 +588,6 @@ pub struct Lbfgs {
     pub(crate) skip_bad: bool,
     /// Lindh model Hessian. `None` keeps the scalar initial scale.
     pub(crate) lindh: Option<crate::lindh::LindhFactor>,
-    /// `-g` for one eOn step. Reused so a warm iteration does not allocate it.
-    force: Array1<f64>,
-    /// Empty `Txn::trimmed` kept so a full history does not allocate the vec.
-    hold_trim: Vec<Pair>,
-    /// Empty `Txn::pre_trimmed`, kept for the same reason.
-    hold_pre: Vec<Pair>,
-    /// Line-search trial kept across Wolfe steps. Boxed so [`crate::session`]
-    /// does not carry the buffers in every method variant.
-    search: Box<crate::workspace::SearchBuffers>,
 }
 
 impl Default for Lbfgs {
@@ -564,13 +599,9 @@ impl Default for Lbfgs {
 impl Lbfgs {
     /// Fresh solver with room for `max_pairs` curvature pairs.
     pub fn with_capacity(max_pairs: usize) -> Self {
-        let max_pairs = max_pairs.max(1);
-        // Each pair is two vectors. The recycle pool has to be able to
-        // hold the whole history or a later take allocates.
-        crate::workspace::note_buffer_need(max_pairs * 2);
         Self {
-            memory: Vec::with_capacity(max_pairs),
-            max_pairs,
+            memory: Vec::new(),
+            max_pairs: max_pairs.max(1),
             gtol: 1e-6,
             armijo: 1e-4,
             curvature: 0.9,
@@ -583,8 +614,17 @@ impl Lbfgs {
             extra_updates: 0,
             cautious_eps: 0.0,
             cautious_alpha: 0.01,
+            distance_reset: false,
+            angle_reset: false,
+            curvature_reset: false,
+            inverse_curvature: 1.0,
             #[cfg(feature = "highs")]
             highs: None,
+            #[cfg(feature = "highs")]
+            coordinate_box: None,
+            #[cfg(feature = "highs")]
+            highs_options: crate::HighsOptions::default(),
+            precon_fallbacks: std::sync::atomic::AtomicUsize::new(0),
             h0: None,
             last_sy: 0.0,
             last_yy: 0.0,
@@ -592,7 +632,6 @@ impl Lbfgs {
             stored: false,
             work: Array1::zeros(0),
             pool: Vec::new(),
-            memory_spare: Vec::with_capacity(max_pairs),
             forgot: false,
             euclidean_cap: false,
             keep_long: false,
@@ -600,10 +639,6 @@ impl Lbfgs {
             compact_tr: false,
             skip_bad: false,
             lindh: None,
-            force: Array1::zeros(0),
-            hold_trim: Vec::with_capacity(max_pairs),
-            hold_pre: Vec::with_capacity(max_pairs),
-            search: Box::new(crate::workspace::SearchBuffers::default()),
         }
     }
 
@@ -636,9 +671,23 @@ impl Lbfgs {
         }
     }
 
-    /// Install or clear the exponential \(H_0 = P^{-1}\).
-    pub(crate) fn set_h0(&mut self, h0: Option<crate::precon::Exp>) {
-        self.h0 = h0;
+    /// Install or clear a geometry-metric \(H_0 = P^{-1}\).
+    pub(crate) fn set_h0(&mut self, h0: Option<crate::precon::Metric>) {
+        self.h0 = h0.map(InitialInverse::Metric);
+    }
+
+    /// Install or clear an exponential \(H_0 = P^{-1}\).
+    #[allow(dead_code)]
+    pub(crate) fn set_exp_h0(&mut self, h0: Option<crate::precon::Exp>) {
+        self.h0 = h0.map(InitialInverse::Exp);
+    }
+
+    /// Times a supplied `H0^{-1}` was not symmetric positive definite and
+    /// the two-loop fell back to `gamma I`.
+    #[must_use]
+    pub fn precon_fallbacks(&self) -> usize {
+        self.precon_fallbacks
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Install or clear the Lindh factor.
@@ -670,7 +719,8 @@ impl Lbfgs {
     }
 
     fn recycle_all(&mut self) {
-        while let Some(pair) = self.memory.pop() {
+        let memory = std::mem::take(&mut self.memory);
+        for pair in memory {
             self.recycle_pair(pair);
         }
     }
@@ -698,9 +748,9 @@ impl Lbfgs {
             have: self.have_curvature,
             stored: self.stored,
             parked: None,
-            pre_trimmed: std::mem::take(&mut self.hold_pre),
+            pre_trimmed: Vec::new(),
             pre_pushed: 0,
-            trimmed: std::mem::take(&mut self.hold_trim),
+            trimmed: Vec::new(),
             pushed: 0,
         }
     }
@@ -709,11 +759,10 @@ impl Lbfgs {
     pub(crate) fn forget_txn(&mut self, txn: &mut Txn) {
         self.forgot = true;
         if txn.parked.is_none() {
-            txn.pre_trimmed.append(&mut txn.trimmed);
+            txn.pre_trimmed = std::mem::take(&mut txn.trimmed);
             txn.pre_pushed = txn.pushed;
             txn.pushed = 0;
-            let spare = std::mem::take(&mut self.memory_spare);
-            txn.parked = Some(std::mem::replace(&mut self.memory, spare));
+            txn.parked = Some(std::mem::take(&mut self.memory));
         } else {
             self.recycle_all();
             for pair in txn.trimmed.drain(..) {
@@ -744,38 +793,33 @@ impl Lbfgs {
         self.stored = true;
     }
 
-    pub(crate) fn commit_txn(&mut self, mut txn: Txn) {
-        for pair in txn.trimmed.drain(..) {
+    pub(crate) fn commit_txn(&mut self, txn: Txn) {
+        for pair in txn.trimmed {
             self.recycle_pair(pair);
         }
-        for pair in txn.pre_trimmed.drain(..) {
+        for pair in txn.pre_trimmed {
             self.recycle_pair(pair);
         }
-        if let Some(mut parked) = txn.parked.take() {
-            for pair in parked.drain(..) {
+        if let Some(memory) = txn.parked {
+            for pair in memory {
                 self.recycle_pair(pair);
             }
-            if parked.capacity() > self.memory_spare.capacity() {
-                self.memory_spare = parked;
-            }
         }
-        self.keep_txn_bufs(txn);
     }
 
-    pub(crate) fn rollback_txn(&mut self, mut txn: Txn) {
+    pub(crate) fn rollback_txn(&mut self, txn: Txn) {
         if txn.parked.is_some() {
             self.recycle_all();
-            for pair in txn.trimmed.drain(..) {
+            for pair in txn.trimmed {
                 self.recycle_pair(pair);
             }
-            let parked = txn.parked.take().unwrap_or_default();
-            self.memory_spare = std::mem::replace(&mut self.memory, parked);
+            self.memory = txn.parked.unwrap_or_default();
             for _ in 0..txn.pre_pushed {
                 if let Some(pair) = self.memory.pop() {
                     self.recycle_pair(pair);
                 }
             }
-            while let Some(pair) = txn.pre_trimmed.pop() {
+            for pair in txn.pre_trimmed.into_iter().rev() {
                 self.memory.insert(0, pair);
             }
         } else {
@@ -784,7 +828,7 @@ impl Lbfgs {
                     self.recycle_pair(pair);
                 }
             }
-            while let Some(pair) = txn.trimmed.pop() {
+            for pair in txn.trimmed.into_iter().rev() {
                 self.memory.insert(0, pair);
             }
         }
@@ -792,15 +836,6 @@ impl Lbfgs {
         self.last_yy = txn.yy;
         self.have_curvature = txn.have;
         self.stored = txn.stored;
-        self.keep_txn_bufs(txn);
-    }
-
-    /// Put the transaction's pair lists back. Clearing them keeps the capacity.
-    fn keep_txn_bufs(&mut self, mut txn: Txn) {
-        txn.trimmed.clear();
-        txn.pre_trimmed.clear();
-        self.hold_trim = txn.trimmed;
-        self.hold_pre = txn.pre_trimmed;
     }
 
     /// Copy `s` and `y = g_new - g_old` into a recycled slot.
@@ -852,15 +887,17 @@ impl Lbfgs {
         }
     }
 
-    pub(crate) fn search_direction(&self, x: ArrayView1<f64>, g: ArrayView1<f64>) -> Array1<f64> {
+    pub(crate) fn search_direction(
+        &self,
+        x: ArrayView1<f64>,
+        g: ArrayView1<f64>,
+    ) -> Result<Array1<f64>> {
         #[cfg(feature = "highs")]
-        if self.highs.is_some()
-            && let Ok(d) = self.highs_step(x, g)
-        {
-            return d;
+        if self.highs.is_some() {
+            return self.highs_step(x, g);
         }
         let _ = x;
-        self.direction(g)
+        Ok(self.direction(g))
     }
 
     /// Two-loop recursion: applies the inverse-Hessian approximation to `g`.
@@ -885,27 +922,42 @@ impl Lbfgs {
         &self,
         g: ArrayView1<f64>,
         precon: Option<&ndarray::Array2<f64>>,
-        exp: Option<&crate::precon::Exp>,
+        installed: Option<&InitialInverse>,
     ) -> Array1<f64> {
-        self.direction_dense(g, precon, exp)
+        self.direction_dense(g, precon, installed)
     }
 
     fn direction_dense(
         &self,
         g: ArrayView1<f64>,
         precon: Option<&ndarray::Array2<f64>>,
-        exp: Option<&crate::precon::Exp>,
+        installed: Option<&InitialInverse>,
     ) -> Array1<f64> {
-        let _phase = crate::phase::Guard::two_loop();
-        let (mut q, alpha, idxs) = direction::backward(&self.memory, self.extra_updates, g);
-        if let Some(pmat) = precon {
-            q = solve_dense(pmat, &q).unwrap_or_else(|| self.scale_gamma(q));
-        } else if let Some(exp) = exp {
-            q = exp.solve(q.view()).unwrap_or_else(|| self.scale_gamma(q));
-        } else {
-            q = self.scale_gamma(q);
-        }
-        direction::forward(&self.memory, q, &alpha, &idxs)
+        let mut q = g.to_owned();
+        let Ok(()) = two_loop_in_place(&self.memory, self.extra_updates, &mut q, |q| {
+            // H0 = P^{-1} keeps -H g a descent direction only for an SPD
+            // P; an indefinite Hessian falls back to gamma I and is counted.
+            let solved = match (precon, installed) {
+                (Some(pmat), _) => Some(solve_spd(pmat, q)),
+                (None, Some(installed)) => Some(installed.solve(q.view())),
+                (None, None) => None,
+            };
+            match solved {
+                Some(Some(v)) => *q = v,
+                Some(None) => {
+                    self.note_precon_fallback();
+                    self.scale_gamma(q);
+                }
+                None => self.scale_gamma(q),
+            }
+            Ok::<(), std::convert::Infallible>(())
+        });
+        q
+    }
+
+    fn note_precon_fallback(&self) {
+        self.precon_fallbacks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// `P^{-1} v` when an exponential preconditioner is installed and the solve succeeds.
@@ -918,13 +970,15 @@ impl Lbfgs {
     /// preconditioner replaces that scalar: the middle product is
     /// `P^{-1} q`, and a failed solve falls back to `h0`.
     pub(crate) fn direction_h0(&self, g: ArrayView1<f64>, h0: f64) -> Array1<f64> {
-        let (mut q, alpha, idxs) = direction::backward(&self.memory, self.extra_updates, g);
-        if let Some(solved) = self.exp_apply(q.view()) {
-            q = solved;
-        } else {
-            q *= h0;
-        }
-        direction::forward(&self.memory, q, &alpha, &idxs)
+        let mut q = g.to_owned();
+        let Ok(()) = two_loop_in_place(&self.memory, self.extra_updates, &mut q, |q| {
+            match self.exp_apply(q.view()) {
+                Some(solved) => *q = solved,
+                None => *q *= h0,
+            }
+            Ok::<(), std::convert::Infallible>(())
+        });
+        q
     }
 
     /// Remember `s·y` and `y·y` from the step just taken.
@@ -962,17 +1016,77 @@ impl Lbfgs {
         self.fixed_h0.filter(|h| h.is_finite() && *h > 0.0)
     }
 
-    fn scale_gamma(&self, mut q: Array1<f64>) -> Array1<f64> {
+    fn scale_gamma(&self, q: &mut Array1<f64>) {
         if let Some(h0) = self.fixed_scale() {
-            q *= h0;
-            return q;
+            *q *= h0;
+            return;
         }
-        if let Some(p) = self.memory.last()
-            && p.yy > 0.0
+        if let Some(p) = self.memory.last() {
+            if p.yy > 0.0 {
+                *q *= p.sy / p.yy;
+            }
+            return;
+        }
+        if self.inverse_curvature.is_finite()
+            && self.inverse_curvature > 0.0
+            && self.inverse_curvature != 1.0
         {
-            q *= p.sy / p.yy;
+            *q *= self.inverse_curvature;
         }
-        q
+    }
+
+    fn current_h0(&self) -> f64 {
+        if let Some(h0) = self.fixed_scale() {
+            return h0;
+        }
+        if let Some(pair) = self.memory.last()
+            && pair.yy > 0.0
+        {
+            return pair.sy / pair.yy;
+        }
+        self.inverse_curvature
+    }
+
+    fn positive_reset_scale(&self) -> f64 {
+        let h0 = self.current_h0();
+        if h0.is_finite() && h0 != 0.0 {
+            return h0.abs();
+        }
+        if self.inverse_curvature.is_finite() && self.inverse_curvature > 0.0 {
+            self.inverse_curvature
+        } else {
+            1.0
+        }
+    }
+
+    /// Opt-in direct-step guards; the caller enforces the physical step cap.
+    pub(crate) fn guarded_direction(
+        &mut self,
+        gradient: ArrayView1<f64>,
+        cap: Option<f64>,
+    ) -> Array1<f64> {
+        if self.curvature_reset
+            && self
+                .memory
+                .last()
+                .is_some_and(|pair| pair.s.dot(&pair.y) < 0.0)
+        {
+            self.forget();
+            return gradient.mapv(|value| -1000.0 * value);
+        }
+        let scale = self.positive_reset_scale();
+        let direction = self.direction(gradient);
+        let too_far = self.distance_reset
+            && cap.is_some_and(|limit| limit > 0.0 && max_atom_norm(direction.view()) >= limit);
+        let slope = direction.dot(&gradient);
+        let wrong_angle = self.angle_reset && (!slope.is_finite() || slope >= 0.0);
+        let invalid = (self.distance_reset || self.angle_reset)
+            && direction.iter().any(|value| !value.is_finite());
+        if too_far || wrong_angle || invalid {
+            self.forget();
+            return gradient.mapv(|value| -scale * value);
+        }
+        direction
     }
 
     /// Records an accepted curvature pair (`s = x+ - x`, `y = g+ - g`).
@@ -1034,6 +1148,7 @@ impl Lbfgs {
     /// Replace the newest pair after a manifold retract. Only a pair the
     /// latest push stored is popped; a dropped pair leaves the previous
     /// one in place.
+    #[allow(dead_code)]
     pub(crate) fn replace_newest(&mut self, s: Array1<f64>, y: Array1<f64>, gnorm: Option<f64>) {
         if self.stored {
             let _ = self.memory.pop();
@@ -1047,6 +1162,24 @@ impl Lbfgs {
         let sy = s.dot(&y);
         let sn = s.iter().map(|v| v * v).sum::<f64>().sqrt();
         let ss = sn * sn;
+        if self.curvature_reset {
+            if !sy.is_finite() || sy.abs() < 1e-30 {
+                self.forget();
+                self.stored = false;
+                return false;
+            }
+            let yy = y.dot(&y);
+            self.memory.push(Pair {
+                s,
+                y,
+                rho: 1.0 / sy,
+                sy,
+                yy,
+            });
+            self.trim();
+            self.stored = true;
+            return true;
+        }
         if self.cautious_eps > 0.0
             && let Some(g) = gnorm
         {
@@ -1149,79 +1282,10 @@ impl Lbfgs {
         seed: EonSeed,
         txn: &mut Txn,
     ) -> Option<EonTake> {
-        self.ensure_history(g.len());
         let fallback = self.prepare_eon(g, max_atom, seed, txn)?;
         let step = self.copy_work();
         let motion = max_atom_displacement(&step);
         (motion.is_finite() && motion > 0.0).then_some(EonTake { step, fallback })
-    }
-
-    /// Write `-g` into [`Self::force`].
-    fn fill_neg(&mut self, g: ArrayView1<f64>) {
-        let n = g.len();
-        if self.force.len() != n {
-            self.force = Array1::zeros(n);
-        }
-        if let (Some(f), Some(gv)) = (self.force.as_slice_mut(), g.as_slice()) {
-            for (fi, &gi) in f.iter_mut().zip(gv) {
-                *fi = -gi;
-            }
-        } else {
-            self.force.assign(&g);
-            self.force.mapv_inplace(|v| -v);
-        }
-    }
-
-    /// `work = scale * force`, overwriting the quasi-Newton residual.
-    fn scale_force_into_work(&mut self, scale: f64) {
-        let n = self.force.len();
-        self.ensure_work(n);
-        if let (Some(w), Some(f)) = (self.work.as_slice_mut(), self.force.as_slice()) {
-            for (wi, &fi) in w.iter_mut().zip(f) {
-                *wi = scale * fi;
-            }
-        }
-    }
-
-    /// Pair slots plus the step, the two curvature vectors and one spare.
-    /// The first call at a length allocates them. A later call does not.
-    fn ensure_history(&mut self, n: usize) {
-        if n == 0 {
-            return;
-        }
-        let target = self.max_pairs.max(1) * 2 + 4;
-        let mut have = self.pool.iter().filter(|v| v.len() == n).count();
-        if self.work.len() == n {
-            have += 1;
-        }
-        for pair in &self.memory {
-            if pair.s.len() == n {
-                have += 1;
-            }
-            if pair.y.len() == n {
-                have += 1;
-            }
-        }
-        if have >= target {
-            return;
-        }
-        let missing = target - have;
-        self.pool.reserve(missing);
-        for _ in 0..missing {
-            self.pool.push(Array1::zeros(n));
-        }
-    }
-
-    /// Length-n vectors the solver is holding for the history and the scratch.
-    pub(crate) fn vector_slots(&self) -> usize {
-        let mut n = self.memory.len() * 2 + self.pool.len();
-        if !self.work.is_empty() {
-            n += 1;
-        }
-        if !self.force.is_empty() {
-            n += 1;
-        }
-        n
     }
 
     /// Write the eOn displacement into [`Self::work`]. `Some(fallback)`.
@@ -1237,9 +1301,9 @@ impl Lbfgs {
         match seed {
             EonSeed::Steepest => {
                 self.forget_txn(txn);
-                self.fill_neg(g);
-                self.scale_force_into_work(EON_STEEP_SCALE);
-                self.cap_work(max_atom);
+                let force = g.mapv(|v| -v);
+                let step = self.apply_cap(&(EON_STEEP_SCALE * &force), max_atom);
+                self.work.assign(&step);
                 Some(true)
             }
             EonSeed::Scale(h0) => {
@@ -1249,11 +1313,11 @@ impl Lbfgs {
                 if self.compact_tr && !self.memory.is_empty() && self.install_compact(g, max_atom) {
                     return Some(false);
                 }
-                self.fill_neg(g);
+                let force = g.mapv(|v| -v);
                 self.write_qn(g, h0);
                 let distance = self.motion(&self.work);
-                let along = self.work.dot(&self.force);
-                let uphill = l2(&self.work) > 0.0 && l2(&self.force) > 0.0 && along < 0.0;
+                let along = self.work.dot(&force);
+                let uphill = l2(&self.work) > 0.0 && l2(&force) > 0.0 && along < 0.0;
                 if !distance.is_finite() {
                     return None;
                 }
@@ -1267,8 +1331,8 @@ impl Lbfgs {
                 }
                 if uphill || (distance >= max_atom && !self.keep_long) {
                     self.forget_txn(txn);
-                    self.scale_force_into_work(h0);
-                    self.cap_work(max_atom);
+                    let step = self.apply_cap(&(h0 * &force), max_atom);
+                    self.work.assign(&step);
                     Some(true)
                 } else {
                     self.cap_work(max_atom);
@@ -1288,7 +1352,12 @@ impl Lbfgs {
         let lindh = self.lindh.take();
         let extra = self.extra_updates;
         self.work.assign(&g);
-        two_loop_vecops(&memory, extra, &mut self.work, h0, lindh.as_ref());
+        let Ok(()) = two_loop_in_place(&memory, extra, &mut self.work, |q| {
+            if !lindh.as_ref().is_some_and(|lin| lin.solve_into(q)) {
+                *q *= h0;
+            }
+            Ok::<(), std::convert::Infallible>(())
+        });
         self.memory = memory;
         self.lindh = lindh;
     }
@@ -1337,6 +1406,20 @@ impl Lbfgs {
             l2(step)
         } else {
             max_atom_displacement(step)
+        }
+    }
+
+    /// Shorten `step` to `cap` in the length [`Self::motion`] uses.
+    fn apply_cap(&self, step: &Array1<f64>, cap: f64) -> Array1<f64> {
+        if self.euclidean_cap {
+            let motion = l2(step);
+            if motion > cap && motion > 0.0 && cap > 0.0 {
+                step * (cap / motion)
+            } else {
+                step.clone()
+            }
+        } else {
+            cap_displacement_atom(step, cap)
         }
     }
 
@@ -1764,7 +1847,6 @@ impl Lbfgs {
     where
         F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
     {
-        let _phase = crate::phase::Guard::line_search();
         let Ray { d, slope, a_max } = ray;
         let f0 = *f;
         let mut evals = 0usize;
@@ -1981,7 +2063,6 @@ impl Lbfgs {
     ///
     /// `watch` receives the iteration index and the value at that iterate,
     /// and returning `false` ends the relaxation there.
-    /// [`Self::minimize_on`] is the same run with the coordinates included.
     pub fn minimize_watched<F, W>(
         &mut self,
         x0: ArrayView1<f64>,
@@ -1993,41 +2074,19 @@ impl Lbfgs {
         F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
         W: FnMut(usize, f64) -> bool,
     {
-        self.minimize_on(x0, max_iter, fg, |it, value, _| watch(it, value))
+        self.minimize_on(x0, max_iter, fg, move |it, f, _x| watch(it, f))
     }
 
-    /// Relaxes `x0`, offering each accepted iterate's coordinates to `on`.
-    ///
-    /// `on` receives the iteration index, the value, and the coordinates
-    /// at that iterate. Returning `false` ends the relaxation there, as
-    /// [`Self::minimize_watched`] does. The point is one the solver has
-    /// accepted, so the caller can project it (a bond length, a height
-    /// above a slab) without the solver storing that map.
-    ///
-    /// ```
-    /// use ndarray::{ArrayView1, array};
-    /// use rgmin::Lbfgs;
-    ///
-    /// let fg = |x: ArrayView1<f64>| {
-    ///     let f = x[0] * x[0] + x[1] * x[1];
-    ///     Some((f, array![2.0 * x[0], 2.0 * x[1]]))
-    /// };
-    /// let mut gap = Vec::new();
-    /// let mut opt = Lbfgs::default();
-    /// let (f, x, _) = opt.minimize_on(array![1.0, -1.0].view(), 40, fg, |_i, _f, p| {
-    ///     gap.push(p[1] - p[0]);
-    ///     true
-    /// });
-    /// assert_eq!(gap[0], -2.0);
-    /// assert!((x[1] - x[0] - gap.last().copied().unwrap()).abs() < 1e-9);
-    /// assert!(f < 1e-8);
-    /// ```
+    /// Relaxes `x0`, offering each accepted iterate to `watch` as the
+    /// iteration, the value, and the coordinates. Returning `false` ends
+    /// the relaxation there. [`Self::minimize_watched`] is this method
+    /// with the coordinates ignored.
     pub fn minimize_on<F, W>(
         &mut self,
         x0: ArrayView1<f64>,
         max_iter: usize,
         mut fg: F,
-        mut on: W,
+        mut watch: W,
     ) -> (f64, Array1<f64>, usize)
     where
         F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
@@ -2047,7 +2106,7 @@ impl Lbfgs {
 
         let mut stalled = false;
         for it in 0..max_iter {
-            if g.len() != x.len() || !on(it, f, x.view()) {
+            if g.len() != x.len() || !watch(it, f, x.view()) {
                 break;
             }
             if stalled || self.gnorm(&g) < self.gtol {
@@ -2070,7 +2129,9 @@ impl Lbfgs {
                 continue;
             }
             let f_old = f;
-            let d = self.search_direction(x.view(), g.view());
+            let Ok(d) = self.search_direction(x.view(), g.view()) else {
+                break;
+            };
             let slope = d.dot(&g);
             if !slope.is_finite() && self.memory.is_empty() {
                 break;
@@ -2166,7 +2227,9 @@ impl Lbfgs {
                 continue;
             }
             let f_old = f;
-            let d = self.search_direction(x.view(), g.view());
+            let Ok(d) = self.search_direction(x.view(), g.view()) else {
+                break;
+            };
             let slope = d.dot(&g);
             if !slope.is_finite() && self.memory.is_empty() {
                 break;
@@ -2196,8 +2259,8 @@ impl Lbfgs {
     /// Relaxes `x0` inside the box `lower <= x <= upper` with the
     /// generalized Cauchy point and the subspace minimization of L-BFGS-B.
     ///
-    /// Opt-in: [`Self::minimize`] keeps its step rule, and the default
-    /// remains the eOn cap. Each direction ends at the subspace minimizer
+    /// The box path line-searches. [`Self::minimize`] keeps the configured
+    /// step, whose default is the eOn cap. Each direction ends at the subspace minimizer
     /// from the Cauchy point (Byrd, Lu, Nocedal and Zhu 1995, algorithm CP
     /// and section 5.1), and the strong Wolfe search along it stops at the
     /// box. A bound may be infinite; with no finite bound the direction is
@@ -2246,7 +2309,6 @@ impl Lbfgs {
 
     /// [`Self::minimize_box`], offering each accepted iterate to `watch` as
     /// [`Self::minimize_watched`] does.
-    /// [`Self::minimize_box_on`] is the same run with the coordinates included.
     pub fn minimize_box_watched<F, W>(
         &mut self,
         x0: ArrayView1<f64>,
@@ -2260,16 +2322,15 @@ impl Lbfgs {
         F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
         W: FnMut(usize, f64) -> bool,
     {
-        self.minimize_box_on(x0, lower, upper, max_iter, fg, |it, value, _| {
-            watch(it, value)
+        self.minimize_box_on(x0, lower, upper, max_iter, fg, move |it, f, _x| {
+            watch(it, f)
         })
     }
 
-    /// [`Self::minimize_box`], offering each accepted iterate's coordinates
-    /// to `on` as [`Self::minimize_on`] does.
-    ///
-    /// A start outside the box is clipped before the first call, so `on`
-    /// sees a point inside the box.
+    /// [`Self::minimize_box`], offering each accepted iterate as the
+    /// iteration, the value, and the coordinates. A start outside the
+    /// box is clipped before the first call. Returning `false` ends the
+    /// relaxation there.
     pub fn minimize_box_on<F, W>(
         &mut self,
         x0: ArrayView1<f64>,
@@ -2277,7 +2338,7 @@ impl Lbfgs {
         upper: ArrayView1<f64>,
         max_iter: usize,
         mut fg: F,
-        mut on: W,
+        mut watch: W,
     ) -> (f64, Array1<f64>, usize)
     where
         F: FnMut(ArrayView1<f64>) -> Option<(f64, Array1<f64>)>,
@@ -2304,7 +2365,7 @@ impl Lbfgs {
 
         let mut stalled = false;
         for it in 0..max_iter {
-            if g.len() != x.len() || !on(it, f, x.view()) {
+            if g.len() != x.len() || !watch(it, f, x.view()) {
                 break;
             }
             let pg =
@@ -2378,13 +2439,14 @@ impl Lbfgs {
                 dim: Objective::dim(obj),
             });
         }
-        pos = crate::step::clip_owned(obj.bounds(), pos);
-        let (mut value, mut grad) = start_answer(obj, &pos)?;
+        pos = obj.bounds().clip(pos.view());
+        let (mut value, mut grad) = obj.value_and_gradient(pos.view());
+        crate::step::refuse_non_finite(value, &grad)?;
         let mut istep = control.istep;
 
         for step in 0..control.maxiter {
             let gnorm = l2(&grad);
-            if gnorm < control.gtol {
+            if let Some(status) = control.halt(gnorm, grad.len()) {
                 return Ok(Report {
                     value,
                     coords: pos,
@@ -2392,23 +2454,50 @@ impl Lbfgs {
                     grad_norm: gnorm,
                     stop_norm: StopNorm::Two,
                     grad: None,
+                    status,
                 });
             }
-            self.step_objective(
-                obj, &mut pos, &mut value, &mut grad, &mut istep, linesearch, control,
+            let stall = self.step_objective(
+                obj,
+                &mut pos,
+                &mut value,
+                &mut grad,
+                &mut istep,
+                linesearch,
+                control,
+                crate::step::implicit_atom_cap(control),
             );
+            if stall {
+                return Ok(Report {
+                    value,
+                    coords: pos,
+                    steps: step + 1,
+                    grad_norm: gnorm,
+                    stop_norm: StopNorm::Two,
+                    grad: None,
+                    status: crate::report::Status::NoiseFloor,
+                });
+            }
         }
+        let gnorm = l2(&grad);
         Ok(Report {
             value,
             coords: pos,
             steps: control.maxiter,
-            grad_norm: l2(&grad),
+            grad_norm: gnorm,
             stop_norm: StopNorm::Two,
             grad: None,
+            status: control.finish_status(gnorm, grad.len(), true),
         })
     }
 
     /// One outer L-BFGS iteration: two-loop direction, line search, pair.
+    ///
+    /// `atom_maxmove` caps the largest per-atom displacement of the
+    /// accepted step; `None` leaves only `control.maxmove` in force.
+    ///
+    /// Returns whether every search in this iteration found no trial
+    /// whose decrease cleared `c * eps_f`. The point is then unchanged.
     #[expect(
         clippy::too_many_arguments,
         reason = "public signature; grouping the arguments would break callers"
@@ -2422,55 +2511,119 @@ impl Lbfgs {
         istep: &mut f64,
         linesearch: LineSearch,
         control: &Control,
-    ) where
+        atom_maxmove: Option<f64>,
+    ) -> bool
+    where
         O: DifferentiableObjective<f64> + ?Sized,
     {
-        let _phase = crate::phase::Guard::line_search();
-        let dir = self.search_direction(pos.view(), grad.view());
-        let old = pos.clone();
-        let gold = grad.clone();
-        // Curvature history supplies the quasi-Newton step length. Wolfe
-        // starts at the unit step so accepted steps retain superlinear
-        // convergence instead of inheriting repeated line-search shrinkage.
-        let trial_step = if self.memory.is_empty() { *istep } else { 1.0 };
-        let (mut lsstep, mut moved) = take_step_reuse(
+        self.step_objective_with_direction(
+            obj,
+            pos,
+            value,
+            grad,
+            istep,
+            linesearch,
+            control,
+            atom_maxmove,
+            None,
+            true,
+            LineSearchOptions::default(),
+            &mut |_| {},
+        )
+    }
+
+    /// `project` acts on every trial direction before its line search:
+    /// the session's rigid-motion projector, or a no-op.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn step_objective_with_direction<O>(
+        &mut self,
+        obj: &O,
+        pos: &mut Array1<f64>,
+        value: &mut f64,
+        grad: &mut Array1<f64>,
+        istep: &mut f64,
+        linesearch: LineSearch,
+        control: &Control,
+        atom_maxmove: Option<f64>,
+        supplied_direction: Option<Array1<f64>>,
+        record_pair: bool,
+        options: LineSearchOptions,
+        project: &mut dyn FnMut(&mut Array1<f64>),
+    ) -> bool
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let allow_restart = supplied_direction.is_none();
+        let dir = supplied_direction.unwrap_or_else(|| self.direction(grad.view()));
+        #[cfg(feature = "highs")]
+        let dir = if let Some(bounds) = &self.coordinate_box {
+            if !allow_restart {
+                dir
+            } else {
+                crate::box_objective::project_direction(bounds, pos.view(), grad.view(), dir)
+            }
+        } else {
+            dir
+        };
+        let mut dir = dir;
+        project(&mut dir);
+        // With pairs the two-loop direction is gamma-scaled and carries
+        // the step length, so the search opens at the unit step
+        // (Nocedal-Wright 3.5); `istep` sizes only the first, steepest
+        // direction.
+        let open = if self.memory.is_empty() { *istep } else { 1.0 };
+        let t = take_step_with_options(
             obj,
             pos,
             *value,
+            grad,
             dir.view(),
-            trial_step,
+            open,
             linesearch,
             control,
-            &mut self.search,
+            atom_maxmove,
+            options,
         );
-        if !moved && !self.memory.is_empty() {
-            // Retained curvature can describe a different objective scale.
-            // Retry with an empty history before reporting a stalled step.
+        let (t, stall) = if allow_restart && !t.moved && !self.memory.is_empty() {
+            let first_noise = t.energy_noise;
             self.forget();
-            let restart_direction = self.search_direction(pos.view(), grad.view());
-            let restart = take_step_reuse(
+            let direction = self.direction(grad.view());
+            #[cfg(feature = "highs")]
+            let direction = if let Some(bounds) = &self.coordinate_box {
+                crate::box_objective::project_direction(bounds, pos.view(), grad.view(), direction)
+            } else {
+                direction
+            };
+            let mut direction = direction;
+            project(&mut direction);
+            let retry = take_step_with_options(
                 obj,
                 pos,
                 *value,
-                restart_direction.view(),
+                grad,
+                direction.view(),
                 control.istep,
                 linesearch,
                 control,
-                &mut self.search,
+                atom_maxmove,
+                options,
             );
-            lsstep = restart.0;
-            moved = restart.1;
+            let stall = first_noise && retry.energy_noise;
+            (retry, stall)
+        } else {
+            let stall = t.energy_noise;
+            (t, stall)
+        };
+        if t.moved && record_pair {
+            let s = &t.x - &*pos;
+            let y = &t.g - &*grad;
+            self.push(s, y);
         }
-        if moved {
-            pos.assign(&self.search.clipped);
-        }
-        let ev = obj.value_and_gradient(pos.view());
-        *value = ev.0;
-        *grad = ev.1;
-        if moved {
-            self.push(&*pos - &old, &*grad - &gold);
-        }
-        *istep = next_istep(lsstep, control);
+        *pos = t.x;
+        *value = t.f;
+        *grad = t.g;
+        *istep = qn_istep(control);
+        stall
     }
 }
 
@@ -2631,7 +2784,7 @@ mod tests {
     /// The step that replaces it follows the force, and the old pair is gone.
     #[test]
     fn a_long_eon_direction_steps_along_the_force_and_clears_the_pair() {
-        let mut opt = Lbfgs::default();
+        let mut opt = Lbfgs::capped(super::EON_MAX_MOVE);
         let x0 = array![1.0, 1.0, 1.0];
         let (_f, x1, evals) = opt.minimize(x0.view(), 1, |v| Some(stiff(v)));
         assert_eq!(evals, 3, "start, probe, step");
@@ -2681,9 +2834,9 @@ mod tests {
         assert!(f < 1e-16, "f {f} x {x}");
     }
 
-    /// A non-positive cap does not select the capped step.
+    /// A non-positive cap is not a length. The default step stays the eOn cap.
     #[test]
-    fn a_non_positive_cap_keeps_the_wolfe_search() {
+    fn a_non_positive_cap_is_not_a_length_and_the_default_stays_capped() {
         for max_atom in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             let opt = Lbfgs {
                 step: LbfgsStep::Capped { max_atom },
@@ -2693,6 +2846,12 @@ mod tests {
         }
         assert_eq!(
             Lbfgs::default().step,
+            LbfgsStep::Capped {
+                max_atom: super::EON_MAX_MOVE
+            }
+        );
+        assert_eq!(
+            Lbfgs::builder().build().step,
             LbfgsStep::Capped {
                 max_atom: super::EON_MAX_MOVE
             }
@@ -2895,5 +3054,112 @@ mod tests {
             }
         );
         assert_eq!(Lbfgs::builder().wolfe().build().step, LbfgsStep::Wolfe);
+    }
+}
+
+#[cfg(test)]
+mod precon_fallback_tests {
+    use super::*;
+    use ndarray::{Array2, array};
+
+    #[test]
+    fn an_indefinite_hessian_falls_back_to_gamma() {
+        let mut l = Lbfgs::with_capacity(4);
+        l.push(array![1.0, 0.0], array![2.0, 0.0]);
+        let g = array![1.0, 1.0];
+        let spd = Array2::from_diag(&array![2.0, 4.0]);
+        let d = l.direction_with_precon(g.view(), Some(&spd));
+        assert!(d.dot(&g) < 0.0);
+        assert_eq!(l.precon_fallbacks(), 0);
+        let indefinite = Array2::from_diag(&array![1.0, -1.0]);
+        let d = l.direction_with_precon(g.view(), Some(&indefinite));
+        assert!(d.dot(&g) < 0.0, "ascent {d}");
+        assert_eq!(l.precon_fallbacks(), 1);
+        assert_eq!(d, l.direction(g.view()));
+    }
+}
+
+#[cfg(test)]
+mod neb_guard_tests {
+    use super::*;
+    use ndarray::array;
+
+    #[test]
+    fn empty_memory_scales_by_inverse_curvature() {
+        let mut solver = Lbfgs::with_capacity(4);
+        let g = array![-2.0, 0.0, 0.0];
+        let plain = solver.direction(g.view());
+        assert!((plain[0] - 2.0).abs() < 1e-15);
+        solver.inverse_curvature = 0.01;
+        let scaled = solver.direction(g.view());
+        assert!((scaled[0] - 0.02).abs() < 1e-15);
+    }
+
+    #[test]
+    fn distance_reset_forgets_and_steps_along_h0_force() {
+        let mut solver = Lbfgs::with_capacity(4);
+        solver.distance_reset = true;
+        solver.record(array![1.0, 0.0, 0.0], array![1.0, 1.0, 0.0]);
+        let g = array![-4.0, 0.0, 0.0];
+        let d = solver.guarded_direction(g.view(), Some(0.2));
+        assert_eq!(solver.len(), 0);
+        assert!((d[0] - 2.0).abs() < 1e-12, "d0 {d:?}");
+        assert!(d[1].abs() < 1e-12, "d1 {d:?}");
+        assert!(d[2].abs() < 1e-12);
+    }
+
+    #[test]
+    fn negative_curvature_takes_the_force_direction_and_forgets() {
+        let mut solver = Lbfgs::with_capacity(4);
+        solver.curvature_reset = true;
+        solver.record(array![1.0, 0.0, 0.0], array![-0.5, 0.0, 0.0]);
+        assert_eq!(solver.len(), 1);
+        let g = array![-1.0, 0.0, 0.0];
+        let d = solver.guarded_direction(g.view(), Some(0.2));
+        assert_eq!(solver.len(), 0);
+        assert!((d[0] - 1000.0).abs() < 1e-9, "d {d:?}");
+        assert!(d[1].abs() < 1e-12);
+    }
+
+    #[test]
+    fn angle_reset_drops_a_step_that_faces_away_from_the_force() {
+        let mut kept = Lbfgs::with_capacity(4);
+        kept.curvature_reset = true;
+        kept.record(array![1.0, 0.0, 0.0], array![-0.5, 0.0, 0.0]);
+        kept.curvature_reset = false;
+        kept.distance_reset = false;
+        kept.angle_reset = false;
+        kept.inverse_curvature = 0.01;
+        let g = array![-1.0, 0.0, 0.0];
+        let d_keep = kept.guarded_direction(g.view(), Some(10.0));
+        assert_eq!(kept.len(), 1);
+        assert!((d_keep[0] + 2.0).abs() < 1e-12, "keep {d_keep:?}");
+
+        let mut solver = Lbfgs::with_capacity(4);
+        solver.curvature_reset = true;
+        solver.record(array![1.0, 0.0, 0.0], array![-0.5, 0.0, 0.0]);
+        solver.curvature_reset = false;
+        solver.distance_reset = false;
+        solver.angle_reset = true;
+        solver.inverse_curvature = 0.01;
+        let d = solver.guarded_direction(g.view(), Some(10.0));
+        assert_eq!(solver.len(), 0);
+        assert_eq!(d, array![2.0, 0.0, 0.0]);
+        assert!(d.dot(&g) < 0.0);
+    }
+
+    #[test]
+    fn invalid_empty_memory_scales_select_a_finite_force_step() {
+        let gradient = array![-1.0, 2.0, 0.0];
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut solver = Lbfgs {
+                angle_reset: true,
+                inverse_curvature: scale,
+                ..Lbfgs::default()
+            };
+            let direction = solver.guarded_direction(gradient.view(), Some(1.0));
+            assert_eq!(direction, -&gradient);
+            assert!(direction.dot(&gradient) < 0.0);
+        }
     }
 }

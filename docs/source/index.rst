@@ -70,6 +70,7 @@ It also covers the features of each route, the C library and a checkout.
    tutorials/newton
    tutorials/scg
    tutorials/eigenpairs
+   tutorials/manifold-fit
    tutorials/migration
    tutorials/relax-morse
 
@@ -114,6 +115,7 @@ It also covers the features of each route, the C library and a checkout.
    reference/architecture
    reference/api
    reference/constraints
+   reference/manifold
    reference/product-manifold
    reference/sota
    reference/proofs

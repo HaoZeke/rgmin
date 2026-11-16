@@ -4,9 +4,12 @@ use ndarray::{Array1, ArrayView1};
 
 /// Accept conditions (Armijo, Wolfe, Goldstein).
 pub mod conditions;
+mod interp;
+mod known;
 mod supplied;
 mod zoom;
 
+pub use known::LineOutcome;
 pub use supplied::{SearchStep, SuppliedSearch};
 pub use zoom::zoom;
 
@@ -16,6 +19,7 @@ pub enum LineSearch {
     /// Brent (1973) on a golden-section bracket. Derivative-free in α.
     ///
     /// Brent, *Algorithms for Minimization without Derivatives* (1973).
+    #[non_exhaustive]
     Brent {
         /// Bracket / refine iterations.
         maxiter: usize,
@@ -26,6 +30,7 @@ pub enum LineSearch {
     ///
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    #[non_exhaustive]
     Backtracking {
         /// Armijo `c` (default 1e-4).
         c: f64,
@@ -42,6 +47,7 @@ pub enum LineSearch {
     ///
     /// Goldstein, *Multiplier and gradient methods*,
     /// <https://doi.org/10.1007/BF00927673>.
+    #[non_exhaustive]
     Goldstein {
         /// Goldstein / Armijo `c`.
         c: f64,
@@ -56,6 +62,7 @@ pub enum LineSearch {
     /// <https://doi.org/10.1137/1011036>.
     /// Nocedal and Wright, *Numerical Optimization*,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
+    #[non_exhaustive]
     Wolfe {
         /// Armijo `c1` (default 1e-4).
         c1: f64,
@@ -64,6 +71,48 @@ pub enum LineSearch {
         /// Expand + zoom iterations.
         maxiter: usize,
     },
+}
+
+/// Optional policy for objective values whose accuracy is lower than their gradients.
+/// Existing line-search entry points use the default four-epsilon window.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LineSearchOptions {
+    relative_objective_error: Option<f64>,
+}
+
+impl LineSearchOptions {
+    /// Permit approximate Wolfe acceptance up to `relative * |f0|` above `f0`.
+    ///
+    /// This is an acceptance policy, not a certified oracle error bound.
+    /// Both slope conditions still apply; gradient stopping is independent.
+    /// Negative and nonfinite values are rejected. Zero permits no rise.
+    pub fn with_objective_roundoff(relative: f64) -> Option<Self> {
+        (relative.is_finite() && relative >= 0.0).then_some(Self {
+            relative_objective_error: Some(relative),
+        })
+    }
+
+    /// Relative value window: the configured roundoff, else four epsilon.
+    pub(crate) fn objective_window(self) -> f64 {
+        self.relative_objective_error.unwrap_or(4.0 * f64::EPSILON)
+    }
+
+    pub(crate) fn accepts_approximate_wolfe(
+        self,
+        phi: f64,
+        phi0: f64,
+        dphi: f64,
+        dphi0: f64,
+        c1: f64,
+        c2: f64,
+    ) -> bool {
+        match self.relative_objective_error {
+            Some(relative) => {
+                conditions::approximate_strong_wolfe(phi, phi0, dphi, dphi0, c1, c2, relative)
+            }
+            None => conditions::roundoff_strong_wolfe(phi, phi0, dphi, dphi0, c1, c2),
+        }
+    }
 }
 
 impl Default for LineSearch {
@@ -76,14 +125,36 @@ impl Default for LineSearch {
 }
 
 impl LineSearch {
+    /// Brent minimization along the direction.
+    pub const fn brent(maxiter: usize, tol: f64) -> Self {
+        Self::Brent { maxiter, tol }
+    }
+
+    /// Armijo backtracking with sufficient-decrease `c` and shrink `beta`.
+    pub const fn backtracking(c: f64, beta: f64, maxiter: usize) -> Self {
+        Self::Backtracking { c, beta, maxiter }
+    }
+
+    /// Goldstein backtracking with parameter `c` and shrink `beta`.
+    pub const fn goldstein(c: f64, beta: f64, maxiter: usize) -> Self {
+        Self::Goldstein { c, beta, maxiter }
+    }
+
+    /// Strong Wolfe bracketing and zoom with constants `c1 < c2`.
+    pub const fn wolfe(c1: f64, c2: f64, maxiter: usize) -> Self {
+        Self::Wolfe { c1, c2, maxiter }
+    }
+}
+
+impl LineSearch {
     /// Returns `(x_new, f_new, |α|)` if the trial beat `f0`, else the start.
     ///
-    /// A trial answered with a non-finite value or gradient fails every
-    /// decrease test. A non-finite start or `dir` returns the start
-    /// without probing.
+    /// Evaluates the start once, then runs [`Self::search_from`] with no
+    /// step cap. A caller that already holds `f` and `g` at `pos` should
+    /// call [`Self::search_from`] directly and save that evaluation.
     pub fn search<F>(
         &self,
-        oracle: F,
+        mut oracle: F,
         pos: ArrayView1<'_, f64>,
         dir: ArrayView1<'_, f64>,
         istep: f64,
@@ -91,11 +162,16 @@ impl LineSearch {
     where
         F: FnMut(ArrayView1<'_, f64>) -> (f64, Array1<f64>),
     {
-        self.search_path(oracle, &mut Line { pos, dir }, istep)
+        let (f0, g0) = oracle(pos);
+        match self.search_from(&mut oracle, pos, f0, g0.view(), dir, istep, f64::INFINITY) {
+            Some(out) => (out.x, out.f, out.alpha),
+            None => (pos.to_owned(), f0, 0.0),
+        }
     }
 
-    /// [`Self::search`] along any [`Path`]. A point the path cannot
-    /// produce scores as a non-finite value.
+    /// Line search along any [`Path`]. A point the path cannot produce
+    /// scores as a non-finite value. Straight-line [`Self::search`] uses
+    /// [`Self::search_from`].
     pub(crate) fn search_path<F, P>(
         &self,
         mut oracle: F,
@@ -106,28 +182,8 @@ impl LineSearch {
         F: FnMut(ArrayView1<'_, f64>) -> (f64, Array1<f64>),
         P: Path + ?Sized,
     {
-        let mut bufs = crate::workspace::SearchBuffers::default();
-        let (f, step) = self.search_with(&mut oracle, path, istep, &mut bufs);
-        let point = bufs.result().to_owned();
-        (point, f, step)
-    }
-
-    /// [`Self::search_path`] writing the accepted point into `bufs`.
-    pub(crate) fn search_with<F, P>(
-        &self,
-        mut oracle: F,
-        path: &mut P,
-        istep: f64,
-        bufs: &mut crate::workspace::SearchBuffers,
-    ) -> (f64, f64)
-    where
-        F: FnMut(ArrayView1<'_, f64>) -> (f64, Array1<f64>),
-        P: Path + ?Sized,
-    {
         match *self {
-            Self::Brent { maxiter, tol } => {
-                brent_search(&mut oracle, path, istep, maxiter, tol, bufs)
-            }
+            Self::Brent { maxiter, tol } => brent_search(&mut oracle, path, istep, maxiter, tol),
             Self::Backtracking { c, beta, maxiter } => {
                 let rule = Backtrack {
                     c,
@@ -135,7 +191,7 @@ impl LineSearch {
                     maxiter,
                     goldstein: false,
                 };
-                backtrack_search(&mut oracle, path, istep, rule, bufs)
+                backtrack_search(&mut oracle, path, istep, rule)
             }
             Self::Goldstein { c, beta, maxiter } => {
                 let rule = Backtrack {
@@ -144,10 +200,10 @@ impl LineSearch {
                     maxiter,
                     goldstein: true,
                 };
-                backtrack_search(&mut oracle, path, istep, rule, bufs)
+                backtrack_search(&mut oracle, path, istep, rule)
             }
             Self::Wolfe { c1, c2, maxiter } => {
-                zoom::wolfe_search(&mut oracle, path, istep, c1, c2, maxiter, bufs)
+                zoom::wolfe_search(&mut oracle, path, istep, c1, c2, maxiter)
             }
         }
     }
@@ -161,29 +217,12 @@ pub(crate) trait Path {
     fn direction(&self) -> ArrayView1<'_, f64>;
     /// `x(t)`, `None` where the curve is not defined.
     fn point(&mut self, t: f64) -> Option<Array1<f64>>;
-    /// `x(0)` written into `out`. The default copies [`Self::start`].
-    fn start_into(&mut self, out: &mut Array1<f64>) {
-        let s = self.start();
-        crate::workspace::assign_fit(out, s.view());
-    }
-    /// `x(t)` written into `out`. The default copies [`Self::point`].
-    ///
-    /// `false` where the curve is not defined. A straight line overrides
-    /// this and does not allocate once `out` has the right length.
-    fn point_into(&mut self, t: f64, out: &mut Array1<f64>) -> bool {
-        match self.point(t) {
-            Some(p) => {
-                crate::workspace::assign_fit(out, p.view());
-                true
-            }
-            None => false,
-        }
-    }
     /// `g . x'(t)` for the gradient `g` at `at = x(t)`.
     fn slope(&mut self, t: f64, at: ArrayView1<'_, f64>, g: ArrayView1<'_, f64>) -> f64;
 }
 
 /// The straight line `pos + t dir`.
+#[allow(dead_code)]
 pub(crate) struct Line<'a> {
     pub(crate) pos: ArrayView1<'a, f64>,
     pub(crate) dir: ArrayView1<'a, f64>,
@@ -193,21 +232,14 @@ impl Path for Line<'_> {
     fn start(&self) -> Array1<f64> {
         self.pos.to_owned()
     }
-    fn start_into(&mut self, out: &mut Array1<f64>) {
-        crate::workspace::assign_fit(out, self.pos);
-    }
     fn direction(&self) -> ArrayView1<'_, f64> {
         self.dir.view()
     }
     fn point(&mut self, t: f64) -> Option<Array1<f64>> {
         Some(axpy(self.pos, t, self.dir))
     }
-    fn point_into(&mut self, t: f64, out: &mut Array1<f64>) -> bool {
-        axpy_into(self.pos, t, self.dir, out);
-        true
-    }
     fn slope(&mut self, _t: f64, _at: ArrayView1<'_, f64>, g: ArrayView1<'_, f64>) -> f64 {
-        crate::vecops::dot(g, self.dir)
+        g.iter().zip(self.dir.iter()).map(|(g, d)| g * d).sum()
     }
 }
 
@@ -215,23 +247,6 @@ pub(crate) fn axpy(pos: ArrayView1<'_, f64>, t: f64, dir: ArrayView1<'_, f64>) -
     let mut trial = pos.to_owned();
     crate::vecops::axpy(t, dir, &mut trial);
     trial
-}
-
-/// `trial = pos + t dir` into a buffer that already has `pos`'s length.
-pub(crate) fn axpy_into(
-    pos: ArrayView1<'_, f64>,
-    t: f64,
-    dir: ArrayView1<'_, f64>,
-    trial: &mut Array1<f64>,
-) {
-    crate::workspace::fit(trial, pos.len());
-    match (trial.as_slice_mut(), pos.as_slice(), dir.as_slice()) {
-        (Some(d), Some(p), Some(r)) => crate::vecops::lincomb(d, p, t, r),
-        _ => {
-            crate::workspace::assign_fit(trial, pos);
-            crate::vecops::axpy(t, dir, trial);
-        }
-    }
 }
 
 /// `f`, or `+inf` when the value or gradient is non-finite. NaN fails no
@@ -250,43 +265,40 @@ fn unusable(f0: f64, g0: &Array1<f64>, dir: ArrayView1<'_, f64>) -> bool {
     !crate::step::finite(f0, g0.view()) || dir.iter().any(|v| !v.is_finite())
 }
 
+/// `(x(t), f, g)` with `f` scored, `None` where the path is undefined.
+fn probe<F, P>(oracle: &mut F, path: &mut P, t: f64) -> Option<(Array1<f64>, f64, Array1<f64>)>
+where
+    F: FnMut(ArrayView1<'_, f64>) -> (f64, Array1<f64>),
+    P: Path + ?Sized,
+{
+    let x = path.point(t)?;
+    let (f, g) = oracle(x.view());
+    let f = scored(f, g.view());
+    Some((x, f, g))
+}
+
 fn brent_search<F, P>(
     oracle: &mut F,
     path: &mut P,
     istep: f64,
     maxiter: usize,
     tol: f64,
-    bufs: &mut crate::workspace::SearchBuffers,
-) -> (f64, f64)
+) -> (Array1<f64>, f64, f64)
 where
     F: FnMut(ArrayView1<'_, f64>) -> (f64, Array1<f64>),
     P: Path + ?Sized,
 {
-    path.start_into(&mut bufs.anchor);
-    let (f0, g0) = oracle(bufs.anchor.view());
-    let bad = unusable(f0, &g0, path.direction());
-    crate::workspace::recycle_array(g0);
-    if bad {
-        bufs.chosen = 0;
-        return (f0, 0.0);
+    let pos = path.start();
+    let (f0, g0) = oracle(pos.view());
+    if unusable(f0, &g0, path.direction()) {
+        return (pos, f0, 0.0);
     }
-    let mut phi = |t: f64| {
-        if !path.point_into(t, &mut bufs.trial) {
-            return f64::INFINITY;
-        }
-        let (f, g) = oracle(bufs.trial.view());
-        let score = scored(f, g.view());
-        crate::workspace::recycle_array(g);
-        score
-    };
+    let mut phi = |t: f64| probe(oracle, path, t).map_or(f64::INFINITY, |(_, f, _)| f);
     let (a, b) = bracket(&mut phi, 0.0, istep.max(1e-12), maxiter);
     let (t, ft) = brent(&mut phi, a, b, tol, maxiter.max(20));
-    if ft < f0 && path.point_into(t, &mut bufs.trial) {
-        bufs.chosen = 2;
-        (ft, t.abs())
-    } else {
-        bufs.chosen = 0;
-        (f0, 0.0)
+    match path.point(t) {
+        Some(x) if ft < f0 => (x, ft, t.abs()),
+        _ => (pos, f0, 0.0),
     }
 }
 
@@ -304,8 +316,7 @@ fn backtrack_search<F, P>(
     path: &mut P,
     istep: f64,
     rule: Backtrack,
-    bufs: &mut crate::workspace::SearchBuffers,
-) -> (f64, f64)
+) -> (Array1<f64>, f64, f64)
 where
     F: FnMut(ArrayView1<'_, f64>) -> (f64, Array1<f64>),
     P: Path + ?Sized,
@@ -316,46 +327,35 @@ where
         maxiter,
         goldstein,
     } = rule;
-    path.start_into(&mut bufs.anchor);
-    let (f0, g0) = oracle(bufs.anchor.view());
-    let bad = unusable(f0, &g0, path.direction());
-    let slope: f64 = if bad {
-        0.0
-    } else {
-        path.slope(0.0, bufs.anchor.view(), g0.view())
-    };
-    crate::workspace::recycle_array(g0);
-    if bad {
-        bufs.chosen = 0;
-        return (f0, 0.0);
+    let pos = path.start();
+    let (f0, g0) = oracle(pos.view());
+    if unusable(f0, &g0, path.direction()) {
+        return (pos, f0, 0.0);
     }
+    let slope: f64 = path.slope(0.0, pos.view(), g0.view());
     let mut alpha = istep.max(1e-16);
-    bufs.copy_anchor_to_best();
+    let mut best_x = pos.clone();
     let mut best_f = f0;
     let mut best_alpha = 0.0;
     for _ in 0..maxiter {
-        let have = path.point_into(alpha, &mut bufs.trial);
-        let f = if have {
-            let (f, g) = oracle(bufs.trial.view());
-            let score = scored(f, g.view());
-            crate::workspace::recycle_array(g);
-            score
-        } else {
-            f64::INFINITY
+        let probed = probe(oracle, path, alpha);
+        let (x, f) = match probed {
+            Some((x, f, _)) => (Some(x), f),
+            None => (None, f64::INFINITY),
         };
-        if have && f < best_f {
-            best_f = f;
-            bufs.copy_trial_to_best();
-            best_alpha = alpha;
-        }
         let accept = if goldstein {
             conditions::goldstein(f, f0, alpha, slope, c)
         } else {
             conditions::armijo(f, f0, alpha, slope, c)
         };
-        if accept && have {
-            bufs.chosen = 2;
-            return (f, alpha.abs());
+        match x {
+            Some(x) if accept => return (x, f, alpha.abs()),
+            Some(x) if f < best_f => {
+                best_f = f;
+                best_x = x;
+                best_alpha = alpha;
+            }
+            _ => {}
         }
         if goldstein && conditions::armijo(f, f0, alpha, slope, c) {
             // Lower bound failed: step is too short (Nocedal-Wright 3.11).
@@ -369,11 +369,9 @@ where
         }
     }
     if best_f < f0 {
-        bufs.chosen = 1;
-        (best_f, best_alpha.abs())
+        (best_x, best_f, best_alpha.abs())
     } else {
-        bufs.chosen = 0;
-        (f0, 0.0)
+        (pos, f0, 0.0)
     }
 }
 

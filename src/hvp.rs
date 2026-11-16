@@ -894,8 +894,12 @@ where
     }
     pos = obj.bounds().clip(pos.view());
     let (mut value, mut grad) = obj.value_and_gradient(pos.view());
+    crate::step::refuse_non_finite(value, &grad)?;
 
-    let rmax = control.maxmove.unwrap_or(f64::INFINITY).max(RADIUS_FLOOR);
+    let rmax = control
+        .maxmove_cap()
+        .unwrap_or(f64::INFINITY)
+        .max(RADIUS_FLOOR);
     let mut radius = if control.istep > 0.0 {
         control.istep.min(rmax)
     } else {
@@ -908,7 +912,7 @@ where
         if !gnorm.is_finite() {
             return Err(Error::TrustCollapsed { steps: step });
         }
-        if gnorm < control.gtol {
+        if let Some(status) = control.halt(gnorm, grad.len()) {
             return Ok(Report {
                 value,
                 coords: pos,
@@ -916,6 +920,7 @@ where
                 grad_norm: gnorm,
                 stop_norm: StopNorm::Two,
                 grad: None,
+                status,
             });
         }
         // Inexact-Newton forcing keeps early CG cheap and the tail
@@ -932,7 +937,7 @@ where
                 radius,
                 rmax,
                 atom_cap: None,
-                euclid_cap: control.maxmove,
+                euclid_cap: control.maxmove_cap(),
                 project_rigid: false,
                 precondition: false,
                 seed: step as u64,
@@ -950,13 +955,15 @@ where
             grad = taken.grad;
         }
     }
+    let gnorm = nrm2(grad.view());
     Ok(Report {
         value,
         coords: pos,
         steps: control.maxiter,
-        grad_norm: nrm2(grad.view()),
+        grad_norm: gnorm,
         stop_norm: StopNorm::Two,
         grad: None,
+        status: control.finish_status(gnorm, grad.len(), true),
     })
 }
 
