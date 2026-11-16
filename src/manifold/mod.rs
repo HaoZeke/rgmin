@@ -572,6 +572,97 @@ pub trait Manifold {
     fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64>;
     /// Vector transport of `v` from `x_from` to `x_to`.
     fn transport(&self, x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64>;
+
+    /// Riemannian metric \(g_x(u, v)\) between tangent vectors at `x`.
+    ///
+    /// The default is the ambient Euclidean product, the metric under
+    /// which the default [`Self::egrad2rgrad`] (the projection) is the
+    /// Riemannian gradient. A kind that overrides one overrides both.
+    fn inner(&self, x: &Array1<f64>, u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        let _ = x;
+        crate::vecops::dot(u.view(), v.view())
+    }
+
+    /// Length of the tangent vector `v` at `x` in [`Self::inner`].
+    fn norm(&self, x: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        self.inner(x, v, v).max(0.0).sqrt()
+    }
+
+    /// Riemannian Hessian action \(\mathrm{Hess} f(x)[v]\), manopt
+    /// `ehess2rhess`.
+    ///
+    /// `egrad` is the Euclidean gradient at `x`, `ehess` the Euclidean
+    /// Hessian action \(\nabla^2 f(x)\,v\), and `v` a tangent vector.
+    /// The result adds the curvature (Weingarten) term of the embedding
+    /// to the projected `ehess`. `None` when the kind does not supply that
+    /// term, which is the default.
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        let _ = (x, egrad, ehess, v);
+        None
+    }
+
+    /// Exponential map \(\exp_x(v)\) where it has a closed form. `None`
+    /// otherwise, which is the default.
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        let _ = (x, v);
+        None
+    }
+
+    /// Logarithm: the tangent `v` at `x` of least length with
+    /// \(\exp_x(v) = y\). `None` without a closed form, the default.
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        let _ = (x, y);
+        None
+    }
+
+    /// Riemannian distance. The default is the length of [`Self::log`].
+    fn dist(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<f64> {
+        self.log(x, y).map(|v| self.norm(x, &v))
+    }
+
+    /// Parallel transport of the tangent `v` along the geodesic
+    /// \(t \mapsto \exp_x(t\,d)\) from `t = 0` to `t = 1`. An isometry of
+    /// [`Self::inner`]. `None` without a closed form, the default.
+    fn parallel_transport_along(
+        &self,
+        x: &Array1<f64>,
+        d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        let _ = (x, d, v);
+        None
+    }
+
+    /// Parallel transport of `v` from `x_from` to `x_to` along the
+    /// geodesic of [`Self::log`].
+    fn parallel_transport(
+        &self,
+        x_from: &Array1<f64>,
+        x_to: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        let d = self.log(x_from, x_to)?;
+        self.parallel_transport_along(x_from, &d, v)
+    }
+
+    /// `true` when [`Self::transport`] maps tangent vectors isometrically
+    /// in [`Self::inner`], the condition Riemannian BFGS theory puts on
+    /// its vector transport. The default is `false`.
+    fn transport_is_isometric(&self) -> bool {
+        false
+    }
+
+    /// manopt `typicaldist` at packed length `n`: the distance scale a
+    /// trust region starts from. The default is \(\sqrt{n}\).
+    fn typical_dist(&self, n: usize) -> f64 {
+        (n as f64).sqrt()
+    }
 }
 
 /// [`ManifoldKind::Grassmann`]: \(\mathrm{Gr}(n, 1)\) with `n` the packed
@@ -619,5 +710,61 @@ impl Manifold for ManifoldKind {
 
     fn egrad2rgrad(&self, x: &Array1<f64>, egrad: &Array1<f64>) -> Array1<f64> {
         with_kind!(self, |f| f.egrad2rgrad(x, egrad))
+    }
+
+    fn inner(&self, x: &Array1<f64>, u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        with_kind!(self, |f| f.inner(x, u, v))
+    }
+
+    fn norm(&self, x: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        with_kind!(self, |f| f.norm(x, v))
+    }
+
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        with_kind!(self, |f| f.ehess2rhess(x, egrad, ehess, v))
+    }
+
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        with_kind!(self, |f| f.exp(x, v))
+    }
+
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        with_kind!(self, |f| f.log(x, y))
+    }
+
+    fn dist(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<f64> {
+        with_kind!(self, |f| f.dist(x, y))
+    }
+
+    fn parallel_transport_along(
+        &self,
+        x: &Array1<f64>,
+        d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        with_kind!(self, |f| f.parallel_transport_along(x, d, v))
+    }
+
+    fn parallel_transport(
+        &self,
+        x_from: &Array1<f64>,
+        x_to: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        with_kind!(self, |f| f.parallel_transport(x_from, x_to, v))
+    }
+
+    fn transport_is_isometric(&self) -> bool {
+        with_kind!(self, |f| f.transport_is_isometric())
+    }
+
+    fn typical_dist(&self, n: usize) -> f64 {
+        with_kind!(self, |f| f.typical_dist(n))
     }
 }
