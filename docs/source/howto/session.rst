@@ -27,24 +27,105 @@ Rust
 
 ``step`` is one outer iteration. ``step_hess`` / ``step_hess_fg`` take a
 host Hessian. ``forget`` drops pair history, conjugacy, and moments.
-``set_atom_maxmove`` is the eOn per-atom cap. On a Euclidean L-BFGS
-session it selects the geometry step and ignores ``set_accept``.
-A nominal steepest trial at least 64 times the cap takes one
-finite-difference curvature probe, clipped to the objective bounds.
-Ordinary starts use ``H0 = 0.1 I`` and a five-value nonmonotone window.
-Later iterations use ``s.y / y.y``. Negative curvature clears the
-stored pairs. A trial is kept when the energy rises by at most
-1e-8, with at most ten halvings; otherwise a short steepest step
-is taken. When ``set_exp`` is installed, that preconditioner replaces
-the scalar seed, including those steepest fallbacks, and the cap
-still limits the displacement. A HiGHS feasible set and a
-non-Euclidean manifold keep the two-loop step.
+``set_atom_maxmove`` is the eOn per-atom cap. The L-BFGS default is the
+strong Wolfe search. ``set_geometry_step`` or ``LbfgsStep::Capped`` opts
+into the line-search-free geometry step; that step uses this cap and
+ignores ``set_accept``. A nominal steepest trial at least 64 times the
+cap takes one finite-difference curvature probe, clipped to the
+objective bounds. Ordinary starts use ``H0 = 0.1 I`` and a five-value
+nonmonotone window. Later iterations use ``s.y / y.y``. Negative
+curvature clears the stored pairs. A trial is kept when the energy
+rises by at most 1e-8, with at most ten halvings; otherwise a short
+steepest step is taken. When ``set_exp`` is installed, that
+preconditioner replaces the scalar seed, including those steepest
+fallbacks, and the cap still limits the displacement. A HiGHS
+feasible set and a non-Euclidean manifold keep the two-loop step.
+
+
+``set_atom_maxmove`` is the eOn per-atom clip. A fresh Cartesian
+session starts with that clip at 0.2, which is ASE
+``Optimizer.defaults`` ``maxstep`` at tag 3.29.0
+(`https://gitlab.com/ase/ase/-/blob/3.29.0/ase/optimize/optimize.py <https://gitlab.com/ase/ase/-/blob/3.29.0/ase/optimize/optimize.py>`_)
+and eOn ``max_move``
+(`https://henkelmanlab.org/eon/optimizer.html <https://henkelmanlab.org/eon/optimizer.html>`_; ``OptimizerOptions.maxMove``
+in ``schema/eon_params.capnp`` at ``4be157d4``,
+`https://github.com/TheochemUI/eOn/blob/4be157d43265af6b1140aaac0e52e42add62693f/schema/eon_params.capnp <https://github.com/TheochemUI/eOn/blob/4be157d43265af6b1140aaac0e52e42add62693f/schema/eon_params.capnp>`_).
+The number is in the coordinate unit, so a geometry stored in
+angstroms is capped at 0.2 Å. ``scale_step_atom`` limits the largest
+per-atom displacement. It does not limit the Euclidean norm of the
+whole step. A positive argument replaces the default. A non-positive
+argument clears the cap, and that choice stays in force if
+``set_maxmove`` or ``set_manifold`` is called later. A positive
+``Control.maxmove``, with no call to ``set_atom_maxmove``, is the
+Euclidean step limit and leaves the per-atom default off. A
+non-Cartesian manifold has no default.
+
+``Method::QuickMin`` is the projection-then-Euler step in
+`quick-min <../explanation/quickmin.rst>`_. ``set_quickmin_adapt(false)``
+keeps the reference fixed time step. ``set_quickmin_cell(at)`` gives the
+atoms and the cell their own velocities. The displacement cap is the
+same ``set_atom_maxmove`` the other methods use.
+
+To run eOn's quick-min, or the per-atom variant, set the options after
+building the session:
+
+.. code:: rust
+
+    use rgmin::{Control, Method, QuickMinOptions, Solver};
+
+    let control = Control::default().with_istep(0.1);
+    let mut solver = Solver::new(Method::QuickMin, control, x.len());
+    solver.set_atom_maxmove(0.2);
+    solver.set_quickmin_options(QuickMinOptions::per_atom()); // or ::eon()
+    let report = solver.step(&obj, &mut x).unwrap();
+
+From C, ``rgmin_solver_set_quickmin_variant(s, RGMIN_QUICKMIN_PER_ATOM)``
+(or ``RGMIN_QUICKMIN_EON``, ``RGMIN_QUICKMIN_RGMIN``) on a session created
+with ``RGMIN_QUICKMIN``.
+
 ``set_project_rigid`` projects translations and rotations on isolated
 clusters.
 ``set_distance_constraints`` keeps atom pairs at fixed distances on
 every later step; see :doc:`constraints`.
 With a set, L-BFGS keeps its two-loop step under ``set_accept``, and
 the per-atom cap scales each trial before it returns to the set.
+
+Stop norm
+~~~~~~~~~
+
+.. code:: rust
+
+    use rgmin::{Control, Method, Solver, StopNorm};
+
+    let n_atoms = 7;
+    let control = Control::default()
+        .with_gtol(0.01)
+        .with_stop_norm(StopNorm::MaxAtom);
+    let solver = Solver::new(Method::lbfgs(), control, 3 * n_atoms);
+
+``Control::stop_norm`` is the norm a session compares to ``gtol`` and writes to ``Report::grad_norm``.
+``Report::stop_norm`` names it, and ``set_stop_norm`` replaces it on a live session.
+The default is ``StopNorm::Two``, so a default ``Control`` stops where it did before the field existed.
+Only the step at which the session stops changes: every norm takes the same steps up to that point.
+The one-shot drivers that run no session, such as ``minimize_lbfgs``, keep ``norm2(g)`` and report ``StopNorm::Two``.
+
+.. table::
+
+    +-------------------+----------------------------------------------+----------+----------------------------+----------------------------+
+    | ``StopNorm``      | Value                                        | ASE      | eOn ``convergence_metric`` | LAMMPS ``min_modify norm`` |
+    +===================+==============================================+==========+============================+============================+
+    | ``Two`` (default) | ``norm2(g)``                                 | \        | ``norm`` (default)         | ``two`` (default)          |
+    +-------------------+----------------------------------------------+----------+----------------------------+----------------------------+
+    | ``MaxAtom``       | largest ``norm2`` over ``(x, y, z)`` triples | ``fmax`` | ``max_atom``               | ``max``                    |
+    +-------------------+----------------------------------------------+----------+----------------------------+----------------------------+
+    | ``Inf``           | largest ``abs(g_k)``                         | \        | ``max_component``          | ``inf``                    |
+    +-------------------+----------------------------------------------+----------+----------------------------+----------------------------+
+    | ``Rms``           | ``norm2(g) / sqrt(n)``                       | \        | ``rms``                    | \                          |
+    +-------------------+----------------------------------------------+----------+----------------------------+----------------------------+
+
+eOn takes ``n`` in ``rms`` as the number of free coordinates, so a host that passes only the free atoms gets the same value.
+C sessions select the norm with ``rgmin_solver_set_stop_norm``.
+``RGMIN_STOP_NORM_RMS`` is 3.
 
 C
 ~
@@ -74,52 +155,63 @@ Setters
 
 .. table::
 
-    +--------------------------------+--------------------------------------------------------------------------+
-    | Setter                         | Role                                                                     |
-    +================================+==========================================================================+
-    | ``set_qn_step``                | Two-loop, Newton, or RFO when a host Hessian is present                  |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_exp``                    | Packwood preconditioner from a caller neighbour list.                    |
-    |                                | L-BFGS takes ``H0 = P^{-1}``, including the geometry step.               |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``clear_exp``                  | Drop that preconditioner                                                 |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``exp_mu``                     | Its energy scale after estimation, or none when it is not installed      |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_accept``                 | ``none`` / ``energy`` / ``nonmonotone``                                  |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_atom_maxmove``           | Per-atom cap. Without a distance set, Euclidean L-BFGS takes the         |
-    |                                | geometry step and ignores ``set_accept``, and ``set_exp`` supplies its   |
-    |                                | initial inverse Hessian. With a set, every method scales its trial to    |
-    |                                | the cap and keeps ``set_accept``.                                        |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_project_rigid``          | Drop rigid modes on isolated clusters                                    |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_extra_updates``          | Al-Baali extra L-BFGS pairs                                              |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_cautious``               | Li--Fukushima pair filter                                                |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_highs``                  | Feasible-set QP; returns 1 without ``--features highs``                  |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_box``                    | Per-coordinate box on ``x + p``; NULL side unbounded                     |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_trust``                  | L_inf HiGHS trust radius; non-positive clears                            |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``add_equality``               | Sparse ``a · p = rhs`` on the HiGHS set                                  |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_manifold``               | Embedded geometry; ``rigid_quotient`` for 3N clusters                    |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_masses``                 | Per-atom masses for ``mw_rigid`` (Page–McIver)                           |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_fire_preset``            | ``fire2`` only: Guenole 2020 Table 1 parameters; restarts the integrator |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_fire_abc``               | ``fire2`` only: ABC-FIRE bias correction with a per-component cap        |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``set_distance_constraints``   | Keep atom pairs at fixed distances with SHAKE, LINCS or SETTLE; a        |
-    |                                | setting the set cannot run with is a typed error                         |
-    +--------------------------------+--------------------------------------------------------------------------+
-    | ``clear_distance_constraints`` | Drop the set and the method memory                                       |
-    +--------------------------------+--------------------------------------------------------------------------+
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | Setter                                  | Role                                                                                                                                                   |
+    +=========================================+========================================================================================================================================================+
+    | ``set_qn_step``                         | Two-loop, Newton, or RFO when a host Hessian is present                                                                                                |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_exp``                             | Packwood preconditioner from a caller neighbour list. An opt-in geometry step takes ``H0 = P^{-1}``                                                    |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``clear_exp``                           | Drop that preconditioner                                                                                                                               |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``exp_mu``                              | Its energy scale after estimation, or none when it is not installed                                                                                    |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_accept``                          | ``none`` / ``energy`` / ``nonmonotone`` / ``step``                                                                                                     |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_stop_norm``                       | Replace ``Control::stop_norm``: ``two`` / ``max_atom`` / ``inf`` / ``rms``                                                                             |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_linesearch``                      | Line search for the line-searched arms; default strong Wolfe                                                                                           |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_lbfgs_step``                      | ``Wolfe`` is the default. ``Capped`` opts into the eOn cap. A non-positive cap selects Wolfe                                                           |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_fire_variant``                    | FIRE schedule; ``Guenole2020`` is FIRE 2.0 as published                                                                                                |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``forget_evaluation``                   | Re-evaluate the next start, keep the method memory                                                                                                     |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_atom_maxmove``                    | Per-atom clip; Cartesian default 0.2. A positive ``maxmove`` is the Euclidean cap and leaves this default off. A negative ``maxmove`` clears every cap |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_project_rigid``                   | Drop rigid modes on isolated clusters                                                                                                                  |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_lbfgs_neb_guards``                | L-BFGS distance, angle and curvature resets; empty-memory scale 0.01                                                                                   |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_extra_updates``                   | Accepted, no effect: a replayed newest pair leaves BFGS unchanged                                                                                      |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_cautious``                        | Li--Fukushima pair filter                                                                                                                              |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_highs``                           | Feasible-set QP; returns 1 without ``--features highs``                                                                                                |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_box``                             | Per-coordinate box on ``x + p``; NULL side unbounded                                                                                                   |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_trust``                           | L\ :sub:`inf`\ HiGHS trust radius; non-positive clears                                                                                                 |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``add_equality`` / ``clear_equalities`` | Sparse ``a · p = rhs`` on the HiGHS set                                                                                                                |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_manifold``                        | Embedded geometry; ``rigid_quotient`` for 3N clusters                                                                                                  |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_masses``                          | Per-atom masses for ``mw_rigid`` (Page–McIver)                                                                                                         |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_fire_preset``                     | ``fire2`` only: Guenole 2020 Table 1 parameters; restarts the integrator                                                                               |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_fire_abc``                        | ``fire2`` only: ABC-FIRE bias correction with a per-component cap                                                                                      |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``set_distance_constraints``            | Keep atom pairs at fixed distances with SHAKE, LINCS or SETTLE; a setting the set cannot run with is a typed error                                     |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+    | ``clear_distance_constraints``          | Drop the set and the method memory                                                                                                                     |
+    +-----------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+The C entry of each setter is ``rgmin_solver_<setter>``.
+``rgmin_solver_forget_evaluation`` and ``rgmin_solver_set_lbfgs_neb_guards``
+need ``abi_minor`` 28.
 
 When to use ``rgmin_minimize`` instead
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

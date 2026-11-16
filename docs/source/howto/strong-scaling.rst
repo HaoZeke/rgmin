@@ -14,7 +14,7 @@ The force evaluation runs on the same pool.
     cargo run --release --features par --example strong_scale -- \
       --cells 20 --repeats 5 > strong_scale.csv
 
-The system is a perturbed periodic FCC crystal of 4 L^3 atoms, with
+The system is a perturbed periodic FCC crystal of 4 L\ :sup:`3`\ atoms, with
 L set by ``--cells``.
 Each atom has one Morse bond to each of its 12 nearest neighbours,
 with the Pt parameters of the Morse tutorial.

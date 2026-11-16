@@ -1,3 +1,5 @@
+
+
 Riemannian manifolds
 --------------------
 
@@ -12,15 +14,15 @@ Every buffer is caller-owned, column-major and ``len`` doubles long.
 
 .. table::
 
-    +--------------+-----------------------------------------------------+-------------+
-    | Factor       | Point                                               | ``len``     |
-    +==============+=====================================================+=============+
-    | ``St(n, p)`` | ``n x p`` frame, ``U^T U = I``, ``1 <= p <= n``     | ``n p``     |
-    +--------------+-----------------------------------------------------+-------------+
-    | ``SPD(p)``   | ``p x p`` symmetric positive definite               | ``p^2``     |
-    +--------------+-----------------------------------------------------+-------------+
-    | Product      | factor blocks in factor order                       | the sum     |
-    +--------------+-----------------------------------------------------+-------------+
+    +--------------+-------------------------------------------------+---------+
+    | Factor       | Point                                           | ``len`` |
+    +==============+=================================================+=========+
+    | ``St(n, p)`` | ``n x p`` frame, ``U^T U = I``, ``1 <= p <= n`` | ``n p`` |
+    +--------------+-------------------------------------------------+---------+
+    | ``SPD(p)``   | ``p x p`` symmetric positive definite           | ``p^2`` |
+    +--------------+-------------------------------------------------+---------+
+    | Product      | factor blocks in factor order                   | the sum |
+    +--------------+-------------------------------------------------+---------+
 
 Tangent vectors and Euclidean gradients use the packing of the point.
 A nested product contributes its factors.
@@ -28,22 +30,25 @@ A nested product contributes its factors.
 Operations
 ~~~~~~~~~~
 
-Stiefel uses the embedded metric.
+.. table::
 
-``project``
-    Stiefel: ``V - X sym(X^T V)``. SPD: ``sym(V)``.
-``egrad_to_rgrad``
-    Stiefel: the projection. SPD affine-invariant: ``X sym(G) X``. SPD log-Euclidean: ``Dlog(X)^{-2}[sym(G)]``.
-``retract``
-    Stiefel: the QR (first order) or polar (second order) factor of ``X + V``. SPD: ``exp`` of the metric.
-``exp``
-    Stiefel: Edelman, Arias and Smith (1998) eq. 2.41. SPD affine-invariant: ``X^{1/2} expm(X^{-1/2} V X^{-1/2}) X^{1/2}``. SPD log-Euclidean: ``expm(log X + Dlog(X)[V])``.
-``log``
-    SPD: the inverse of ``exp``. Stiefel: refused.
-``transport``
-    Stiefel: projection at the arrival point. SPD affine-invariant: ``E V E^T`` with ``E = (Y X^{-1})^{1/2}``. SPD log-Euclidean: ``Dlog(Y)^{-1}[Dlog(X)[V]]``.
-``inner``
-    Stiefel: ``tr(U^T V)``. SPD affine-invariant: ``tr(X^{-1} U X^{-1} V)``. SPD log-Euclidean: ``<Dlog(X)[U], Dlog(X)[V]>``.
+    +--------------------+-------------------------------------------------------+-----------------------------------------------+------------------------------+
+    | Operation          | Stiefel (embedded metric)                             | SPD affine-invariant                          | SPD log-Euclidean            |
+    +====================+=======================================================+===============================================+==============================+
+    | ``project``        | ``V - X sym(X^T V)``                                  | ``sym(V)``                                    | ``sym(V)``                   |
+    +--------------------+-------------------------------------------------------+-----------------------------------------------+------------------------------+
+    | ``egrad_to_rgrad`` | the projection                                        | ``X sym(G) X``                                | ``Dlog(X)^{-2}[sym(G)]``     |
+    +--------------------+-------------------------------------------------------+-----------------------------------------------+------------------------------+
+    | ``retract``        | QR (first order) or polar (second order) of ``X + V`` | ``exp``                                       | ``exp``                      |
+    +--------------------+-------------------------------------------------------+-----------------------------------------------+------------------------------+
+    | ``exp``            | Edelman, Arias, Smith (1998) eq. 2.41                 | ``X^{1/2} expm(X^{-1/2} V X^{-1/2}) X^{1/2}`` | ``expm(log X + Dlog(X)[V])`` |
+    +--------------------+-------------------------------------------------------+-----------------------------------------------+------------------------------+
+    | ``log``            | refused                                               | inverse of ``exp``                            | inverse of ``exp``           |
+    +--------------------+-------------------------------------------------------+-----------------------------------------------+------------------------------+
+    | ``transport``      | projection at the arrival point                       | ``E V E^T``, ``E = (Y X^{-1})^{1/2}``         | ``Dlog(Y)^{-1}[Dlog(X)[V]]`` |
+    +--------------------+-------------------------------------------------------+-----------------------------------------------+------------------------------+
+    | ``inner``          | ``tr(U^T V)``                                         | ``tr(X^{-1} U X^{-1} V)``                     | ``<Dlog(X)[U], Dlog(X)[V]>`` |
+    +--------------------+-------------------------------------------------------+-----------------------------------------------+------------------------------+
 
 ``sym(A) = (A + A^T) / 2``.
 ``Dlog(X)`` is applied in the eigenbasis of ``X`` with the divided differences of ``log`` on its eigenvalues (Daleckii-Krein).
@@ -67,13 +72,13 @@ Rust
 
 .. code:: rust
 
-   use rgmin::{RiemannianManifold, SpdMetric, StiefelRetraction};
+    use rgmin::{RiemannianManifold, SpdMetric, StiefelRetraction};
 
-   let m = RiemannianManifold::product([
-       RiemannianManifold::stiefel(6, 2, StiefelRetraction::Polar)?,
-       RiemannianManifold::spd(3, SpdMetric::AffineInvariant)?,
-   ])?;
-   m.gradient_step(&x, &egrad, 0.1, &mut rgrad, &mut x_next)?;
+    let m = RiemannianManifold::product([
+        RiemannianManifold::stiefel(6, 2, StiefelRetraction::Polar)?,
+        RiemannianManifold::spd(3, SpdMetric::AffineInvariant)?,
+    ])?;
+    m.gradient_step(&x, &egrad, 0.1, &mut rgrad, &mut x_next)?;
 
 ``RiemannianManifold`` implements the ``Manifold`` trait, so generic code such as ``rtr::truncated_cg`` accepts it.
 ``Solver`` selects its manifold with the closed ``ManifoldKind`` and does not take this type.
@@ -84,22 +89,35 @@ C
 ``rgmin_manifold_t`` is the session token of ``rgmin_solver_set_manifold``.
 The handle here is ``rgmin_manifold_handle_t``. ABI minor 41.
 
-``rgmin_manifold_stiefel(n, p, retraction)``
-    ``RGMIN_STIEFEL_QR`` or ``RGMIN_STIEFEL_POLAR``. Null on a bad shape.
-``rgmin_manifold_spd(p, metric)``
-    ``RGMIN_SPD_AFFINE_INVARIANT`` or ``RGMIN_SPD_LOG_EUCLIDEAN``.
-``rgmin_manifold_product(factors, count)``
-    Copies the factors; the caller still frees them.
-``rgmin_manifold_free(m)``, ``rgmin_manifold_len(m)``
-    Null is a no-op; the length of a null handle is zero.
-``rgmin_manifold_project(m, x, v, out, len)``, ``rgmin_manifold_egrad_to_rgrad(m, x, egrad, out, len)``, ``rgmin_manifold_retract(m, x, v, out, len)``, ``rgmin_manifold_exp(m, x, v, out, len)``, ``rgmin_manifold_log(m, x, y, out, len)``
-    One output of ``len`` doubles.
-``rgmin_manifold_transport(m, x_from, x_to, v, out, len)``
-    Transport to ``x_to``.
-``rgmin_manifold_inner(m, x, u, v, &value, len)``
-    One double.
-``rgmin_manifold_gradient_step(m, x, egrad, t, rgrad_out, x_out, len)``
-    Two outputs that must not alias each other.
+.. table::
+
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | Function                            | Shapes and effect                                                              |
+    +=====================================+================================================================================+
+    | ``rgmin_manifold_stiefel(n, p, r)`` | ``r`` is ``RGMIN_STIEFEL_QR`` or ``RGMIN_STIEFEL_POLAR``. Null on a bad shape. |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_spd(p, metric)``   | ``RGMIN_SPD_AFFINE_INVARIANT`` or ``RGMIN_SPD_LOG_EUCLIDEAN``.                 |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_product(fs, k)``   | Copies ``k`` factors; the caller still frees them.                             |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_free(m)``          | Null is a no-op.                                                               |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_len(m)``           | Packed length. Zero for null.                                                  |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_project``          | ``(m, x, v, out, len)``                                                        |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_egrad_to_rgrad``   | ``(m, x, egrad, out, len)``                                                    |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_retract``          | ``(m, x, v, out, len)``                                                        |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_exp`` / ``_log``   | ``(m, x, v or y, out, len)``                                                   |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_transport``        | ``(m, x_from, x_to, v, out, len)``                                             |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_inner``            | ``(m, x, u, v, &value, len)``                                                  |
+    +-------------------------------------+--------------------------------------------------------------------------------+
+    | ``rgmin_manifold_gradient_step``    | ``(m, x, egrad, t, rgrad_out, x_out, len)``                                    |
+    +-------------------------------------+--------------------------------------------------------------------------------+
 
 C++
 ~~~

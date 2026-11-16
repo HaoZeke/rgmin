@@ -45,6 +45,12 @@ Session (eOn / ASE ``step``)
     }
     rgmin_solver_free(s);
 
+``rgmin_precon_init`` and ``rgmin_solver_set_precon`` install Exp, Lindh,
+the bonded metric, or the automatic choice. NaN ``mu`` estimates the
+energy scale on the next step. L-BFGS uses the matrix as H0. FIRE and
+nonlinear CG use it as a metric. ``rgmin_solver_clear_precon`` removes
+it. Morse bonds and FF torsions are Rust-only.
+
 ``rgmin_solver_forget`` drops pairs / conjugacy / moments. Newton and RFO
 use ``rgmin_solver_step_hess_fg`` (fused energy and gradient, one host
 potential call). Split ``eval`` / ``grad`` callbacks remain. ``accept``
@@ -64,6 +70,21 @@ A HiGHS feasible set is ``rgmin_solver_set_highs`` plus
 returns 0, or 1 when the build has no ``highs`` feature. Stamp
 1.22.4.
 
+A Cartesian session starts with a per-atom cap of 0.2.
+``rgmin_solver_set_atom_maxmove`` replaces it. A non-positive argument
+clears it. A positive ``maxmove`` on ``rgmin_control_t``, with no call to
+that setter, is the Euclidean step limit and leaves the per-atom
+default off. A negative ``maxmove`` leaves every step cap off, including
+that default. Zero keeps the defaults. The cap is the largest per-atom
+displacement. The C++ ``OptimizeControl.maxmove`` is 0, so ``optimize``
+keeps the per-atom default. ASE ``Optimizer.defaults`` ``maxstep`` is 0.2
+at tag 3.29.0
+(`https://gitlab.com/ase/ase/-/blob/3.29.0/ase/optimize/optimize.py <https://gitlab.com/ase/ase/-/blob/3.29.0/ase/optimize/optimize.py>`_).
+eOn ``max_move`` is 0.2 Å
+(`https://henkelmanlab.org/eon/optimizer.html <https://henkelmanlab.org/eon/optimizer.html>`_); the schema field
+``OptimizerOptions.maxMove`` is 0.2 at ``4be157d4``
+(`https://github.com/TheochemUI/eOn/blob/4be157d43265af6b1140aaac0e52e42add62693f/schema/eon_params.capnp <https://github.com/TheochemUI/eOn/blob/4be157d43265af6b1140aaac0e52e42add62693f/schema/eon_params.capnp>`_).
+
 One-shot
 ~~~~~~~~
 
@@ -75,26 +96,19 @@ One-shot
     rgmin_report_t report;
     rgmin_status_t st = rgmin_minimize(eval, grad, user, x, &ctrl, RGMIN_LBFGS, &report);
 
-SCG is the same one-shot shape. Conjugacy is a field on
+SCG takes the same one-shot shape. Conjugacy is a field on
 ``rgmin_scg_params_t``, not a different entry point. Stamp is 1.13.3
 (``xts_abi_compatible`` still checks major and layout only).
 ``rgmin_lowest_eigenpair`` takes a typed ``rgmin_eigen_params_t``
 (closed ``rgmin_eigen_kind_t``, no string). Unlinked kinds return
 ``RGMIN_UNAVAILABLE``. ``rgmin_lowest_eigenpairs`` is the block LOBPCG
 solver for the k lowest pairs (Knyazev 2001). ``seed`` and ``modes_out``
-are row-major n-by-k. ``rgmin_lowest_eigenpairs`` is ``abi_minor`` 39. The same call is
-``rgmin::lowest_eigenpairs`` and ``xts_lowest_eigenpairs``.
+are row-major n-by-k. ``rgmin_lowest_eigenpairs`` is ``abi_minor`` 39.
 ``rgmin_manifold_handle_t`` is a Stiefel, SPD or product manifold with
-column-major point buffers, ``abi_minor`` 41; see :doc:`../reference/manifold`.
+column-major point buffers, ``abi_minor`` 41; see the manifold reference.
 ``rgmin_lowest_eigenpairs_ex`` adds each residual and a converged flag, and an
 optional preconditioner (null is the identity). It is ``abi_minor`` 42.
 ``rgmin_eigenpair_t`` is unchanged.
-
-.. code:: c
-
-    rgmin_eigenpair_t pairs[2];
-    double values[2];
-    rgmin_lowest_eigenpairs(hvp, user, x, seed, modes, values, NULL, NULL, pairs, 2);
 
 .. code:: c
 
@@ -104,7 +118,7 @@ optional preconditioner (null is the identity). It is ``abi_minor`` 42.
         .conjugacy = RGMIN_CONJUGACY_LIU_STOREY, /* gpr_optim RgminScg.inl */
     };
     rgmin_minimize_scg(eval, grad, curv, user, x, &ctrl, &params, &report);
-    /* params == NULL selects Netlab Polak-Ribiere + ScgParams::default */
+    /* params == NULL selects Netlab Polak-Ribiere + ScgParams::default + Restart::Never */
 
 A non-CPU tensor returns ``RGMIN_UNSUPPORTED_DEVICE``. The ABI does not
 change when a CUDA path lands.
@@ -136,7 +150,7 @@ of the backward loop that starts from ``grad``, so the direction is
 
 ``rgmin_lbfgs_pairs_push`` declines a pair whose ``s . y`` is not finite or
 is at most ``1e-8 ||s|| ||y||``, the test ``Lbfgs::record`` applies. It
-returns ``RGMIN_SUCCESS`` with ``*stored`` 0. ``rgmin_lbfgs_pairs_push_rho``
+returns ``RGMIN_SUCCESS`` with ``\*stored`` 0. ``rgmin_lbfgs_pairs_push_rho``
 applies the same test and also declines a ``rho`` that is not finite and
 positive, so a pair with non-positive curvature never enters the
 two-loop. A length other than the handle's ``n`` is
@@ -178,14 +192,19 @@ Manifold
 Tokens: ``RGMIN_MANIFOLD_EUCLIDEAN`` (default), ``RIGID_QUOTIENT``
 (``R^{3N}/SE(3)``, Sella Cartesian), ``MW_RIGID`` (Page–McIver /
 Sella IRC Eckart), ``SPHERE``, ``SO3`` (length 9), ``STIEFEL``
-(``St(n,1)``), ``SE3`` (length 12), ``SYMMETRIC`` (n² row-major),
-``MULTINOMIAL_DS`` (token 18, n² doubly-stochastic;
-``rgmin_solver_set_multinomial_ds``), ``MULTINOMIAL_SYM`` (token 19,
-n² symmetric doubly-stochastic; ``rgmin_solver_set_multinomial_sym``),
-``SPHERE_COMPLEX`` (token 20, interleaved ``(re, im)``, length ``2 n``;
-``rgmin_solver_set_sphere_complex``), ``POSITIVE`` (token 21, packed
-length ``n``; ``rgmin_solver_set_positive``), ``CENTERED_MATRIX``
-(token 22, packed ``m n`` row-major;
+(``St(n,1)``; ``rgmin_solver_set_stiefel`` for ``p > 1``), ``SE3``
+(length 12), ``OBLIQUE`` (token 11), ``MULTINOMIAL`` (token 12),
+``SYMMETRIC`` (n² row-major), ``SKEWSYMMETRIC`` (token 15, n²
+row-major, ``n >= 2``), ``EUCLIDEAN_COMPLEX`` (token 16, interleaved
+``(re, im)``, length ``2 n``; ``rgmin_solver_set_euclidean_complex``),
+``CONSTANT`` (token 17, singleton of length ``n``;
+``rgmin_solver_set_constant``), ``MULTINOMIAL_DS`` (token 18,
+n² doubly-stochastic; ``rgmin_solver_set_multinomial_ds``),
+``MULTINOMIAL_SYM`` (token 19, n² symmetric doubly-stochastic;
+``rgmin_solver_set_multinomial_sym``), ``SPHERE_COMPLEX`` (token 20,
+interleaved ``(re, im)``, length ``2 n``; ``rgmin_solver_set_sphere_complex``),
+``POSITIVE`` (token 21, packed length ``n``; ``rgmin_solver_set_positive``),
+``CENTERED_MATRIX`` (token 22, packed ``m n`` row-major;
 ``rgmin_solver_set_centered_matrix``).
 Tokens 7-10 stay reserved. See
 :doc:`retract onto an embedded manifold <manifolds>`.

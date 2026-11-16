@@ -28,20 +28,24 @@ The curvature condition demands abs(phi'(a)) <= c2 abs(phi'(0)) with
 c1 < c2 < 1: the slope must have flattened enough that the quasi-Newton
 update built from this step carries curvature information. Nocedal and
 Wright's algorithms 3.5 and 3.6 (the bracket and the zoom) find a point
-satisfying both, and ``src/linesearch/zoom.rs`` is a direct
-implementation.
+satisfying both.
 
 Near a minimum the decrease test can fail on rounding alone. ``Lbfgs::approx_wolfe``,
 zero by default, is a fraction of abs(f) at the start of a strong Wolfe search.
 A positive value accepts a trial inside that band when the strong curvature
 test holds (Hager and Zhang 2005, stop T2) and places a trial inside the band
 that fails the curvature test by the sign of its slope. The eOn cap does not
-consult it. ``LbfgsStep::Wolfe`` and ``Lbfgs::minimize_box`` do.
+consult it. ``LbfgsStep::Wolfe`` and ``Lbfgs::minimize_box`` do. ``src/linesearch/known.rs`` implements them from a
+point whose value and gradient the caller already holds: the start is
+never re-evaluated, the accepted point comes back with its gradient,
+and a displacement cap bounds every trial (``alpha_max``).
+``src/linesearch/zoom.rs`` keeps a standalone bisection zoom.
 
 2 The bracket and the zoom
 --------------------------
 
-The outer loop (``wolfe_search``) expands a trial step until it either
+The outer loop (``known.rs::wolfe``) expands a trial step, within
+More-Thuente's bounds of 1.1 to 4 times the last increment, until it either
 satisfies both conditions, overshoots (value above the Armijo line, or
 above the previous trial), or the slope turns nonnegative. Overshoot
 and slope-reversal both certify that a Wolfe point lies between the
@@ -98,7 +102,33 @@ requested tolerance regardless of what the cubic does. The Rust test
 ``tests/lbfgs_state.rs`` holds the crate to that budget on a quadratic
 bowl.
 
-5 What the accept layer adds
+5 When the interpolant is not used
+----------------------------------
+
+The cubic and the quadratic model the objective on the bracket
+:math:`[\ell, h]` from :math:`\varphi(\ell)`, :math:`\varphi'(\ell)`, :math:`\varphi(h)` and
+:math:`\varphi'(h)`. They carry information about the minimizer only when
+:math:`\varphi(h)` is on the scale of the data at :math:`\ell`. The zoom
+interpolates when
+
+
+
+.. math::
+
+    |\varphi(h) - \varphi(\ell)| \le 10^3 \left(1 + |\varphi(\ell)| + |\varphi'(\ell)|\,(h - \ell)\right),
+
+with :math:`\varphi(h)` finite, and takes the midpoint otherwise. The right
+side adds the value magnitude to the change a model with unit
+curvature predicts from the slope over the bracket; the factor
+:math:`10^3` admits curvature three orders above that. A first trial worth
+:math:`4\cdot 10^{45}` against :math:`\varphi(\ell) = -24.6` and
+:math:`\varphi'(\ell) \approx -5\cdot 10^3` fails the test by forty
+orders, and the fit through it returns the clamp of the bracket
+rather than a point chosen by the objective. Bisection halves the
+bracket until the values become comparable, after which the
+interpolant resumes.
+
+6 What the accept layer adds
 ----------------------------
 
 Above the line search, ``src/accept.rs`` offers three policies: take the
@@ -111,8 +141,8 @@ machinery owns what happens next. The test
 ``accept_energy_uphill_does_not_take_ten_steepest_retries`` pins the
 oracle count of that path.
 
-A search the caller evaluates
------------------------------
+7 A search the caller evaluates
+-------------------------------
 
 ``SuppliedSearch`` takes the energy and gradient the caller already
 holds. ``offer`` either names the next trial or returns the accepted

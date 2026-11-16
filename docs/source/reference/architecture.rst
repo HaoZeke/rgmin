@@ -34,7 +34,7 @@ Objects
 ~~~~~~~
 
 ``Lbfgs``
-    Persistent pair history, two-loop recursion, strong Wolfe.
+    Persistent pair history, two-loop recursion, eOn cap by default. ``LbfgsStep::Wolfe`` opts into the line search.
     Hopping chains hold this type (anneal ``WarmLbfgs`` is a handle).
 
 ``Solver``
@@ -52,10 +52,19 @@ Objects
     Closure adapter that implements
     ``DifferentiableObjective`` for a fused ``(f, g)`` function.
 
+``ecnoise``
+    Moré–Wild difference table for the noise in an energy
+    or in one projection of the gradient, plus the 2012 forward and
+    gradient steps (Algorithm 5.1, not the noise table). One uniform
+    projection has variance ``tr(Σ) / n``. ``Control::noise_floor`` stops at
+    ``c * sqrt(n_free) * eps_g`` with ``Status::NoiseFloor``, after the
+    ``gtol`` test. The same stop fires when a line search finds no trial
+    whose decrease clears ``c * eps_f``.
+
 ``rgmin_solver_create`` / ``rgmin_solver_step`` / ``rgmin_solver_free``
     The session half of the waist.
     Callbacks are arguments of each step, not stored on the handle.
-    ``include/rgmin.h`` sets ``abi_major`` 1, ``abi_minor`` 43 and ``layout_revision`` 5.
+      ``include/rgmin.h`` sets ``abi_major`` 1, ``abi_minor`` 43 and ``layout_revision`` 5.
     ``rgmin_abi_compatible`` checks the major version and the layout revision only.
 
 ``DistanceConstraints``
@@ -77,6 +86,39 @@ Objects
     Newton / RFO C entry. Caller supplies a
     dense row-major Hessian. This is a different solver, not an
     L-BFGS option.
+
+``Solver::set_precon`` / ``rgmin_solver_set_precon``
+    Exp, Lindh, the
+    bonded metric, or ``select_precon``. ABI minor 32.
+
+``rgmin_solver_set_quickmin_variant``
+    Quick-min options from C:
+    ``RGMIN_QUICKMIN_RGMIN``, ``RGMIN_QUICKMIN_EON``,
+    ``RGMIN_QUICKMIN_PER_ATOM``. ABI minor 33.
+    ``rgmin_solver_precon_scale`` is ``μ`` after the sine probe.
+
+``select_precon``
+    L-BFGS and CG: Exp at 100 atoms for bulk,
+    surface, and a metal cluster (ASE ``PreconLBFGS``). Lindh for a
+    covalent molecule or cluster up to ``N_LINDH``. Bonded metric when
+    that caller has a force field and every element is covalent.
+    FIRE auto is the identity.
+
+.. table::
+
+    +------------------------+-----------------------+-----------------------------------------------------+
+    | C kind                 | Rust                  | role                                                |
+    +========================+=======================+=====================================================+
+    | ``RGMIN_PRECON_EXP``   | ``PreconSpec::Exp``   | ``H_0 = P^{-1}`` for L-BFGS, metric for CG and FIRE |
+    +------------------------+-----------------------+-----------------------------------------------------+
+    | ``RGMIN_PRECON_LINDH`` | ``PreconSpec::Lindh`` | model Hessian, same solve                           |
+    +------------------------+-----------------------+-----------------------------------------------------+
+    | ``RGMIN_PRECON_FF``    | ``PreconSpec::Ff``    | bonded metric, harmonic terms on the C struct       |
+    +------------------------+-----------------------+-----------------------------------------------------+
+    | ``RGMIN_PRECON_AUTO``  | ``select_precon``     | the session method plus the how-to table            |
+    +------------------------+-----------------------+-----------------------------------------------------+
+    | ``RGMIN_PRECON_NONE``  | ``clear_precon``      | drop the metric                                     |
+    +------------------------+-----------------------+-----------------------------------------------------+
 
 What does not live here
 ~~~~~~~~~~~~~~~~~~~~~~~

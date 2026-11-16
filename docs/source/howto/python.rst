@@ -1,71 +1,67 @@
-Python
-======
 
-The package is ``python/``. Install it with maturin. ASE is optional and
-imported when an optimizer is constructed.
-:doc:`ase-migration` is the one-line import change and the differences from ASE.
+
+Python
+------
+
+The package under ``python/`` is the maturin binding. ASE is optional and imported when an optimizer is constructed.
+`Moving an ASE script <ase-migration.rst>`_ is the one-line import change and the differences from ASE.
 
 .. code:: bash
 
-   pip install "python/[ase]"
+    pip install python/[ase]
 
 .. code:: python
 
-   from ase.build import molecule
-   from ase.calculators.emt import EMT
-   from rgmin import FIRE, LBFGS
+    from ase.build import molecule
+    from ase.calculators.emt import EMT
+    from rgmin import FIRE, LBFGS
 
-   atoms = molecule("H2")
-   atoms.calc = EMT()
-   opt = LBFGS(atoms, trajectory="opt.traj", logfile=None)
-   opt.attach(lambda: atoms.get_potential_energy())
-   opt.run(fmax=0.05)
+    atoms = molecule("H2")
+    atoms.calc = EMT()
+    seen = []
+    opt = LBFGS(atoms, trajectory="opt.traj", logfile=None)
+    opt.attach(lambda: seen.append(atoms.get_potential_energy()))
+    opt.run(fmax=0.05)
+    FIRE(atoms, logfile=None).run(fmax=0.05, steps=20)
 
-``LBFGS(eon_cap=True)`` selects the Rust default, the line-search-free
-eOn cap. ``LBFGS(wolfe=True)`` selects the strong Wolfe search. Without
-either the class matches ASE's length control. Stubs live in
-``python/rgmin`` and ``py.typed`` marks the package.
+This binding's L-BFGS follows ASE's length control and keeps the pairs. ``LBFGS(eon_cap=True)`` selects the crate default, the line-search-free eOn cap. ``LBFGS(wolfe=True)`` selects the strong Wolfe search. Stubs live in ``python/rgmin/*.pyi`` and ``py.typed`` marks the package.
 
-In the nanobind wheel, ``SolverConfig("lbfgs")`` and ``rgmin.ase.LBFGS``
-take the eOn step by default. Its first step spends one extra
-calculator call on a finite-difference probe 0.01 along the force. The
-probe sets the initial inverse curvature and does not move the atoms.
-Later steps cost one call each. A step whose largest atom move exceeds
-``maxstep`` is scaled down whole, as ASE does, so no atom moves farther
-than ``maxstep``. A non-positive ``maxstep`` restores the eOn cap of
-0.2. ``linesearch="wolfe"`` opts into the strong Wolfe search, with
-``c1``, ``c2``, and ``linesearch_maxiter`` as its constants, and
-``maxstep`` still bounds every atom move. The eOn step reads no other
-``linesearch`` value, so ``brent``, ``backtracking``, and ``goldstein``
-raise ``ValueError`` on ``lbfgs``.
+``lowest_eigenpairs(hvp, x0_block)`` returns values, vectors, residual norms, and a converged flag for each of the k lowest pairs. ``hvp(x, v)`` is ``H(x) v``. ``precond`` applies ``T`` to a block. ``strict=False`` returns the flags instead of raising. :doc:`tutorials/eigenpairs` is the short example, and continuous integration runs it.
+
+Nanobind wheel
+--------------
+
+The repository root builds a second wheel with scikit-build-core. CMake fetches Corrosion 0.6.1 and compiles the ``capi`` static library. A C++17 compiler, CMake, Ninja, and Rust are required.
+
+``python -m pip install 'rgmin[ase,test]'`` adds ASE and the test extras.
+
+``SolverConfig`` checks every keyword once. An unknown name raises ``ValueError`` and lists the names that are accepted. ``memory``, ``maxiter``, ``linesearch_maxiter``, and ``extra_updates`` have to be Python integers. Other numeric options have to be finite.
+
+A Cartesian solver starts with a per-atom cap of 0.2 (ASE ``maxstep``, eOn ``max_move``). ``maxstep`` or ``atom_maxmove`` replaces it. A non-positive value clears it. A positive ``maxmove`` is the Euclidean step limit and leaves the per-atom default off. A negative ``maxmove`` leaves every step cap off, including the default per-atom cap. Zero keeps the defaults. The cap is the largest per-atom displacement, not the norm of the whole step.
+
+``lbfgs`` has two step rules. The default is the line-search-free eOn step. Its first step spends one extra calculator call on a finite-difference probe 0.01 along the force. The probe sets the initial inverse curvature and does not move the atoms. Later steps cost one call each. A step whose largest atom move exceeds ``maxstep`` is scaled down whole, as ASE does, so no atom moves farther than ``maxstep``. A non-positive ``maxstep`` restores the eOn cap of 0.2, since this step always has a per-atom limit. ``linesearch="wolfe"`` opts into the strong Wolfe search instead, with ``c1``, ``c2``, and ``linesearch_maxiter`` as its constants. ``maxstep`` still bounds every atom move. The eOn step reads no other ``linesearch`` value, so ``brent``, ``backtracking``, and ``goldstein`` raise ``ValueError`` on ``lbfgs``.
 
 .. code:: python
 
-   from rgmin.ase import LBFGS
+    from rgmin.ase import LBFGS
 
-   LBFGS(atoms, logfile=None, maxstep=0.1).run(fmax=0.05)
-   LBFGS(atoms, logfile=None, linesearch="wolfe").run(fmax=0.05)
+    LBFGS(atoms, logfile=None, maxstep=0.1).run(fmax=0.05)
+    LBFGS(atoms, logfile=None, linesearch="wolfe").run(fmax=0.05)
 
-``linesearch`` is accepted only where the step reads it. ``sd``, the
-conjugate-gradient methods, ``bfgs``, ``adam``, and ``diis`` take every
-kind, and ``lbfgs`` takes ``wolfe``. ``accept="step"`` takes each step
-without a line search, and FIRE, QuickMin, ODE12r, BB, SR1, SR2, PSO,
-Newton, RFO, dogleg, and Newton-CG never search a line. A
-``linesearch`` on any of those raises ``ValueError`` and names the
-reason, rather than leaving the run unchanged. ``rgmin.ase`` takes
-``accept="step"`` on a non-conservative optimizable (NEB, dimer,
-min-mode), so a ``linesearch`` there raises unless ``accept`` is
-``energy`` or ``nonmonotone``.
+``linesearch`` is accepted only where the step reads it. ``sd``, the conjugate-gradient methods, ``bfgs``, ``adam``, and ``diis`` take every kind, and ``lbfgs`` takes ``wolfe``. ``accept="step"`` takes each step without a line search, and FIRE, QuickMin, ODE12r, BB, SR1, SR2, PSO, Newton, RFO, dogleg, and Newton-CG never search a line. A ``linesearch`` on any of those raises ``ValueError`` and names the reason, rather than leaving the run unchanged. ``rgmin.ase`` takes ``accept="step"`` on a non-conservative optimizable (NEB, dimer, min-mode), so a ``linesearch`` there raises unless ``accept`` is ``energy`` or ``nonmonotone``.
 
-``lowest_eigenpairs(hvp, x0_block)`` returns values, vectors, residual
-norms, and a converged flag for each of the k lowest pairs.
-``hvp(x, v)`` is ``H(x) v``. ``precond`` applies ``T`` to a block.
-``strict=False`` returns the flags instead of raising.
-:doc:`../tutorials/eigenpairs` is the short example, and continuous
-integration runs it.
+``rgmin.ase.FIRE``, ``LBFGS``, ``CG``, and the other method classes are ASE optimizers. Each ``step`` is one rgmin iteration. ``maxstep`` is the per-atom cap in angstroms. The ASE classes pass it explicitly, and their default is 0.2. ASE calculators are not thread-safe. Each thread that builds an optimizer needs its own calculator. rgmin still guarantees a shareable config, one solver per thread, and an owned copy of the coordinates. The thread-safety page records the details.
 
-C and C++ use ``include/rgmin.h`` and ``include/rgmin/optimize.hpp``.
-The C session is a handle: ``rgmin_solver_create``, ``rgmin_solver_step``,
-``rgmin_solver_free``. ``rgmin_solver_dim`` and ``rgmin_solver_steps``
-read that handle. ``rgmin_last_error_message`` is the same borrowed
-string as ``rgmin_last_error``.
+.. code:: python
+
+    from ase.calculators.emt import EMT
+    from rgmin.ase import FIRE
+
+    atoms.calc = EMT()
+    FIRE(atoms, logfile=None).run(fmax=0.05)
+
+Newton, RFO, and dogleg need ``hessian(x)``, a callable that returns the ``(n, n)`` matrix. A band or a min-mode run accepts the step rather than the energy. Pass ``accept=`` to choose the rule yourself.
+
+``restart`` is refused. ``read`` and ``dump`` raise ``NotImplementedError``.
+
+C and C++ use ``include/rgmin.h`` and ``include/rgmin/optimize.hpp``. ``examples/c/quadratic.c`` is the short C program: one handle, one minimize, then free.

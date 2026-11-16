@@ -1,17 +1,19 @@
+
+
 Moving an ASE script to rgmin.optimize
-======================================
+--------------------------------------
 
 The maturin package ``python/`` provides ``rgmin.optimize``. Replace
 
-.. code-block:: python
+.. code:: python
 
-   from ase.optimize import BFGS, LBFGS, FIRE
+    from ase.optimize import BFGS, LBFGS, FIRE
 
 with
 
-.. code-block:: python
+.. code:: python
 
-   from rgmin.optimize import BFGS, LBFGS, FIRE
+    from rgmin.optimize import BFGS, LBFGS, FIRE
 
 ``LBFGSLineSearch`` and ``FIRE2`` match those ASE names. The other gradient
 methods of ``Session`` are ``SR1``, ``SR2``, ``SteepestDescent``, ``BarzilaiBorwein``,

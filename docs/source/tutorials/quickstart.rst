@@ -3,7 +3,7 @@
 Quickstart
 ----------
 
-This tutorial minimizes the 2-D Rosenbrock banana from the classic start ``(-1.2, 1.0)`` with L-BFGS and the strong Wolfe line search.
+This tutorial minimizes the 2-D Rosenbrock banana from the classic start ``(-1.2, 1.0)`` with the default L-BFGS step, the line-search-free cap of 0.2.
 
 What you will need
 ~~~~~~~~~~~~~~~~~~
@@ -76,7 +76,7 @@ The host also decides when to stop, here when the gradient norm drops below 1e-4
 
 ``Accept::Energy`` makes each step refuse a rise in the energy.
 The default, ``Accept::None``, takes every step without that check, for hosts that have forces but no energy.
-With the 0.5.2 release the loop stops after 35 steps.
+The session uses the same line-search-free cap unless the caller sets ``LbfgsStep::Wolfe``.
 
 :doc:`Relax a platinum crystal <relax-morse>` runs that loop to convergence on a 256-atom system.
 

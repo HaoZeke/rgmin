@@ -110,3 +110,64 @@ model minimizer along -g) and the Newton point, taking whichever the
 radius allows. It is the classical picture the Steihaug path
 generalizes: CG's first iterate is the Cauchy step, its limit is the
 Newton step, and truncation by the boundary lands in between.
+
+5 Newton and dogleg leave a saddle
+----------------------------------
+
+A small force is not a positive Hessian, so dense Newton and dogleg
+can stop on a first-order saddle. When the force is already under
+``gtol``, the report reads the analytic Hessian before it returns.
+The floor is max(abs(gtol), 1e-6, 1e-8 times the Frobenius norm of
+H). A lowest eigenvalue below minus that floor is a kick: the step
+is that mode, scaled so the largest per-atom displacement equals
+the per-atom cap (``set_atom_maxmove``, or ``istep`` when the cap is
+unset). At most four kicks in one solve. Each kick restarts the
+dogleg radius at max(istep, 1e-8), the radius a new dogleg session
+starts from. A lowest eigenvalue that is not below that floor still
+evaluated the Hessian, so a converged Newton or dogleg report costs
+one extra Hessian. ``newton-cg`` and ``newton-pcg`` do not take this
+path, and neither does a HiGHS feasible set.
+
+6 Selecting it: ``newton-cg`` and ``newton-pcg``
+------------------------------------------------
+
+``Method::NewtonCg`` (token ``newton-cg``) and ``Method::NewtonPcg``
+(token ``newton-pcg``) are session methods beside dense Newton and
+dogleg. The string parser is ``Method::from_name``; the C waist is
+``rgmin_method_from_name``, with tokens ``RGMIN_NEWTON_CG`` and
+``RGMIN_NEWTON_PCG``. ``Solver::step`` and ``Solver::step_hess`` on these
+methods never call ``hessian``. The product is analytic when the
+caller uses ``Solver::step_hvp`` (or ``minimize_method_hvp``), and a
+forward difference of the known gradient otherwise: one extra
+gradient per product, ``h = 1e-8 / ||v||``. The central-difference
+wrapper ``FdHvp`` is unchanged and still costs two gradients; it is
+not what the session uses.
+
+``newton-pcg`` rebuilds a rank-16 Nyström preconditioner
+(Frangella, Tropp, Udell,
+`10.1137/21M1466244 <https://doi.org/10.1137/21M1466244>`_) at the
+current point and runs ``steihaug_pcg``. The subproblem boundary is
+the preconditioner norm. If that step is longer than the Euclidean
+radius, it is pulled back onto the Euclidean sphere before the
+displacement cap. The trust ceiling stays Euclidean either way.
+
+``control.maxmove`` is that ceiling, the same rule as dogleg: when
+it is unset the ceiling is eight times the current radius, and it
+is never below the current radius. A per-atom cap
+(``set_atom_maxmove``) clips only the accepted trial. The boundary
+test that decides whether to double the radius uses the pre-clip
+length, so a cap that shortens the trial does not freeze the
+radius. Acceptance is rho > 1/10 (Nocedal-Wright), not dogleg's
+rho > 0.
+
+``Solver::gradient_calls`` and ``Solver::hvp_calls`` accumulate for
+the life of the session. ``forget`` does not clear them. A
+forward-difference product is one ``hvp_calls`` entry, not a
+gradient, so a harness charges ``gradient_calls + hvp_calls`` force
+evaluations here and ``n`` force evaluations per dense Hessian on
+Newton and dogleg.
+
+Steihaug, *The Conjugate Gradient Method and Trust Regions in Large Scale Optimization*, SIAM J. Numer. Anal. 20 (1983),
+`10.1137/0720042 <https://doi.org/10.1137/0720042>`_.
+Nocedal and Wright, *Numerical Optimization*, chapter 7,
+`10.1007/978-0-387-40065-5 <https://doi.org/10.1007/978-0-387-40065-5>`_.

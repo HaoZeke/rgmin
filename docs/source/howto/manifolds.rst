@@ -74,11 +74,13 @@ gpr\ :sub:`optim`\ ``IRCDriver`` (https://doi.org/10.1063/1.454172,
 https://doi.org/10.1063/1.434152). Call ``set_masses`` with N atomic masses;
 unit mass makes ``MwRigid`` identical to ``RigidQuotient``.
 
-``Sphere``, ``So3``, ``Stiefel``, ``Se3``, and ``ComplexCircle`` are
-matrix-manifold embeddings. ``So3`` rejects any length other than 9.
-``Se3`` rejects any length other than 12. ``ComplexCircle { n }``
-rejects any length other than ``2 n``. They do not pack or
-prefix-interpret a 3N cluster.
+``Sphere``, ``So3``, ``Stiefel``, ``Se3``, ``ComplexCircle``,
+``EuclideanComplex``, and ``Constant`` are matrix-manifold embeddings.
+``So3`` rejects any length other than 9. ``Se3`` rejects any length
+other than 12. ``ComplexCircle { n }`` and ``EuclideanComplex { n }``
+reject any length other than ``2 n``. ``Constant { n }`` rejects any
+length other than ``n``. They do not pack or prefix-interpret a
+3N cluster.
 
 Euclidean is the default. Existing eOn / rgpot / eindir paths do
 not change until a host calls the setter.
@@ -133,16 +135,46 @@ C
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SPHERE);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SO3);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_STIEFEL);
+    rgmin_solver_set_stiefel(s, 5, 2);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SE3);
+    rgmin_solver_set_oblique(s, 3, 2);
+    rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_MULTINOMIAL);
     rgmin_solver_set_complex_circle(s, 4);
-    rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SYMMETRIC);
+    rgmin_solver_set_euclidean_complex(s, 3);
+    rgmin_solver_set_constant(s, 4);
     rgmin_solver_set_multinomial_ds(s, 3);
     rgmin_solver_set_multinomial_sym(s, 3);
     rgmin_solver_set_sphere_complex(s, 3);
+    rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SYMMETRIC);
+    rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SKEWSYMMETRIC);
+    rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX);
+    rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_CONSTANT);
     rgmin_solver_set_power(s, RGMIN_MANIFOLD_SO3, 9, 2);
     rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN);
 
 Changing the manifold drops method memory (``forget``).
+
+L-BFGS on the unit sphere
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For ``Sphere`` (or ``Stiefel`` with one column), use ``Accept::Energy``
+to minimize the supplied scalar objective with L-BFGS. The line search
+evaluates the normalized extension
+:math:`F(z)=f(z/\lVert z\rVert)`, so every objective evaluation lies on
+the sphere. Its Euclidean gradient is
+:math:`(I-uu^T)\nabla f(u)/\lVert z\rVert`, with
+:math:`u=z/\lVert z\rVert`. Omitting the denominator changes the
+directional derivative used by the Wolfe conditions.
+
+The session transports every retained curvature pair into the accepted
+point's tangent space and forms the new pair there. The caller keeps the
+session between steps. ``Accept::None`` requests the unfiltered step and
+does not select a line search.
+
+For a symmetric matrix :math:`H`, minimizing :math:`f(u)=u^T H u/2` on
+this sphere gives a lowest eigenvector at a minimum. An arbitrary
+stationary point can be a higher eigenvector; a small projected gradient
+alone does not certify that the lowest eigenvalue has been found.
 
 Products and powers
 ~~~~~~~~~~~~~~~~~~~
@@ -270,8 +302,18 @@ Packing notes
 - ``Se3`` is twelve numbers: the same 9-vector, then a translation.
   It is one rigid body, not N atoms.
 
-- ``Stiefel`` is ``St(n,1)``. A frame with ``p > 1`` is not a length
-  token: ``n p`` does not name ``p``.
+- ``Stiefel`` is ``St(n,1)``. ``StiefelP { n, p }`` / ``set_stiefel(n, p)``
+  is manopt ``stiefelfactory`` for ``p > 1``: column-major ``n p``,
+  projection ``U - X sym(X^T U)``, QR retraction. A 3N cluster is
+  not this packing.
+
+- ``Oblique { n, m }`` is manopt ``obliquefactory``: product of ``m``
+  unit spheres in ``R^n``, column-major ``n m``. It is not the
+  sphere and not a 3N cluster.
+
+- ``Multinomial`` is manopt ``multinomialfactory`` at ``m = 1``: the
+  relative interior of the simplex with the Fisher metric.
+  Length ``n >= 2``.
 
 - ``ComplexCircle { n }`` is manopt ``complexcirclefactory(n)``:
   interleaved ``(re, im)`` pairs, length ``2 n``. Each pair is
@@ -282,6 +324,25 @@ Packing notes
   symmetric matrix packed row-major (``n^2``). Projection is
   symmetrization. Retraction is ``X + U``. Transport is the
   identity. It is not the SPD cone and not a 3N cluster.
+
+- ``SkewSymmetric`` is manopt ``skewsymmetricfactory``: an ``n x n``
+  real skew-symmetric matrix packed row-major (``n^2``, ``n >= 2``).
+  Projection is ``multiskew`` (``0.5 (A - A^T)``). Retraction is
+  ``X + U``. Transport is the identity. It is not the symmetric
+  subspace and not a 3N cluster.
+
+- ``EuclideanComplex { n }`` is manopt ``euclideancomplexfactory(n)``:
+  interleaved ``(re, im)`` pairs, length ``2 n``. Projection is the
+  identity. Retraction is ``x + v``. Transport is the identity.
+  It is not the sphere, not ``(S^1)^n``, and not a 3N cluster.
+  C token 16 (``rgmin_solver_set_euclidean_complex``). Tokens 7-10
+  stay reserved.
+
+- ``Constant { n }`` is manopt ``constantfactory``: a singleton of
+  packed length ``n``. Projection and transport are the zero
+  tangent. Retraction is the fixed point. It is not the sphere
+  and not a 3N cluster. C token 17 (``rgmin_solver_set_constant``).
+  Tokens 7-10 stay reserved.
 
 - ``MultinomialDoublyStochastic { n }`` is manopt
   ``multinomialdoublystochasticfactory``: an ``n x n`` positive
@@ -299,8 +360,8 @@ Packing notes
   Retraction is ``X ⊙ exp(V ⊘ X)`` then Sinkhorn then symmetrize.
   Transport is projection at arrival. It is not the simplex, not
   the unsigned Birkhoff polytope, not the sphere, and not a 3N
-  cluster. C token 19
-  (``rgmin_solver_set_multinomial_sym``). Tokens 7-10 stay reserved.
+  cluster. C token 19 (``rgmin_solver_set_multinomial_sym``).
+  Tokens 7-10 stay reserved.
 
 - ``SphereComplex { n }`` is manopt ``spherecomplexfactory``: the
   unit sphere in ``C^n``, interleaved ``(re, im)``, length ``2 n``.
@@ -312,19 +373,19 @@ Packing notes
 
 - ``Positive { n }`` is manopt ``positivefactory``: the open
   positive orthant of packed length ``n``. Projection is the
-  identity. Retraction is ``x ⊙ exp(v ⊘ x)``. Transport is
-  the identity. It is not the sphere, not the simplex, and
+  identity. Retraction is ``x odot exp(v oslash x)``. Transport
+  is the identity. It is not the sphere, not the simplex, and
   not a 3N cluster. C token 21 (``rgmin_solver_set_positive``).
   Tokens 7-10 stay reserved.
 
 - ``CenteredMatrix { m, n, rows }`` is manopt
-  ``centeredmatrixfactory``: an ``m x n`` matrix packed
-  row-major (``m n``) with ``X 1 = 0`` (``rows = false``,
-  default) or ``1^T X = 0`` (``rows = true``). Projection is the centering
-  operator. Retraction is ``X + U`` then center. Transport is
-  the identity. It is not the sphere and not a 3N cluster. C
-  token 22 (``rgmin_solver_set_centered_matrix``). Tokens 7-10
-  stay reserved.
+  ``centeredmatrixfactory``: an ``m x n`` matrix packed row-major
+  (``m n``) with ``X 1 = 0`` (``rows = nil``, default) or
+  ``1^T X = 0`` (``rows = t``). Projection is the centering operator.
+  Retraction is ``X + U`` then center. Transport is the identity.
+  It is not the sphere and not a 3N cluster. C token 22
+  (``rgmin_solver_set_centered_matrix``). Tokens 7-10 stay
+  reserved.
 
 - ``Product`` packs its factors end to end in the order given. A
   product inside a product is flattened and the weights multiply.

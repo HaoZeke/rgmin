@@ -20,8 +20,8 @@ When a host Hessian is present (``rgmin_solver_step_hess``) and
 ``min 1/2 p^T P p + g^T p`` with per-coordinate boxes from
 ``rgmin_solver_set_box`` (a NULL side is unbounded) and, if no box
 was set, from atom maxmove. ``rgmin_solver_set_trust`` sets the
-L\ :sub:`inf`\ radius on the step; ``rgmin_solver_add_equality``
-appends ``a · p = rhs``. That is the path eOn / rgpot / any eindir
+L\ :sub:`inf`\ radius on the step; ``rgmin_solver_add_equality`` appends
+``a · p = rhs``. That is the path eOn / rgpot / any eindir
 objective share. Without the ``highs`` cargo feature every setter
 returns 1.
 

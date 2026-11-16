@@ -12,8 +12,7 @@ as invented keys or a markdown table. Regenerate the .bib with
 ``:cite:`key```.
 
 Packwood, Kermode, Mones, Bernstein, Woolley, Gould, Ortner, and
-Csányi, *A universal preconditioner for simulating condensed phase
-materials*, J. Chem. Phys. 144, 164109 (2016),
+Csányi, *A universal preconditioner for simulating condensed phase materials*, J. Chem. Phys. 144, 164109 (2016),
 `10.1063/1.4947024 <https://doi.org/10.1063/1.4947024>`_.
 :cite:`packwoodUniversalPreconditionerSimulating2016`
 

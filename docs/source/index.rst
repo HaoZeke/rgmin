@@ -42,10 +42,10 @@ There is no second solver implementation in C++.
 The production unconstrained local method is limited-memory BFGS
 without a line search: the eOn cap of 0.2, a curvature probe on the
 first step, and a memory reset when the proposal is at least that
-long. ``LbfgsStep::Wolfe`` opts into the strong Wolfe search (Nocedal
-and Wright algorithms 3.5--3.6). Hopping chains keep that solver's
-pair history on ``Lbfgs``; anneal's ``WarmLbfgs`` is a thin handle
-around it.
+long. ``LbfgsStep::Scaled`` keeps a shortened pair.
+``LbfgsStep::Wolfe`` opts into the strong Wolfe search (Nocedal and
+Wright algorithms 3.5--3.6). Hopping chains keep that solver's pair
+history on ``Lbfgs``; anneal's ``WarmLbfgs`` is a thin handle around it.
 
 Saddle, band, and IRC sessions live in ``rgsaddle``. They consume this
 crate's ``Solver``; they do not grow a second optimizer.
@@ -70,6 +70,7 @@ It also covers the features of each route, the C library and a checkout.
    tutorials/newton
    tutorials/scg
    tutorials/eigenpairs
+   tutorials/python
    tutorials/manifold-fit
    tutorials/migration
    tutorials/relax-morse
@@ -80,9 +81,12 @@ It also covers the features of each route, the C library and a checkout.
 
    howto/install
    howto/session
+   howto/configure
    howto/fire
    howto/strong-scaling
    howto/constraints
+   howto/python
+   howto/noise
    howto/manifolds
    howto/irc
    howto/embed-anneal
@@ -93,7 +97,9 @@ It also covers the features of each route, the C library and a checkout.
    howto/ase-migration
    howto/ase-bench
    howto/lammps-migration
+   howto/precon
    howto/doxygen
+   howto/bench-gate
    howto/cite
 
 .. toctree::
@@ -101,12 +107,18 @@ It also covers the features of each route, the C library and a checkout.
    :caption: Explanation
 
    explanation/linesearch
+   explanation/python-threads
+   explanation/quickmin
+   explanation/diis
+   explanation/ecnoise
    explanation/quasi-newton
    explanation/trust-region
    explanation/scg
    explanation/step-bounds
    explanation/performance
    explanation/randomized
+   explanation/simd
+   explanation/precon
    explanation/product-manifold
 
 .. toctree::
@@ -116,6 +128,7 @@ It also covers the features of each route, the C library and a checkout.
    reference/architecture
    reference/api
    reference/constraints
+   reference/python
    reference/lammps-min-style
    reference/manifold
    reference/product-manifold
