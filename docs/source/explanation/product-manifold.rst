@@ -10,6 +10,7 @@ A point of a product manifold :math:`\mathcal{M} = \mathcal{M}_1 \times \cdots \
 This page derives every operation the solvers call from that one choice, shows where the weights enter and where they cancel, and compares the result with the products of manopt, Manifolds.jl, pymanopt and geomstats.
 The first consumer is the optimal dividing hyperplane of transition-state theory in ``rgsaddle``, a point and a unit normal in :math:`\mathbb{R}^n \times S^{n-1}`.
 Nothing below is specific to it.
+:doc:`../reference/product-manifold` lists the API.
 
 Each factor :math:`\mathcal{M}_i` sits in the space :math:`\mathcal{E}_i = \mathbb{R}^{n_i}` of its packed coordinates, with tangent projector :math:`P_i(x_i)` and metric :math:`g_i`.
 For most kinds :math:`g_i` is the Euclidean inner product of :math:`\mathcal{E}_i` restricted to tangent vectors, which makes :math:`\mathcal{M}_i` a Riemannian submanifold of :math:`\mathcal{E}_i`.

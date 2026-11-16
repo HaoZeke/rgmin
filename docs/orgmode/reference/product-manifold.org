@@ -1,0 +1,185 @@
+#+TITLE: Product manifold
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Product manifold
+
+The weighted Riemannian product \(\mathcal{M}_1 \times \cdots \times \mathcal{M}_k\) with metric \(g = \sum_i w_i\, g_i\).
+@@rst::doc:`../explanation/product-manifold`@@ derives every operation listed here.
+
+** Construction
+
+~rgmin::manifold::ProductFactor~ is one factor.
+It is ~#[non_exhaustive]~ with public fields:
+- ~kind: ManifoldKind~, the geometry;
+- ~len: usize~, the packed length of a factor point;
+- ~weight: f64~, the weight \(w_i\) of the factor metric.
+~ProductFactor::default()~ is a Euclidean factor of length 1 and weight 1.
+~ProductFactor::new(kind, len)~ has weight 1, and ~with_kind~, ~with_len~ and ~with_weight~ set one field each.
+
+~ProductManifold::new(factors)~ builds the product of an iterator of ~ProductFactor~ in packing order.
+A factor whose kind is itself a product is flattened into its blocks, and their weights are multiplied by the factor's weight.
+It fails with ~Error::ProductFactor { index, what }~, where ~what~ is one of:
+- ~"weight must be finite and positive"~;
+- ~"packed length must be positive"~;
+- ~"packed length does not fit the kind"~, from ~Manifold::required_dim~ of the kind;
+- ~"packed length overflows"~;
+- ~"a product needs at least one factor"~, with index 0.
+
+~ProductManifold::power(kind, block, count)~ is manopt's ~powermanifold~: ~count~ unit-weight copies of ~kind~, each of packed length ~block~.
+~count = 0~ fails with ~"a power needs at least one copy"~.
+
+~ManifoldKind::product(factors)~ and ~ManifoldKind::power(factor, block, count)~ wrap the two constructors in ~ManifoldKind::Product(Arc<ProductManifold>)~, whose ~as_str~ is ~"product"~.
+~Oblique~ stays the dedicated kind for a power of spheres.
+
+** Accessors
+
+| Method                 | Returns                                                                       |
+|------------------------+-------------------------------------------------------------------------------|
+| ~packed_len()~         | packed length of a point                                                      |
+| ~factor_count()~       | number of factors after flattening                                            |
+| ~factors()~            | the flattened factors, with their weights in the metric                       |
+| ~range(index)~         | ~Some~ slice of the packed vector holding factor ~index~, ~None~ past the end |
+| ~is_flat()~            | every factor keeps a straight step on its set                                 |
+| ~is_chart()~           | every factor has weight one in these coordinates, so ~chart~ is the identity  |
+| ~chart_scales()~       | \(d\) of \(z = d \odot x\): \(\sqrt{w_i}\) on factor \(i\) of a product from ~new~, 1 on a chart |
+| ~chart()~              | the same manifold in the coordinates \(z = d \odot x\), all weights one       |
+
+** Packing
+
+A point packs the factor points end to end in the order given, each in its kind's own packing (@@rst::doc:`../howto/manifolds`@@).
+A tangent vector and a Euclidean gradient pack the same way.
+The hyperplane \(\mathbb{R}^n \times S^{n-1}\) is ~[p_1, ..., p_n, n_1, ..., n_n]~:
+
+#+begin_src rust
+use rgmin::manifold::ProductFactor;
+use rgmin::ManifoldKind;
+
+let n = 4;
+let hyperplane = ManifoldKind::product([
+    ProductFactor::new(ManifoldKind::Euclidean, n).with_weight(0.3),
+    ProductFactor::new(ManifoldKind::Sphere, n),
+])?;
+#+end_src
+
+** Operations
+
+| ~Manifold~ method                   | On the product                                                                        |
+|-------------------------------------+---------------------------------------------------------------------------------------|
+| ~required_dim~                      | the packed length, exactly                                                            |
+| ~project~                           | each factor's projection; no weights                                                  |
+| ~egrad2rgrad~                       | each factor's ~egrad2rgrad~ of its block, divided by \(w_i\)                          |
+| ~retract~                           | each factor's retraction                                                              |
+| ~transport~                         | each factor's transport                                                               |
+| ~inner~                             | \(\sum_i w_i\, g_i(u_i, v_i)\)                                                        |
+| ~norm~                              | the square root of ~inner~                                                            |
+| ~ehess2rhess~                       | each factor's ~ehess2rhess~ of its block of the full action, divided by \(w_i\)       |
+| ~exp~, ~log~                        | each factor's                                                                         |
+| ~dist~                              | \((\sum_i w_i\, d_i^2)^{1/2}\)                                                        |
+| ~parallel_transport_along~          | each factor's, along \(t \mapsto \exp_x(t d)\)                                        |
+| ~parallel_transport~                | each factor's, along the geodesic of ~log~                                            |
+| ~transport_is_isometric~            | true when it is for every factor                                                      |
+| ~typical_dist~                      | \((\sum_i w_i\, t_i^2)^{1/2}\) over the factor typical distances \(t_i\)              |
+
+The optional operations, ~ehess2rhess~, ~exp~, ~log~, ~dist~ and both parallel transports, return ~None~ as soon as one factor returns ~None~.
+Arrays of the wrong length leave the input unchanged: ~project~, ~egrad2rgrad~ and ~transport~ return the vector, ~retract~ returns the point, ~inner~ and ~norm~ return NaN, and the optional operations return ~None~.
+
+** Factor capabilities
+
+| Kind                                                        | ~ehess2rhess~ | ~exp~ | ~log~, ~dist~, parallel transport | isometric ~transport~ | typical distance                  |
+|-------------------------------------------------------------+---------------+-------+-----------------------------------+-----------------------+-----------------------------------|
+| ~Euclidean~                                                 | yes           | yes   | yes                               | yes                   | \(\sqrt{n}\)                      |
+| ~Sphere~, ~Stiefel~                                         | yes           | yes   | yes                               | no                    | \(\pi\)                           |
+| ~StiefelP { n, p }~                                         | yes           | no    | no                                | no                    | \(\sqrt{p}\)                      |
+| ~So3~                                                       | yes           | yes   | yes                               | no                    | \(\pi \sqrt{3}\)                  |
+| ~Se3~                                                       | yes           | yes   | yes                               | no                    | \((3 \pi^2 + 3)^{1/2}\)           |
+| ~Oblique { n, m }~                                          | yes           | yes   | yes                               | no                    | \(\pi \sqrt{m}\)                  |
+| ~ComplexCircle { n }~                                       | yes           | yes   | yes                               | no                    | \(\pi \sqrt{n}\)                  |
+| ~SphereComplex { n }~                                       | yes           | yes   | yes                               | no                    | \(\pi\)                           |
+| ~Positive { n }~                                            | yes           | yes   | yes                               | no                    | \(\sqrt{n}\)                      |
+| ~Symmetric~, ~SkewSymmetric~                                | yes           | yes   | yes                               | yes                   | \(\sqrt{\mathrm{len}}\)           |
+| ~CenteredMatrix { m, n, rows }~                             | yes           | yes   | yes                               | yes                   | \(\sqrt{\dim}\)                   |
+| ~EuclideanComplex { n }~                                    | yes           | yes   | yes                               | yes                   | \(\sqrt{n}\)                      |
+| ~Constant { n }~                                            | yes           | yes   | yes                               | yes                   | 0                                 |
+| ~Spd~                                                       | yes           | no    | yes                               | yes                   | \(\sqrt{\mathrm{len}}\)           |
+| ~Multinomial~                                               | no            | no    | no                                | no                    | \(\sqrt{\mathrm{len}}\)           |
+| ~MultinomialDoublyStochastic~, ~MultinomialSymmetric~       | no            | no    | no                                | no                    | \(\sqrt{\mathrm{len}}\)           |
+| ~MwRigid~, ~RigidQuotient~                                  | no            | no    | no                                | no                    | \(\sqrt{\mathrm{len}}\)           |
+
+\(\mathrm{len}\) is the packed length and \(\dim\) the dimension of the centered matrices, \(m n - n\) for centered rows and \(m n - m\) for centered columns.
+~Positive~ and the doubly stochastic kinds carry their own metric through ~inner~ and ~egrad2rgrad~; every other kind uses the dot product of its packed coordinates.
+~Multinomial~ pairs a Fisher-orthogonal projection with the dot product, so its gradient does not represent the differential in its inner product.
+
+** Sessions
+
+~Solver::set_product(factors) -> Result<()>~ selects a weighted product; on ~Error::ProductFactor~ the session keeps its manifold.
+~Solver::set_power(factor, block, count) -> bool~ selects a power, and returns ~false~, keeping the manifold, when ~factor~ cannot hold ~block~ or ~count~ is 0.
+~Solver::set_manifold~ accepts a ~ManifoldKind::Product~ directly.
+A change of manifold clears the session's history.
+The session dimension must equal the packed length.
+
+A product whose weights are not all one is stored as its chart.
+The caller's points, gradients, Hessians and reports stay in natural coordinates, and the reported gradient norm is the length in the product metric.
+A step on such a product fails with ~Error::ProductChart { what }~ while one of these settings is active:
+- the exponential preconditioner;
+- the Lindh model Hessian;
+- rigid-motion projection of the whole vector (~set_project_rigid~);
+- with the ~highs~ feature, the HiGHS box and equalities.
+
+~MwRigid~ and ~RigidQuotient~ factors are projected block by block with the session's periodic flag.
+~Solver::set_masses~ is read by the ~MwRigid~ blocks as one molecule reused on every block when its length is the atom count of one block, or as every block's masses in order when its length is the atom count of all ~MwRigid~ blocks; any other length means unit masses.
+
+** Trust region
+
+#+begin_src rust
+pub fn minimize_rtr<M, FV, GG, HH>(
+    manifold: &M,
+    x0: Array1<f64>,
+    value: FV,
+    egrad: GG,
+    ehess: HH,
+    opts: RtrOptions,
+) -> RtrMin
+where
+    M: Manifold + ?Sized,
+    FV: FnMut(&Array1<f64>) -> f64,
+    GG: FnMut(&Array1<f64>) -> Array1<f64>,
+    HH: FnMut(&Array1<f64>, &Array1<f64>) -> Array1<f64>;
+#+end_src
+
+~rgmin::rtr::minimize_rtr~ is the Absil-Baker-Gallivan trust region with truncated conjugate gradients, run in the metric of ~manifold~.
+~egrad(x)~ is the Euclidean gradient and ~ehess(x, v)~ the Euclidean Hessian action, both in packed coordinates.
+The Hessian is ~ehess2rhess~, or ~egrad2rgrad~ of the action when that returns ~None~.
+
+~RtrOptions~ is ~#[non_exhaustive]~, and its defaults are those of manopt ~trustregions~:
+
+| Field                | Default  | Setter                    | Meaning                                                                       |
+|----------------------+----------+---------------------------+-------------------------------------------------------------------------------|
+| ~radius_max~         | ~None~   | ~with_radius_max~         | \(\bar\Delta\); ~None~ takes ~Manifold::typical_dist~, and \(\Delta_0 = \bar\Delta / 8\) |
+| ~grad_tol~           | ~1e-6~   | ~with_grad_tol~           | stop when the Riemannian gradient is at most this long                        |
+| ~max_iter~           | ~1000~   | ~with_max_iter~           | outer iterations                                                              |
+| ~cg_max~             | ~None~   | ~with_cg_max~             | inner iterations; ~None~ takes the packed length                              |
+| ~theta~              | ~1.0~    | ~with_theta~              | \(\theta\) of the inner rule \(\Vert r_j \Vert \le \Vert r_0 \Vert \min(\Vert r_0 \Vert^\theta, \kappa)\) |
+| ~kappa~              | ~0.1~    | ~with_kappa~              | \(\kappa\) of the inner rule                                                  |
+| ~rho_regularization~ | ~1e3~    | ~with_rho_regularization~ | both decreases gain \(\max(1, \lvert f \rvert)\, \varepsilon\) times this     |
+
+A step is accepted when \(\rho > 0.1\); the radius is quartered below \(\rho = 1/4\) and doubled, up to \(\bar\Delta\), above \(\rho = 3/4\) on the boundary.
+A non-finite or non-positive \(\bar\Delta\) is replaced by 1.
+~RtrMin~ holds ~x~, ~value~, ~grad_norm~ (in the manifold metric), ~iterations~ and ~accepted~.
+
+** C ABI
+
+#+begin_src c
+int32_t rgmin_solver_set_power(rgmin_solver_t *solver, int32_t factor, size_t block,
+                               size_t count);
+#+end_src
+
+ABI minor 41.
+~factor~ is an ~rgmin_manifold_t~ value for a kind without shape parameters: ~RGMIN_MANIFOLD_EUCLIDEAN~, ~SPHERE~, ~SO3~, ~STIEFEL~, ~SE3~, ~RIGID_QUOTIENT~, ~MW_RIGID~, ~MULTINOMIAL~, ~SYMMETRIC~ or ~SKEWSYMMETRIC~.
+It returns 0, or 1 with the manifold unchanged and ~rgmin_last_error~ set to:
+- ~rgmin_solver_set_power: null solver~;
+- ~rgmin_solver_set_power: the factor token needs a shape~, for a token with shape parameters or a value outside ~rgmin_manifold_t~;
+- ~rgmin_solver_set_power: the block does not fit the factor~, for a block the factor cannot hold or a count of 0.
+~MW_RIGID~ copies read ~rgmin_solver_set_masses~ as described under Sessions.
+The C++ wrapper is ~rgmin::Solver::set_power(rgmin_manifold_t factor, std::size_t block, std::size_t count)~, and ~xts.h~ aliases it as ~xts_solver_set_power~.
+Weighted products of arbitrary factors are not exposed to C or Python; @@rst::doc:`../explanation/product-manifold`@@ gives the reason.
