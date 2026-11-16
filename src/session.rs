@@ -1019,7 +1019,9 @@ impl Solver {
 
     /// `count` copies of `factor`, each of packed length `block`, with
     /// unit weights. manopt `powermanifold`. Returns `false`, keeping the
-    /// manifold, when `factor` does not fit `block`.
+    /// manifold, when `factor` does not fit `block`. MwRigid copies read
+    /// [`Self::set_masses`] as one molecule reused on every copy or as
+    /// every copy's masses in order.
     pub fn set_power(&mut self, factor: ManifoldKind, block: usize, count: usize) -> bool {
         match ManifoldKind::power(factor, block, count) {
             Ok(kind) => {
@@ -1116,7 +1118,8 @@ impl Solver {
     }
 
     /// Per-atom masses for [`ManifoldKind::MwRigid`] (Page–McIver / Eckart).
-    /// Empty clears them (unit mass).
+    /// Empty clears them (unit mass). A product reads them per MwRigid
+    /// factor, as in [`Self::set_power`].
     pub fn set_masses(&mut self, masses: Array1<f64>) {
         if masses.is_empty() {
             self.masses = None;
@@ -1498,6 +1501,11 @@ impl Solver {
     fn project_vec(&mut self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         let mut w = match &self.manifold {
             ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => v.clone(),
+            ManifoldKind::Product(product) if product.has_rigid() => {
+                let mut w = product.project(x, v);
+                self.project_rigid_blocks(product, x, v, &mut w);
+                w
+            }
             other => other.project(x, v),
         };
         self.kill_at(x, &mut w);
@@ -1655,6 +1663,11 @@ impl Solver {
     fn horizontal_grad(&mut self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
         let mut g = match &self.manifold {
             ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => grad.clone(),
+            ManifoldKind::Product(product) if product.has_rigid() => {
+                let mut g = product.egrad2rgrad(x, grad);
+                self.project_rigid_blocks(product, x, grad, &mut g);
+                g
+            }
             other => other.egrad2rgrad(x, grad),
         };
         self.kill_at(x, &mut g);
@@ -1670,6 +1683,11 @@ impl Solver {
     ) -> Array1<f64> {
         match &self.manifold {
             ManifoldKind::RigidQuotient | ManifoldKind::MwRigid => self.project_vec(x_to, v),
+            ManifoldKind::Product(product) if product.has_rigid() => {
+                let mut w = product.transport(x_from, x_to, v);
+                self.project_rigid_blocks(product, x_to, v, &mut w);
+                w
+            }
             other => other.transport(x_from, x_to, v),
         }
     }
@@ -3437,9 +3455,14 @@ impl Solver {
         };
         // On a curved kind the line search would probe the chord, off the
         // set. Accept::None takes one retracted trial of the two-loop step.
+        // So does a product with rigid factors: its horizontal gradient is
+        // the mass-metric projection, whose slope along a step is not the
+        // directional derivative the line search measures at its trials.
+        let rigid_product =
+            matches!(&self.manifold, ManifoldKind::Product(product) if product.has_rigid());
         let lbfgs_single = lbfgs_direct.is_none()
             && self.accept == Accept::None
-            && !self.manifold.is_flat()
+            && (!self.manifold.is_flat() || rigid_product)
             && matches!(self.inner, Inner::Lbfgs(_));
         let lbfgs_line_searched =
             lbfgs_direct.is_none() && !lbfgs_single && matches!(self.inner, Inner::Lbfgs(_));
