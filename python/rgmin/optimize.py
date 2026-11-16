@@ -29,19 +29,21 @@ listed on each class and in the ASE migration page of the docs.
 from __future__ import annotations
 
 import warnings
-from typing import Any
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 import numpy as np
 
 from rgmin._maturin import Session
 
+# After the maturin import, so a nanobind build fails there before ASE loads.
+from ase.optimize.optimize import Optimizer as _ASEOptimizer
+
+if TYPE_CHECKING:
+    from ase.filters import UnitCellFilter
+
 RESTART_FORMAT = "rgmin-replay-1"
-
-
-def _optimizer_base():
-    from ase.optimize.optimize import Optimizer
-
-    return Optimizer
+_Evaluation = list[list[float] | float]
 
 
 def _restart_error(message: str) -> Exception:
@@ -50,13 +52,13 @@ def _restart_error(message: str) -> Exception:
     return RestartError(message)
 
 
-def _is_cell_filter(atoms: Any) -> bool:
+def _is_cell_filter(atoms: object) -> TypeGuard[UnitCellFilter]:
     from ase.filters import UnitCellFilter
 
     return isinstance(atoms, UnitCellFilter)
 
 
-class _RgminOptimizer(_optimizer_base()):
+class _RgminOptimizer(_ASEOptimizer):
     """ASE ``Optimizer`` whose step is one rgmin session step.
 
     Subclasses set ``kind`` and return the session keywords from
@@ -65,7 +67,14 @@ class _RgminOptimizer(_optimizer_base()):
     first-order method at the inverse Hessian ``I / alpha``.
     """
 
+    maxstep: float
     kind = "lbfgs"
+
+    if TYPE_CHECKING:
+        # Signatures for ASE's unannotated restart I/O; the methods themselves are inherited.
+        def dump(self, data: object) -> None: ...
+
+        def load(self) -> object: ...
 
     def __init__(
         self,
@@ -77,8 +86,8 @@ class _RgminOptimizer(_optimizer_base()):
         **kwargs: Any,
     ) -> None:
         self._native: Session | None = None
-        self._history: list[dict] = []
-        self._pending: list[dict] | None = None
+        self._history: list[dict[str, Any]] = []
+        self._pending: list[dict[str, Any]] | None = None
         self._x_session: list[float] | None = None
         self._x_placed: np.ndarray | None = None
         super().__init__(
@@ -112,7 +121,7 @@ class _RgminOptimizer(_optimizer_base()):
             self._pending = None
         return self._native
 
-    def _evaluate(self, x: list[float], record: list | None) -> tuple[float, list[float]]:
+    def _evaluate(self, x: list[float], record: list[_Evaluation] | None) -> tuple[float, list[float]]:
         point = np.asarray(x, dtype=np.float64)
         # A cell filter's set_x(get_x()) is not bitwise idempotent; writing
         # the current point back would cost a calculator call ASE never makes.
@@ -137,9 +146,11 @@ class _RgminOptimizer(_optimizer_base()):
             and np.allclose(x, expected, rtol=0.0, atol=1e-10)
         ):
             return self._x_session
-        return x.tolist()
+        start: list[float] = x.tolist()
+        return start
 
-    def step(self, forces: Any = None) -> None:
+    # ASE's Dynamics.step is an unannotated placeholder that raises, so pyright infers NoReturn for it.
+    def step(self, forces: Any = None) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
         """One session step from the current point.
 
         ``forces`` is accepted for ASE's signature. The session asks the
@@ -149,7 +160,7 @@ class _RgminOptimizer(_optimizer_base()):
         native = self._open()
         reset = self._before_step(native)
         x0 = self._start()
-        record: list = []
+        record: list[_Evaluation] = []
         last: list[list[float]] = []
 
         def objective(x: list[float]) -> tuple[float, list[float]]:
@@ -213,7 +224,7 @@ class _RgminOptimizer(_optimizer_base()):
         self._pending = list(self._history)
         self._load_wrapper_state(data.get("wrapper", {}))
 
-    def _replay(self, steps: list[dict]) -> None:
+    def _replay(self, steps: list[dict[str, Any]]) -> None:
         native = self._native
         assert native is not None
         updated: list[float] | None = None
@@ -222,7 +233,9 @@ class _RgminOptimizer(_optimizer_base()):
             cursor = iter(evals)
             scale = self._scale
 
-            def answer(x: list[float], cursor=cursor, index=index) -> tuple[float, list[float]]:
+            def answer(
+                x: list[float], cursor: Iterator[list[Any]] = cursor, index: int = index
+            ) -> tuple[float, list[float]]:
                 try:
                     point, value, gradient = next(cursor)
                 except StopIteration:
