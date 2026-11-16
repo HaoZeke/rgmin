@@ -76,6 +76,9 @@ environment = { PATH = "/root/.cargo/bin:$PATH" }
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
+# Homebrew on the macos-15 runner builds its libraries for 15.0, and
+# delocate rejects them under a 14.0 target. The extension links only
+# the Rust staticlib and system libraries, so the tag stays macosx_14_0.
 environment = { MACOSX_DEPLOYMENT_TARGET = "14.0", PATH = "$HOME/.cargo/bin:$PATH" }
 before-all = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal"
 
