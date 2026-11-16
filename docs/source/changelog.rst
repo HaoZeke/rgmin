@@ -7,6 +7,35 @@ Unreleased
 
 ~~~~~~~~~~
 
+``ManifoldKind::Product`` is the weighted Riemannian product of other kinds, with the metric ``g = sum_i w_i g_i`` for weights ``w_i > 0``.
+``ManifoldKind::product`` builds it from ``ProductFactor`` values, each a kind, a packed length and a weight, and ``ManifoldKind::power`` is manopt's ``powermanifold``; ``Solver::set_product`` and ``Solver::set_power`` select them.
+Projection, retraction, transport, exponential, logarithm and parallel transport act per factor, a factor's gradient and Hessian are divided by its weight, and the distance is ``sqrt(sum_i w_i d_i^2)``.
+A session steps a weighted product in the chart ``z_i = sqrt(w_i) x_i``, so steepest descent, L-BFGS and the Newton-CG trust region run on it unchanged, and the iterates do not depend on the unit of a factor whose weight carries that unit.
+The exponential preconditioner, the Lindh model, ``set_project_rigid`` and the HiGHS box read raw coordinates and return ``Error::ProductChart`` on such a product.
+``MwRigid`` and ``RigidQuotient`` factors project with the session's masses and periodic flag.
+``explanation/product-manifold`` derives the geometry and compares it with manopt, Manopt.jl and Manifolds.jl, pymanopt and geomstats.
+
+``Manifold`` gains manopt's ``inner``, ``norm``, ``ehess2rhess``, ``exp``, ``log``, ``dist``, ``parallel_transport``, ``parallel_transport_along``, ``transport_is_isometric`` and ``typical_dist``.
+Their defaults keep every kind as it was: the Euclidean metric, and ``None`` where no closed form is supplied.
+Every kind but the multinomial and rigid kinds supplies its Riemannian Hessian, the sphere family, SO(3), SE(3), ``Positive`` and the linear kinds also their geodesics, and ``Positive`` and the doubly stochastic kinds expose the metrics their ``egrad2rgrad`` already used.
+``reference/product-manifold`` lists what each kind supplies.
+
+``rtr::minimize_rtr`` is the Riemannian trust region of Absil, Baker and Gallivan with Steihaug-Toint truncated CG, measured in ``Manifold::inner``.
+Its Hessian action is ``ehess2rhess``, Weingarten term included, where the kind supplies one, and the projected Euclidean action otherwise.
+``RtrOptions`` takes the defaults of manopt's ``trustregions``, and ``RtrMin`` returns the point, the value, the gradient norm and the outer, accepted and inner iteration counts.
+``rtr::truncated_cg_riemannian`` is one inner solve in the manifold metric, for a caller that accepts or rejects steps itself with ``RtrRadius``.
+``truncated_cg_projected`` keeps the Euclidean inner product.
+
+``rgmin_solver_set_power(solver, factor, block, count)`` is ``Solver::set_power`` for the manifold tokens without shape parameters.
+``xts.h`` aliases it and ``rgmin::Solver::set_power`` wraps it. ``abi_minor`` 41.
+Weighted products, subspace spheres, tangent metrics and gauges stay Rust only.
+
+``ManifoldKind`` is no longer ``Copy``, since a product and a subspace sphere share their geometry through an ``Arc``; clone it where a copy was implied.
+``stiefel_p`` and ``as_str`` take ``&self``, and the new ``Product`` and ``SubspaceSphere`` variants extend exhaustive matches on the kind.
+
+An unconstrained Newton-CG or Newton-PCG ``Solver::run`` ends with the Riemannian gradient in its report.
+It reported the Euclidean gradient that its difference products keep, so on a curved manifold a run that stopped on a vanishing Riemannian gradient reported the normal part of the Euclidean one.
+
 ``Lbfgs::minimize_on`` and ``Lbfgs::minimize_box_on`` offer each accepted iterate to a callback as the iteration, the value and the coordinates.
 Returning false ends the run at that point, as ``minimize_watched`` does.
 A caller can project those coordinates, a bond length or a height above a slab, without the solver storing that map.
