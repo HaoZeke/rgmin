@@ -4814,6 +4814,43 @@ impl Solver {
         self.run_plain(obj, x)
     }
 
+    /// [`Self::run`] with a gauge move between steps.
+    ///
+    /// `gauge(x)` replaces the iterate with another representation of the
+    /// same point: a map that leaves the objective unchanged, such as
+    /// re-centring the pivot of a hyperplane on the plane. It acts on the
+    /// caller's coordinates before every step but the first, so the
+    /// returned report describes the point left in `x`. A step after a move
+    /// evaluates the objective at the moved point and keeps the method
+    /// memory, as a step after any change of `x` does. Every report carries
+    /// its coordinates and gradient. The run ends as [`Self::run`] does,
+    /// on the first step whose status is not [`Status::Iterating`], and a
+    /// spent budget is [`Status::Budget`].
+    pub fn run_gauged<O, G>(&mut self, obj: &O, x: &mut Array1<f64>, mut gauge: G) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+        G: FnMut(&mut Array1<f64>),
+    {
+        if self.control.maxiter == 0 {
+            return self.run(obj, x);
+        }
+        let tol = self.control.gtol;
+        let mut report = self.step(obj, x)?;
+        for _ in 1..self.control.maxiter {
+            if report.grad_norm < tol || report.status != Status::Iterating {
+                break;
+            }
+            gauge(x);
+            report = self.step(obj, x)?;
+        }
+        report.status = match report.status {
+            Status::Iterating if report.grad_norm < tol => Status::Tolerance,
+            Status::Iterating => Status::Budget,
+            other => other,
+        };
+        Ok(report)
+    }
+
     fn run_plain<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,
