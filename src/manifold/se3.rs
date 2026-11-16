@@ -3,7 +3,7 @@
 //! Dimension is exactly 12. A 3N cluster is
 //! [`super::RigidQuotient`], not a 12-vector prefix.
 
-use ndarray::Array1;
+use ndarray::{Array1, s};
 
 use super::{Manifold, so3::So3};
 
@@ -47,6 +47,78 @@ impl Manifold for Se3 {
     fn transport(&self, _x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         self.project(x_to, v)
     }
+
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        if [x, egrad, ehess, v].iter().any(|a| a.len() != 12) {
+            return None;
+        }
+        let rot = So3.ehess2rhess(&rot(x), &rot(egrad), &rot(ehess), &rot(v))?;
+        Some(join(&rot, &ehess.slice(s![9..12]).to_owned()))
+    }
+
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        if x.len() != 12 || v.len() != 12 {
+            return None;
+        }
+        let r = So3.exp(&rot(x), &rot(v))?;
+        Some(join(&r, &(&trans(x) + &trans(v))))
+    }
+
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        if x.len() != 12 || y.len() != 12 {
+            return None;
+        }
+        let r = So3.log(&rot(x), &rot(y))?;
+        Some(join(&r, &(&trans(y) - &trans(x))))
+    }
+
+    fn dist(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<f64> {
+        if x.len() != 12 || y.len() != 12 {
+            return None;
+        }
+        let dr = So3.dist(&rot(x), &rot(y))?;
+        let dt = &trans(y) - &trans(x);
+        Some((dr * dr + dt.dot(&dt)).sqrt())
+    }
+
+    fn parallel_transport_along(
+        &self,
+        x: &Array1<f64>,
+        d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        if x.len() != 12 || d.len() != 12 || v.len() != 12 {
+            return None;
+        }
+        let r = So3.parallel_transport_along(&rot(x), &rot(d), &rot(v))?;
+        Some(join(&r, &trans(v)))
+    }
+
+    fn typical_dist(&self, _n: usize) -> f64 {
+        let r = So3.typical_dist(9);
+        (r * r + 3.0).sqrt()
+    }
+}
+
+fn rot(a: &Array1<f64>) -> Array1<f64> {
+    a.slice(s![0..9]).to_owned()
+}
+
+fn trans(a: &Array1<f64>) -> Array1<f64> {
+    a.slice(s![9..12]).to_owned()
+}
+
+fn join(r: &Array1<f64>, t: &Array1<f64>) -> Array1<f64> {
+    let mut out = Array1::zeros(12);
+    out.slice_mut(s![0..9]).assign(r);
+    out.slice_mut(s![9..12]).assign(t);
+    out
 }
 
 #[cfg(test)]
