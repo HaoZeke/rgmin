@@ -7,7 +7,9 @@
 //! is projection at the arrival point; on a tangent that is the
 //! identity used by the MATLAB factory.
 //!
-//! The Riemannian gradient is `X * symm(egrad) * X`.
+//! The Riemannian gradient is `X * symm(egrad) * X`, the inner product
+//! `tr(X^{-1} U X^{-1} V)` and the Hessian the factory's
+//! `X symm(ehess) X + symm(U symm(egrad) X)`.
 //! A 3N cluster is not this packing. Length must be a square.
 
 use ndarray::{Array1, ArrayView1};
@@ -218,6 +220,52 @@ impl Manifold for Spd {
         let r = matmul(n, &xs, &xm);
         pack(n, symm(n, &r))
     }
+
+    /// `tr(X^{-1} U X^{-1} V)`, the metric of the gradient `X symm(G) X`.
+    /// The dot product off the set.
+    fn inner(&self, x: &Array1<f64>, u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        let Some((n, xm)) = unpack(x) else {
+            return vecops::dot(u.view(), v.view());
+        };
+        if u.len() != x.len() || v.len() != x.len() {
+            return vecops::dot(u.view(), v.view());
+        }
+        let Some(l) = cholesky(n, &xm) else {
+            return vecops::dot(u.view(), v.view());
+        };
+        let uv: Vec<f64> = u.iter().copied().collect();
+        let vv: Vec<f64> = v.iter().copied().collect();
+        let a = solve_chol(n, &l, &uv);
+        let b = solve_chol(n, &l, &vv);
+        let mut trace = 0.0;
+        for i in 0..n {
+            for j in 0..n {
+                trace += a[i * n + j] * b[j * n + i];
+            }
+        }
+        trace
+    }
+
+    /// manopt's `X symm(ehess) X + symm(U symm(egrad) X)`.
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        let (n, xm) = unpack(x)?;
+        if egrad.len() != x.len() || ehess.len() != x.len() || v.len() != x.len() {
+            return None;
+        }
+        let h: Vec<f64> = ehess.iter().copied().collect();
+        let g: Vec<f64> = egrad.iter().copied().collect();
+        let eta = symm(n, &v.iter().copied().collect::<Vec<_>>());
+        let xhx = matmul(n, &matmul(n, &xm, &symm(n, &h)), &xm);
+        let ugx = matmul(n, &matmul(n, &eta, &symm(n, &g)), &xm);
+        let sum: Vec<f64> = xhx.iter().zip(symm(n, &ugx)).map(|(a, b)| a + b).collect();
+        Some(pack(n, symm(n, &sum)))
+    }
 }
 
 #[cfg(test)]
@@ -318,6 +366,25 @@ mod tests {
         assert!(Spd.required_dim(9).is_ok());
         assert!(Spd.required_dim(1).is_ok());
     }
+    #[test]
+    fn gradient_and_hessian_match_the_affine_invariant_metric() {
+        // f(X) = (1/2) tr(X A X A): egrad = A X A, ehess[U] = A U A.
+        let x = array![2.0, 0.3, 0.3, 1.5];
+        let a = array![1.0, 0.4, 0.4, 3.0];
+        let (n, xm) = unpack(&x).unwrap();
+        let am: Vec<f64> = a.to_vec();
+        let egrad = pack(n, matmul(n, &matmul(n, &am, &xm), &am));
+        let ehess = |u: &Array1<f64>| pack(n, matmul(n, &matmul(n, &am, &u.to_vec()), &am));
+        let u = array![0.5, -0.25, -0.25, 0.8];
+        let w = array![-0.3, 0.6, 0.6, 0.2];
+        let r = Spd.egrad2rgrad(&x, &egrad);
+        assert!((Spd.inner(&x, &r, &u) - egrad.dot(&u)).abs() < 1e-12);
+        let hu = Spd.ehess2rhess(&x, &egrad, &ehess(&u), &u).unwrap();
+        let hw = Spd.ehess2rhess(&x, &egrad, &ehess(&w), &w).unwrap();
+        let (left, right) = (Spd.inner(&x, &hu, &w), Spd.inner(&x, &u, &hw));
+        assert!((left - right).abs() < 1e-12, "{left} {right}");
+    }
+
     #[test]
     fn egrad2rgrad_is_x_symm_x_not_project() {
         let x = array![2.0, 0.2, 0.2, 3.0];

@@ -121,6 +121,12 @@ impl Manifold for EuclideanComplex {
     ) -> Array1<f64> {
         v.clone()
     }
+
+    fn typical_dist(&self, _n: usize) -> f64 {
+        typical_dist(self.n)
+    }
+
+    flat_geodesics!();
 }
 
 #[cfg(test)]

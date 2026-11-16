@@ -273,6 +273,12 @@ impl Manifold for CenteredMatrix {
     ) -> Array1<f64> {
         Vector::from_host(v.clone()).into_host()
     }
+
+    fn typical_dist(&self, _n: usize) -> f64 {
+        typical_dist(self.m, self.n, self.rows)
+    }
+
+    flat_geodesics!();
 }
 
 #[cfg(test)]
