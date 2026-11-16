@@ -21,7 +21,7 @@ use ndarray::{Array1, Array2, ArrayView1};
 use super::Solver;
 use crate::error::{Error, Result};
 use crate::hvp::HessianVector;
-use crate::manifold::ManifoldKind;
+use crate::manifold::{ManifoldKind, ProductManifold};
 use crate::newton::HessianObjective;
 use crate::report::Report;
 
@@ -172,5 +172,49 @@ impl Solver {
             .then_some("the HiGHS box and equalities")
         });
         what.map_or(Ok(()), |what| Err(Error::ProductChart { what }))
+    }
+
+    /// Eckart projection of the rigid factors of `product`, with the
+    /// session masses and periodic flag, written over `out`. MwRigid
+    /// blocks read [`Self::set_masses`] as one molecule reused on every
+    /// block or as the concatenation over the MwRigid blocks.
+    pub(super) fn project_rigid_blocks(
+        &self,
+        product: &ProductManifold,
+        at: &Array1<f64>,
+        v: &Array1<f64>,
+        out: &mut Array1<f64>,
+    ) {
+        let weighted_atoms: usize = product
+            .kinds()
+            .filter(|(kind, _)| matches!(kind, ManifoldKind::MwRigid))
+            .map(|(_, range)| range.len() / 3)
+            .sum();
+        let stored = self.masses.as_ref().and_then(|m| m.as_slice());
+        let mut seen = 0;
+        for (kind, range) in product.kinds() {
+            let atoms = range.len() / 3;
+            let masses = match kind {
+                ManifoldKind::MwRigid => {
+                    let start = seen;
+                    seen += atoms;
+                    match stored {
+                        Some(m) if m.len() == atoms => Some(m),
+                        Some(m) if m.len() == weighted_atoms => Some(&m[start..start + atoms]),
+                        _ => None,
+                    }
+                }
+                ManifoldKind::RigidQuotient => None,
+                _ => continue,
+            };
+            let mut block = v.slice(ndarray::s![range.clone()]).to_owned();
+            crate::rigid::project_horizontal(
+                &mut block,
+                at.slice(ndarray::s![range.clone()]),
+                masses,
+                !self.periodic,
+            );
+            out.slice_mut(ndarray::s![range]).assign(&block);
+        }
     }
 }

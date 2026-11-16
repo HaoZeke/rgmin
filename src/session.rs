@@ -1040,7 +1040,9 @@ impl Solver {
 
     /// `count` copies of `factor`, each of packed length `block`, with
     /// unit weights. manopt `powermanifold`. Returns `false`, keeping the
-    /// manifold, when `factor` does not fit `block`.
+    /// manifold, when `factor` does not fit `block`. MwRigid copies read
+    /// [`Self::set_masses`] as one molecule reused on every copy or as
+    /// every copy's masses in order.
     pub fn set_power(&mut self, factor: ManifoldKind, block: usize, count: usize) -> bool {
         match ManifoldKind::power(factor, block, count) {
             Ok(kind) => {
@@ -1109,7 +1111,8 @@ impl Solver {
     }
 
     /// Per-atom masses for [`ManifoldKind::MwRigid`] (Page–McIver / Eckart).
-    /// Empty clears them (unit mass).
+    /// Empty clears them (unit mass). A product reads them per MwRigid
+    /// factor, as in [`Self::set_power`].
     pub fn set_masses(&mut self, masses: Array1<f64>) {
         if masses.is_empty() {
             self.masses = None;
@@ -1312,6 +1315,11 @@ impl Solver {
                 project_horizontal(&mut w, x.view(), None, !self.periodic);
                 w
             }
+            ManifoldKind::Product(product) if product.has_rigid() => {
+                let mut w = product.project(x, v);
+                self.project_rigid_blocks(product, x, v, &mut w);
+                w
+            }
             other => other.project(x, v),
         }
     }
@@ -1485,6 +1493,11 @@ impl Solver {
     fn horizontal_grad(&self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
         let mut g = match &self.manifold {
             ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => self.project_vec(x, grad),
+            ManifoldKind::Product(product) if product.has_rigid() => {
+                let mut g = product.egrad2rgrad(x, grad);
+                self.project_rigid_blocks(product, x, grad, &mut g);
+                g
+            }
             other => other.egrad2rgrad(x, grad),
         };
         if self.project_rigid
@@ -1507,6 +1520,11 @@ impl Solver {
     ) -> Array1<f64> {
         match &self.manifold {
             ManifoldKind::RigidQuotient | ManifoldKind::MwRigid => self.project_vec(x_to, v),
+            ManifoldKind::Product(product) if product.has_rigid() => {
+                let mut w = product.transport(x_from, x_to, v);
+                self.project_rigid_blocks(product, x_to, v, &mut w);
+                w
+            }
             other => other.transport(x_from, x_to, v),
         }
     }

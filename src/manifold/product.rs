@@ -245,6 +245,18 @@ impl ProductManifold {
         self.blocks.iter().all(|b| b.kind.is_flat())
     }
 
+    /// Factor kinds and their slices, in packed order.
+    pub(crate) fn kinds(&self) -> impl Iterator<Item = (&ManifoldKind, Range<usize>)> {
+        self.blocks.iter().map(|b| (&b.kind, b.range()))
+    }
+
+    /// `true` when a factor is a rigid-motion quotient, whose horizontal
+    /// projection needs the session's masses and periodic flag.
+    pub(crate) fn has_rigid(&self) -> bool {
+        self.kinds()
+            .any(|(kind, _)| matches!(kind, ManifoldKind::MwRigid | ManifoldKind::RigidQuotient))
+    }
+
     /// `true` when every factor carries its own metric with weight one in
     /// these coordinates, so the chart is the identity.
     pub fn is_chart(&self) -> bool {
