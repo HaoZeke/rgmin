@@ -75,6 +75,8 @@ int rgmin_asv_quadratic(int n, int method) {
     ctrl.istep = 0.1;
     ctrl.memory = 10;
     ctrl.maxmove = 0.0;
+    ctrl.noise_eps = 0.0;
+    ctrl.noise_c = 0.0;
     out.value = 0.0;
     out.steps = 0;
     out.grad_norm = 0.0;
