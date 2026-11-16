@@ -7,6 +7,13 @@
 - etol 0.0, ftol 1e-06 (two-norm of the global force), maxiter 100000, maxeval 1000000,
   5 repeats per row on 1 MPI rank(s), every style at its defaults.
 
+This table was measured before the 0.6.0 release. 5a9f396 is the
+`develop` commit the plugin was written on, and `-dirty` means the
+plugin sources were in the working tree, not yet committed. The crate
+version at that commit was 0.2.0.
+`docs/orgmode/howto/lammps-migration.org` lists the rows that differ
+with 0.6.0.
+
 Iterations and force calls are identical on every repeat.
 Wall time is the LAMMPS loop time of the minimize command, in seconds.
 

@@ -131,7 +131,10 @@ Wall time is the LAMMPS loop time, the median of five repeats; iterations and fo
 The 32k cell also ran on 4 MPI ranks.
 The full table, with energies, final force norms and the minimum times, is ~benches/lammps_minstyle/results.md~.
 
-Run on the sources of this change over commit 5a9f396, with rgmin 0.2.0, LAMMPS 30Sep2026 (update 1), Open MPI 4.1.6 and GCC 13.3, on Linux 6.12 ~x86_64~ (Intel Xeon, 8 logical CPUs).
+The table was measured before the 0.6.0 release, on commit 5a9f396 of ~develop~ with the plugin sources in the working tree and not yet committed.
+At that commit ~Cargo.toml~ said 0.2.0 and the C ABI was 1.41.
+The runs used LAMMPS 30Sep2026 (update 1), Open MPI 4.1.6 and GCC 13.3, on Linux 6.12 ~x86_64~ (Intel Xeon, 8 logical CPUs).
+With rgmin 0.6.0 every row takes the same iterations and force calls, except ~rgmin fire~ and ~rgmin fire2~ on ~lj177~, which take a few percent fewer iterations.
 
 | case | min_style | 1 rank: iterations/calls | 1 rank: median s | 4 ranks: iterations/calls | 4 ranks: median s |
 |---+---+---+---+---+---|
