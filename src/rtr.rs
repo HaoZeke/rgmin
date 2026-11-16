@@ -27,6 +27,8 @@
 //! supplies one, and every inner product and the trust ball in
 //! [`Manifold::inner`]. [`truncated_cg_riemannian`] is one of its
 //! subproblems, for a driver that measures the decrease itself.
+//! [`minimize_rtr_gauged`] moves to another representation of the same
+//! point after every accepted step.
 //!
 //! For `f(x) = x^2` at `x = 1`, the model has its minimizer at `eta = -1`:
 //! ```
@@ -460,9 +462,9 @@ where
 pub fn minimize_rtr<M, FV, GG, HH>(
     manifold: &M,
     x0: Array1<f64>,
-    mut value: FV,
-    mut egrad: GG,
-    mut ehess: HH,
+    value: FV,
+    egrad: GG,
+    ehess: HH,
     opts: RtrOptions,
 ) -> RtrMin
 where
@@ -470,6 +472,60 @@ where
     FV: FnMut(&Array1<f64>) -> f64,
     GG: FnMut(&Array1<f64>) -> Array1<f64>,
     HH: FnMut(&Array1<f64>, &Array1<f64>) -> Array1<f64>,
+{
+    rtr(manifold, x0, value, egrad, ehess, |_| false, opts)
+}
+
+/// [`minimize_rtr`] with a gauge move after every accepted step.
+///
+/// `gauge(x)` replaces the iterate with another representation of the
+/// same point: a map that leaves `value` unchanged, such as re-centring
+/// the pivot of a hyperplane on the plane. The step is accepted on the
+/// value before the move. The value is evaluated again when the gauge
+/// moved `x`, and the gradient always is, so the next model, the stopping
+/// test and the returned [`RtrMin`] are those of the moved point. A gauge
+/// that changes the value still runs, without the monotone decrease.
+pub fn minimize_rtr_gauged<M, FV, GG, HH, GA>(
+    manifold: &M,
+    x0: Array1<f64>,
+    value: FV,
+    egrad: GG,
+    ehess: HH,
+    mut gauge: GA,
+    opts: RtrOptions,
+) -> RtrMin
+where
+    M: Manifold + ?Sized,
+    FV: FnMut(&Array1<f64>) -> f64,
+    GG: FnMut(&Array1<f64>) -> Array1<f64>,
+    HH: FnMut(&Array1<f64>, &Array1<f64>) -> Array1<f64>,
+    GA: FnMut(&mut Array1<f64>),
+{
+    let moved = |x: &mut Array1<f64>| {
+        let before = x.clone();
+        gauge(x);
+        *x != before
+    };
+    rtr(manifold, x0, value, egrad, ehess, moved, opts)
+}
+
+/// The trust-region loop. `moved(x)` applies the gauge after an accepted
+/// step and reports whether it changed `x`.
+fn rtr<M, FV, GG, HH, GA>(
+    manifold: &M,
+    x0: Array1<f64>,
+    mut value: FV,
+    mut egrad: GG,
+    mut ehess: HH,
+    mut moved: GA,
+    opts: RtrOptions,
+) -> RtrMin
+where
+    M: Manifold + ?Sized,
+    FV: FnMut(&Array1<f64>) -> f64,
+    GG: FnMut(&Array1<f64>) -> Array1<f64>,
+    HH: FnMut(&Array1<f64>, &Array1<f64>) -> Array1<f64>,
+    GA: FnMut(&mut Array1<f64>) -> bool,
 {
     let radius_max = opts
         .radius_max
@@ -511,7 +567,7 @@ where
         let predicted = step.model_decrease + shift;
         if radius.update(actual, predicted, manifold.norm(&x, &step.eta)) {
             x = x_try;
-            f = f_try;
+            f = if moved(&mut x) { value(&x) } else { f_try };
             g = egrad(&x);
             rgrad = manifold.egrad2rgrad(&x, &g);
             gnorm = manifold.norm(&x, &rgrad);
@@ -668,6 +724,33 @@ mod tests {
         assert!((step.model_decrease - 0.5 * g.dot(&x)).abs() < 1e-12);
         let unscaled = truncated_cg_riemannian(&plain, &x, &g, |v| &a * v, 100.0, &opts);
         assert_eq!(unscaled.iterations, 3, "{unscaled:?}");
+    }
+
+    #[test]
+    fn the_gauge_moves_after_every_accepted_step() {
+        // f depends on x0 + x1 only, so averaging the two leaves it unchanged.
+        let f = |z: &Array1<f64>| (z[0] + z[1] - 1.0).powi(2) + z[2] * z[2];
+        let g = |z: &Array1<f64>| {
+            let r = 2.0 * (z[0] + z[1] - 1.0);
+            array![r, r, 2.0 * z[2]]
+        };
+        let h = |_z: &Array1<f64>, v: &Array1<f64>| {
+            let s = 2.0 * (v[0] + v[1]);
+            array![s, s, 2.0 * v[2]]
+        };
+        let mut moves = 0;
+        let gauge = |z: &mut Array1<f64>| {
+            moves += 1;
+            let mean = 0.5 * (z[0] + z[1]);
+            z[0] = mean;
+            z[1] = mean;
+        };
+        let opts = RtrOptions::default().with_grad_tol(1e-12);
+        let out = minimize_rtr_gauged(&Euclidean, array![3.0, -1.0, 2.0], f, g, h, gauge, opts);
+        assert_eq!(moves, out.accepted);
+        assert!(out.grad_norm <= 1e-12, "{out:?}");
+        assert_eq!(out.x[0], out.x[1]);
+        assert!((out.x[0] - 0.5).abs() < 1e-12 && out.x[2].abs() < 1e-12);
     }
 
     #[test]
