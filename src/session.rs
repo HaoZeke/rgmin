@@ -2978,7 +2978,7 @@ impl Solver {
                     self.accept,
                     &mut self.e_hist,
                     None,
-                    self.manifold,
+                    &self.manifold,
                     allow_gradient_fallback,
                 );
                 if moved {
