@@ -14,14 +14,13 @@ Rust 1.88 or newer, and a new Cargo project with the release from crates.io:
 
     cargo new rosenbrock
     cd rosenbrock
-    cargo add rgmin ndarray@0.17 eindir-core@0.6
+    cargo add rgmin@0.6 ndarray@0.17 eindir-core@0.6
 
 Each sample below goes inside ``fn main`` in ``src/main.rs``.
 Run it with ``cargo run``.
 
-To follow the ``develop`` branch instead, use its dependency set in :doc:`../howto/install`.
-There, ``eindir-core`` comes from git.
-Adding ``eindir-core@0.6`` from crates.io on top gives a second copy, and the session sample below then fails to compile.
+To follow the ``develop`` branch instead, take rgmin from git as :doc:`../howto/install` shows.
+``eindir-core`` 0.6 still comes from crates.io, so the samples below compile on either route.
 
 Rust
 ~~~~

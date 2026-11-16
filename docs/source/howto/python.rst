@@ -5,10 +5,11 @@ Python
 
 The package under ``python/`` is the maturin binding. ASE is optional and imported when an optimizer is constructed.
 `Moving an ASE script <ase-migration.rst>`_ is the one-line import change and the differences from ASE.
+Neither Python package is on PyPI. Build this one from the repository root; it needs Rust 1.88 or newer:
 
 .. code:: bash
 
-    pip install python/[ase]
+    python -m pip install './python[ase]'
 
 .. code:: python
 
@@ -31,9 +32,9 @@ This binding's L-BFGS follows ASE's length control and keeps the pairs. ``LBFGS(
 Nanobind wheel
 --------------
 
-The repository root builds a second wheel with scikit-build-core. CMake fetches Corrosion 0.6.1 and compiles the ``capi`` static library. A C++17 compiler, CMake, Ninja, and Rust are required.
+The repository root builds a second wheel with scikit-build-core. CMake fetches Corrosion 0.6.1 from GitHub and compiles the ``capi`` static library. It needs a C++17 compiler, CMake 3.15 or newer, Ninja, and Rust 1.88 or newer.
 
-``python -m pip install 'rgmin[ase,test]'`` adds ASE and the test extras.
+From the repository root, ``python -m pip install '.[ase,test]'`` builds it with ASE and the test extras. Both wheels install a package named ``rgmin``, so an environment holds one of them.
 
 ``SolverConfig`` checks every keyword once. An unknown name raises ``ValueError`` and lists the names that are accepted. ``memory``, ``maxiter``, ``linesearch_maxiter``, and ``extra_updates`` have to be Python integers. Other numeric options have to be finite.
 

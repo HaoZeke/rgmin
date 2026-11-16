@@ -4,37 +4,21 @@
 
 * Install rgmin
 
-rgmin is a Rust crate.
+rgmin 0.6.0 is a Rust crate with a C ABI.
 It needs Rust 1.88 or newer, the ~rust-version~ in ~Cargo.toml~.
-
-** Pick a route
-
-There are two routes, and they give different code.
-
-- The release on crates.io is 0.5.2, built from the ~main~ branch.
-- The ~develop~ branch is where these pages are written.
-
-The two branches split in August 2026 and have not been merged since.
-Each one has commits that the other lacks.
-The release has features that ~develop~ does not have, and ~develop~ has fixes and docs that are not in a release.
-The ~Cargo.toml~ on ~develop~ still says version 0.2.0.
-That number was not raised when releases were cut from ~main~, so it does not show how the two branches compare.
-
-Both branches build the quickstart, the manifold sample and the intrinsic reaction coordinate (IRC) sample.
-The HiGHS sample builds only on ~develop~.
-There, ~HighsStep~ takes one box bound per coordinate, and in 0.5.2 it takes one bound for all of them.
+This page covers the crate, the C library from cargo-c or Meson, the two Python packages and the LAMMPS plugin.
 
 ** From crates.io
 
-Add the release, the ~ndarray~ it takes, and ~eindir-core~ for the objective traits:
+Add rgmin, the ~ndarray~ it takes, and ~eindir-core~ for the objective traits:
 
 #+begin_src bash
-cargo add rgmin ndarray@0.17 eindir-core@0.6
+cargo add rgmin@0.6 ndarray@0.17 eindir-core@0.6
 #+end_src
 
-rgmin 0.5.2 takes ~eindir-core~ 0.6 from crates.io too, so Cargo builds one copy of it.
+rgmin takes ~eindir-core~ 0.6 from crates.io too, so Cargo builds one copy of it.
 
-*** Features of the release
+*** Features
 
 ~simd~ is on by default.
 The others are off until you name them.
@@ -44,7 +28,7 @@ The others are off until you name them.
 | ~simd~      | single instruction, multiple data (SIMD) versions of the vector loops, chosen for the CPU at run time | nothing more                                                                |
 | ~capi~      | the C symbols behind ~include/rgmin.h~                                                        | nothing more                                                                |
 | ~par~       | rayon threads for long dot products and vector updates                                        | nothing more                                                                |
-| ~highs~     | the HiGHS step of @@rst::doc:`highs-qp`@@                                                     | CMake and a C++ compiler, since ~highs-sys~ builds HiGHS from source        |
+| ~highs~     | the HiGHS step of @@rst::doc:`highs-qp`@@                                                     | CMake, a C++ compiler and libclang, since ~highs-sys~ builds HiGHS from source |
 | ~slepc~     | ~EigensolverKind::Slepc~                                                                      | PETSc and SLEPc, and a C compiler                                           |
 | ~primme~    | ~EigensolverKind::Primme~                                                                     | PRIMME 3.0 or newer, and a C compiler                                       |
 | ~chase~     | ~EigensolverKind::Chase~                                                                      | the compiled ChASE C interface, and a C compiler                            |
@@ -54,7 +38,7 @@ The others are off until you name them.
 For example:
 
 #+begin_src bash
-cargo add rgmin --features highs
+cargo add rgmin@0.6 --features highs
 #+end_src
 
 The ~slepc~, ~primme~, ~chase~ and ~libkrylov~ features each look for a library.
@@ -66,38 +50,17 @@ If the library is missing, the build still passes.
 That eigensolver kind then returns ~Error::EigenUnavailable~ at run time.
 Cargo prints the build warning for a dependency only with ~cargo build -vv~.
 
-** From the develop branch
+** From git
 
-Depend on the branch.
-Take ~eindir-core~ from the same git commit that ~develop~ pins:
+To build a commit that is not on crates.io, such as the tip of ~develop~, depend on the repository:
 
 #+begin_src bash
 cargo add rgmin --git https://github.com/OmniPotentRPC/rgmin --branch develop
-cargo add ndarray@0.17
-cargo add eindir-core --git https://github.com/HaoZeke/eindir.git --rev f3c42130bb389ba6cd6e4cfdc8b2e182f4a764e9
+cargo add ndarray@0.17 eindir-core@0.6
 #+end_src
 
-Do not add ~eindir-core@0.6~ from crates.io on this route.
-Cargo would build two copies of ~eindir-core~.
-An objective from the crates.io copy lacks the traits that ~rgmin~ takes from git.
-Then ~Solver::step~ does not compile.
-If ~develop~ moves to a new ~eindir-core~ commit, the ~eindir-core~ line in its ~Cargo.toml~ shows the new ~rev~.
-
-*** Features of develop
-
-No feature is on by default.
-
-| Feature | Adds                                                   | Needs                                                                |
-|---------+--------------------------------------------------------+----------------------------------------------------------------------|
-| ~capi~  | the C symbols behind ~include/rgmin.h~                 | nothing more                                                         |
-| ~par~   | rayon threads for long dot products and vector updates | nothing more                                                         |
-| ~highs~ | the HiGHS step of @@rst::doc:`highs-qp`@@              | CMake and a C++ compiler, since ~highs-sys~ builds HiGHS from source |
-
-For example:
-
-#+begin_src bash
-cargo add rgmin --git https://github.com/OmniPotentRPC/rgmin --branch develop --features highs
-#+end_src
+~develop~ also takes ~eindir-core~ 0.6 from crates.io, so this builds one copy of it as well.
+Releases are tagged ~vX.Y.Z~; ~--tag~ in place of ~--branch develop~ pins one.
 
 ** Check the install
 
@@ -105,30 +68,12 @@ cargo add rgmin --git https://github.com/OmniPotentRPC/rgmin --branch develop --
 cargo build
 #+end_src
 
-@@rst::doc:`../tutorials/quickstart`@@ is a first program that runs on either route.
-
-** For C and C++
-
-cargo-c builds and installs the C library and headers from a checkout.
-cargo-c needs a newer Rust than rgmin does: cargo-c 0.10.26 needs Rust 1.97.
-On Linux it also needs the OpenSSL headers, such as ~libssl-dev~ on Debian and Ubuntu.
-
-#+begin_src bash
-cargo install cargo-c --locked
-git clone https://github.com/OmniPotentRPC/rgmin.git
-cd rgmin
-git switch develop
-cargo cinstall --prefix=/usr/local --features capi
-#+end_src
-
-That installs the library, ~rgmin.h~, the C++ headers, ~dlpack/dlpack.h~ and the ~rgmin~ pkg-config file.
-To install the release instead, run ~git switch --detach v0.5.2~ in place of ~git switch develop~.
-@@rst::doc:`c-abi`@@ compiles against the installed headers.
+@@rst::doc:`../tutorials/quickstart`@@ is a first program.
 
 ** From a checkout
 
 A clone starts on ~main~.
-Switch to ~develop~ to test the code these pages describe:
+These pages describe ~develop~:
 
 #+begin_src bash
 git clone https://github.com/OmniPotentRPC/rgmin.git
@@ -143,3 +88,111 @@ They run ~python3~, or the interpreter named in ~PYTHON~, and that interpreter n
 #+begin_src bash
 PYTHON=python3.12 cargo test --features highs
 #+end_src
+
+** For C and C++ with cargo-c
+
+cargo-c builds and installs the C library, the headers and a pkg-config file from a checkout.
+rgmin needs cargo-c 0.10.17 or newer, the ~min_version~ in ~Cargo.toml~.
+Each cargo-c release needs a recent Rust: 0.10.17 builds with Rust 1.89, and 0.10.26 needs Rust 1.97.
+On Linux cargo-c also needs pkg-config and the OpenSSL headers, such as ~libssl-dev~ on Debian and Ubuntu.
+This is the cargo-c that CI installs:
+
+#+begin_src bash
+cargo +1.89.0 install cargo-c --locked --version 0.10.17+cargo-0.92.0
+#+end_src
+
+With Rust 1.97 or newer, ~cargo install cargo-c --locked~ installs the newest release instead.
+Then, in the checkout:
+
+#+begin_src bash
+cargo cinstall --prefix=/usr/local --features capi
+#+end_src
+
+~cargo cinstall~ builds in release mode.
+It installs ~librgmin~ as a shared and a static library, ~rgmin.h~, the C++ headers ~rgmin/optimize.hpp~ and ~rgbind/rgbind.hpp~, the ~xts~ headers, ~dlpack/dlpack.h~ and the ~rgmin~ pkg-config file.
+On Debian and Ubuntu the library and the pkg-config file go under the multiarch directory of the prefix, such as ~lib/x86_64-linux-gnu~.
+Compile a C program against the install with pkg-config:
+
+#+begin_src bash
+cc $(pkg-config --cflags rgmin) prog.c $(pkg-config --libs rgmin) -o prog
+#+end_src
+
+If the dynamic loader does not search that library directory, run the program with it in ~LD_LIBRARY_PATH~.
+
+@@rst::doc:`c-abi`@@ walks through the C calls.
+~tests/cinstall/smoke.sh~ is the check that CI runs: it installs into ~target/rgmin-cinstall~ and compiles a C and a C++ program.
+
+** For C and C++ with Meson
+
+The repository is also a Meson project.
+It needs Meson 1.3 or newer, Ninja, a C and a C++ compiler, Python 3, and Cargo with Rust 1.88 or newer.
+Meson runs Cargo to build ~librgmin~ and declares ~rgmin_dep~: the include directory, the static library, the system libraries it needs, and the define ~USE_RGMIN~.
+
+To use rgmin as a subproject, add ~subprojects/rgmin.wrap~ to your project:
+
+#+begin_src ini
+[wrap-git]
+url = https://github.com/OmniPotentRPC/rgmin.git
+revision = develop
+depth = 1
+
+[provide]
+dependency_names = rgmin
+#+end_src
+
+A release tag in ~revision~ pins that release.
+Then ask for the dependency in your ~meson.build~:
+
+#+begin_src meson
+rgmin_dep = dependency('rgmin')
+#+end_src
+
+The ~rgmin_features~ option holds the Cargo features, ~capi,highs~ by default.
+With ~highs~, the static library holds HiGHS, which is C++.
+A C++ target that links ~rgmin_dep~ gets the C++ standard library from its linker, and a C target does not and fails to link.
+~highs~ also needs a libclang new enough for the HiGHS headers.
+For a C program, or where libclang is missing, build only ~capi~:
+
+#+begin_src bash
+meson setup build -Drgmin:rgmin_features=capi
+meson compile -C build
+#+end_src
+
+A build of the repository itself makes ~librgmin.so~ and ~librgmin.a~:
+
+#+begin_src bash
+meson setup build
+meson compile -C build
+meson install -C build
+#+end_src
+
+~meson install~ installs the shared library only, with no headers or pkg-config file.
+Use cargo-c for a full install.
+
+** Python
+
+Neither Python package is on PyPI.
+Both build from a checkout and install a package named ~rgmin~, so an environment holds one of them.
+
+The repository root builds the free-threaded nanobind module ~rgmin._core~ with scikit-build-core.
+It needs a C++17 compiler, CMake 3.15 or newer, and Rust 1.88 or newer.
+CMake downloads Corrosion from GitHub while it configures.
+From the checkout:
+
+#+begin_src bash
+python -m pip install '.[ase]'
+#+end_src
+
+~python/~ builds the PyO3 module with maturin.
+It adds ~rgmin.optimize~, the ASE drop-in of @@rst::doc:`ase-migration`@@, and needs Rust 1.88 or newer:
+
+#+begin_src bash
+python -m pip install './python[ase]'
+#+end_src
+
+@@rst::doc:`python`@@ shows both.
+
+** LAMMPS plugin
+
+~lammps/~ builds ~min_style rgmin~, a plugin for LAMMPS 22Jul2025 or newer built with CMake and the ~PLUGIN~ package.
+@@rst::doc:`lammps-migration`@@ gives the build commands.

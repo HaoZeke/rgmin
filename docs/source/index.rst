@@ -52,11 +52,10 @@ crate's ``Solver``; they do not grow a second optimizer.
 
 .. code:: bash
 
-    cargo add rgmin ndarray@0.17
+    cargo add rgmin@0.6 ndarray@0.17
 
-That installs the 0.5.2 release.
-:doc:`howto/install` covers the ``develop`` branch and how it differs from the release.
-It also covers the features of each route, the C library and a checkout.
+That installs the 0.6 release on Rust 1.88 or newer.
+:doc:`howto/install` covers the features, the ``develop`` branch, the C library from cargo-c or Meson, the Python packages and the LAMMPS plugin.
 
 .. toctree::
    :maxdepth: 2
