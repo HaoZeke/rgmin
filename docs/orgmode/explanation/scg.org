@@ -1,4 +1,5 @@
 #+TITLE: Scaled conjugate gradients: a trust region in disguise
+#+OPTIONS: author:nil
 
 Moller's scaled conjugate gradient (~src/scg.rs~) is the odd member of
 the family: a conjugate-gradient method with no line search at all.

@@ -1,4 +1,5 @@
 #+TITLE: The proof ledger: theorems, code, tests
+#+OPTIONS: author:nil
 
 The Lean development under ~proofs/lean/Rgmin/~ pins the exact
 rational facts the solvers' termination and honesty arguments rest

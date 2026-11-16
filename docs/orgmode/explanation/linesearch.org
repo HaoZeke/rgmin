@@ -1,4 +1,5 @@
 #+TITLE: Why the line search terminates: brackets, cubics, and a guard
+#+OPTIONS: author:nil
 
 Every solver in this crate that follows a descent direction ~d~ from a
 point ~x~ reduces the problem to one dimension. Write the restriction

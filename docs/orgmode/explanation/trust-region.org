@@ -1,4 +1,5 @@
 #+TITLE: Trust regions and the Steihaug boundary
+#+OPTIONS: author:nil
 
 Line searches commit to a direction and haggle over the length. Trust
 regions invert the deal: fix a budget on the length, then ask for the

@@ -1,4 +1,5 @@
 #+TITLE: ASE drop-in benchmark
+#+OPTIONS: author:nil
 
 The median −0.012693 reported earlier for ASE LBFGS on LJ13 is not a
 minimum. That start was a corner of a cubic lattice at spacing 1.5,

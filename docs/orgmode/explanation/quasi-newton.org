@@ -1,4 +1,5 @@
 #+TITLE: The secant family: BFGS, its limited memory, and the session hooks
+#+OPTIONS: author:nil
 
 Newton's method prices a step at one Hessian solve; the secant family
 refuses to pay it. This page derives what the crate's quasi-Newton

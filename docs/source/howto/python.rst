@@ -27,7 +27,7 @@ Neither Python package is on PyPI. Build this one from the repository root; it n
 
 This binding's L-BFGS follows ASE's length control and keeps the pairs. ``LBFGS(eon_cap=True)`` selects the crate default, the line-search-free eOn cap. ``LBFGS(use_line_search=True)``, or ``LBFGSLineSearch``, selects rgmin's strong Wolfe search. Stubs live in ``python/rgmin/*.pyi`` and ``py.typed`` marks the package.
 
-``lowest_eigenpairs(hvp, x0_block)`` returns values, vectors, residual norms, and a converged flag for each of the k lowest pairs. ``hvp(x, v)`` is ``H(x) v``. ``precond`` applies ``T`` to a block. ``strict=False`` returns the flags instead of raising. :doc:`tutorials/eigenpairs` is the short example, and continuous integration runs it.
+``lowest_eigenpairs(hvp, x0_block)`` returns values, vectors, residual norms, and a converged flag for each of the k lowest pairs. ``hvp(x, v)`` is ``H(x) v``. ``precond`` applies ``T`` to a block. ``strict=False`` returns the flags instead of raising. :doc:`../tutorials/eigenpairs` is the short example, and continuous integration runs it.
 
 Nanobind wheel
 --------------

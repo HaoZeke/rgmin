@@ -1,4 +1,5 @@
 #+TITLE: Randomness only in the clock: the Nystrom preconditioner
+#+OPTIONS: author:nil
 
 The crate's one use of randomized numerical linear algebra is the
 Nystrom preconditioner for the matrix-free Newton path. The design
