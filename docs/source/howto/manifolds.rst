@@ -179,6 +179,78 @@ From C, ``rgmin_solver_set_power`` does the same for the tokens without shape pa
 Steepest descent, L-BFGS and the Newton-CG trust region step on a product unchanged.
 ``rtr::minimize_rtr`` runs the Riemannian trust region in the product metric with the full Riemannian Hessian, Weingarten term included.
 
+Subspace spheres, tangent metrics and gauges
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``ManifoldKind::sphere_within(basis)`` is the unit sphere of the span of the rows of ``basis``, and ``ManifoldKind::sphere_excluding(basis)`` the unit sphere orthogonal to them.
+The rows need not be orthonormal; dependent rows return ``Error::SubspaceBasis``.
+A unit normal over :math:`N` atoms that must not move their centre of mass excludes the three translations:
+
+.. code:: rust
+
+    use std::sync::Arc;
+
+    use ndarray::{Array1, Array2};
+    use rgmin::ManifoldKind;
+    use rgmin::manifold::{ProductFactor, ProductManifold, TangentMetric};
+    use rgmin::rtr::{RtrOptions, minimize_rtr_gauged};
+
+    let atoms = 4;
+    let n = 3 * atoms;
+    let mut translations = Array2::zeros((3, n));
+    for a in 0..atoms {
+        for k in 0..3 {
+            translations[[k, 3 * a + k]] = 1.0;
+        }
+    }
+    let normal = ManifoldKind::sphere_excluding(translations)?;
+
+A ``TangentMetric`` on a product factor makes its part of the metric :math:`w\, g(u, G_x v)` for an operator :math:`G_x` that maps each tangent space to itself and is self-adjoint and positive definite there.
+``egrad2rgrad`` then returns :math:`w^{-1} G_x^{-1}` times the factor's gradient, and ``rtr::minimize_rtr`` runs its trust region in this metric, with the iterates of truncated CG in the unweighted metric preconditioned by :math:`(w\, G_x)^{-1}`.
+Masses on a position factor are such a metric:
+
+.. code:: rust
+
+    struct Masses(Array1<f64>);
+
+    impl TangentMetric for Masses {
+        fn apply(&self, _x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+            &self.0 * v
+        }
+        fn solve(&self, _x: &Array1<f64>, r: &Array1<f64>) -> Array1<f64> {
+            r / &self.0
+        }
+    }
+
+    let masses = Array1::from_elem(n, 12.0);
+    let product = ProductManifold::new([
+        ProductFactor::new(ManifoldKind::Euclidean, n).with_metric(Arc::new(Masses(masses))),
+        ProductFactor::new(normal, n),
+    ])?;
+
+A product with a tangent metric returns ``None`` for the exponential, logarithm, distance and parallel transport, and a session refuses it with ``Error::ProductTangentMetric``; run it with ``rtr::minimize_rtr``.
+
+A gauge replaces the iterate with another representation of the same point, such as the pivot of a plane moved along the plane.
+``rtr::minimize_rtr_gauged`` calls it after every accepted step, with ``value``, ``egrad`` and ``ehess`` the cost and its Euclidean derivatives:
+
+.. code:: rust
+
+    let out = minimize_rtr_gauged(
+        &product,
+        x0,
+        |x| value(x),
+        |x| egrad(x),
+        |x, v| ehess(x, v),
+        |x| recentre(x),
+        RtrOptions::default(),
+    );
+
+The step is accepted on the value before the move, and the gradient is evaluated again at the moved point.
+``Solver::run_gauged(&objective, &mut x, gauge)`` calls the gauge before every session step but the first and rebases the session when it moves the point.
+
+``egrad`` and ``ehess`` may differentiate any smooth extension of the cost to the ambient space, the same one for both.
+The Riemannian Hessian adds the Weingarten term, which removes the dependence on the extension; :doc:`../explanation/product-manifold` derives the convention for spheres.
+
 Packing notes
 ~~~~~~~~~~~~~
 
