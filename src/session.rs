@@ -2811,7 +2811,7 @@ impl Solver {
                     accept: self.accept,
                     e_hist: &mut self.e_hist,
                     atom_maxmove: None,
-                    manifold: self.manifold,
+                    manifold: self.manifold.clone(),
                 },
                 false,
             );
