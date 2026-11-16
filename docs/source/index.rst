@@ -105,6 +105,7 @@ It also covers the features of each route, the C library and a checkout.
    explanation/step-bounds
    explanation/performance
    explanation/randomized
+   explanation/product-manifold
 
 .. toctree::
    :maxdepth: 2
