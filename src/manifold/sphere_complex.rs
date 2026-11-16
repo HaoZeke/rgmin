@@ -131,6 +131,50 @@ impl Manifold for SphereComplex {
     fn transport(&self, _x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         self.project(x_to, v)
     }
+
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        self.real(x.len())?.ehess2rhess(x, egrad, ehess, v)
+    }
+
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        self.real(x.len())?.exp(x, v)
+    }
+
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        self.real(x.len())?.log(x, y)
+    }
+
+    fn dist(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<f64> {
+        self.real(x.len())?.dist(x, y)
+    }
+
+    fn parallel_transport_along(
+        &self,
+        x: &Array1<f64>,
+        d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        self.real(x.len())?.parallel_transport_along(x, d, v)
+    }
+
+    fn typical_dist(&self, _n: usize) -> f64 {
+        typical_dist()
+    }
+}
+
+impl SphereComplex {
+    /// With the real part of the Hermitian product as the metric, the
+    /// interleaved unit sphere of \(\mathbb{C}^n\) is the real
+    /// \(S^{2n-1}\), so its geodesic quantities are the sphere's.
+    fn real(&self, len: usize) -> Option<super::Sphere> {
+        self.fits(len).then_some(super::Sphere)
+    }
 }
 
 #[cfg(test)]

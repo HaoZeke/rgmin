@@ -143,6 +143,49 @@ impl Manifold for ComplexCircle {
     fn transport(&self, _x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         self.project(x_to, v)
     }
+
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        self.circles(x.len())?.ehess2rhess(x, egrad, ehess, v)
+    }
+
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        self.circles(x.len())?.exp(x, v)
+    }
+
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        self.circles(x.len())?.log(x, y)
+    }
+
+    fn dist(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<f64> {
+        self.circles(x.len())?.dist(x, y)
+    }
+
+    fn parallel_transport_along(
+        &self,
+        x: &Array1<f64>,
+        d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        self.circles(x.len())?.parallel_transport_along(x, d, v)
+    }
+
+    fn typical_dist(&self, _n: usize) -> f64 {
+        std::f64::consts::PI * (self.n as f64).sqrt()
+    }
+}
+
+impl ComplexCircle {
+    /// The interleaved pairs are the columns of \(\mathrm{OB}(2, n)\), so
+    /// the geodesic quantities are that manifold's.
+    fn circles(&self, len: usize) -> Option<super::Oblique> {
+        self.fits(len).then_some(super::Oblique { n: 2, m: self.n })
+    }
 }
 
 #[cfg(test)]

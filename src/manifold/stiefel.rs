@@ -31,6 +31,41 @@ impl Manifold for Stiefel {
     fn transport(&self, x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         Sphere.transport(x_from, x_to, v)
     }
+
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        Sphere.ehess2rhess(x, egrad, ehess, v)
+    }
+
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        Sphere.exp(x, v)
+    }
+
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        Sphere.log(x, y)
+    }
+
+    fn dist(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<f64> {
+        Sphere.dist(x, y)
+    }
+
+    fn parallel_transport_along(
+        &self,
+        x: &Array1<f64>,
+        d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        Sphere.parallel_transport_along(x, d, v)
+    }
+
+    fn typical_dist(&self, n: usize) -> f64 {
+        Sphere.typical_dist(n)
+    }
 }
 
 /// Stiefel \(\mathrm{St}(n,p)\) for `p > 1`. Packed column-major, length `n*p`.
