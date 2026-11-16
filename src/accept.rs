@@ -45,7 +45,7 @@ pub(crate) fn retract_within_cap<O>(
     step: &Array1<f64>,
     atom_maxmove: Option<f64>,
     maxmove: Option<f64>,
-    manifold: ManifoldKind,
+    manifold: &ManifoldKind,
 ) -> Option<(Array1<f64>, Array1<f64>)>
 where
     O: DifferentiableObjective<f64> + ?Sized,
@@ -106,7 +106,7 @@ fn trial_point<O>(
     alpha: f64,
     control: &Control,
     atom_maxmove: Option<f64>,
-    manifold: ManifoldKind,
+    manifold: &ManifoldKind,
 ) -> Option<Array1<f64>>
 where
     O: DifferentiableObjective<f64> + ?Sized,
@@ -152,7 +152,7 @@ pub(crate) fn single_trial<O>(
     control: &Control,
     e_hist: &mut VecDeque<f64>,
     atom_maxmove: Option<f64>,
-    manifold: ManifoldKind,
+    manifold: &ManifoldKind,
 ) -> Trial
 where
     O: DifferentiableObjective<f64> + ?Sized,
@@ -217,7 +217,7 @@ where
     } = acceptance;
     match accept {
         Accept::None => {
-            match single_trial(obj, pos, dir, control, e_hist, atom_maxmove, manifold) {
+            match single_trial(obj, pos, dir, control, e_hist, atom_maxmove, &manifold) {
                 Trial::Accepted(trial, ft, gt) => (trial, ft, gt, true),
                 Trial::OffManifold | Trial::NonFinite => (pos.clone(), value, grad.clone(), false),
             }
@@ -232,7 +232,7 @@ where
             let mut alpha = 1.0;
             for _ in 0..HALVINGS {
                 if let Some(trial) =
-                    trial_point(obj, pos, dir, alpha, control, atom_maxmove, manifold)
+                    trial_point(obj, pos, dir, alpha, control, atom_maxmove, &manifold)
                 {
                     let (ft, gt) = obj.value_and_gradient(trial.view());
                     if finite(ft, gt.view()) && ft - ref_e <= ENERGY_RISE {
@@ -259,7 +259,7 @@ where
                 FALLBACK_STEP,
                 control,
                 atom_maxmove,
-                manifold,
+                &manifold,
             ) else {
                 return (pos.clone(), value, grad.clone(), false);
             };
@@ -502,7 +502,7 @@ mod tests {
                         scale_step(&pos, &mut expect, cap);
                     }
                     let expect = obj.bounds().clip(expect.view());
-                    let got = trial_point(&obj, &pos, &dir, 0.5, &control, atom, kind).unwrap();
+                    let got = trial_point(&obj, &pos, &dir, 0.5, &control, atom, &kind).unwrap();
                     assert_eq!(got, expect, "{kind:?} k={k} atom={atom:?} cap={maxmove:?}");
                 }
             }
@@ -514,7 +514,7 @@ mod tests {
         let obj = Boxed::new(array![-2.0, -0.01, -2.0], array![2.0, 2.0, 2.0]);
         let pos = array![1.0, 0.0, 0.0];
         let dir = array![0.0, -0.05, 0.0];
-        assert!(trial_point(&obj, &pos, &dir, 1.0, &ctrl(), None, ManifoldKind::Sphere).is_none());
+        assert!(trial_point(&obj, &pos, &dir, 1.0, &ctrl(), None, &ManifoldKind::Sphere).is_none());
         let mut hist = VecDeque::new();
         let (x, _, _, moved) = accept_step(
             &obj,

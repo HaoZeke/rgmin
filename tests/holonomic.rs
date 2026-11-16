@@ -513,7 +513,7 @@ fn refused_settings_are_typed() {
     ] {
         let mut s = Solver::new(Method::lbfgs(), control(), 9);
         s.set_distance_constraints(set.clone()).unwrap();
-        s.set_manifold(kind);
+        s.set_manifold(kind.clone());
         let mut y = x.clone();
         assert!(unsupported(s.step(&obj, &mut y)), "{kind:?}");
         assert_eq!(y, x);

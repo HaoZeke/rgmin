@@ -229,7 +229,7 @@ pub use symmetric::{
 };
 
 /// Which embedded geometry a session retracts onto.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ManifoldKind {
     /// Ambient Euclidean. Today's path.
     #[default]
@@ -348,9 +348,9 @@ impl ManifoldKind {
     }
 
     /// Stiefel column count. `p = 1` is the sphere.
-    pub fn stiefel_p(self) -> usize {
+    pub fn stiefel_p(&self) -> usize {
         match self {
-            Self::StiefelP { p, .. } => p,
+            Self::StiefelP { p, .. } => *p,
             _ => 1,
         }
     }
@@ -406,8 +406,8 @@ impl ManifoldKind {
 
     /// [`Manifold::project`] written back into `v`. The sphere does it
     /// without allocating, with the arithmetic of `Sphere::project`.
-    pub(crate) fn project_in_place(self, x: &Array1<f64>, v: &mut Array1<f64>) {
-        if self == Self::Sphere {
+    pub(crate) fn project_in_place(&self, x: &Array1<f64>, v: &mut Array1<f64>) {
+        if *self == Self::Sphere {
             let s: f64 = x.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
             v.zip_mut_with(x, |vi, &xi| *vi -= s * xi);
         } else {
@@ -418,7 +418,7 @@ impl ManifoldKind {
     /// `true` when the retraction keeps a straight step on the set, so a
     /// chord can be capped and clipped after it. A curved kind caps the
     /// tangent step before the retraction instead.
-    pub(crate) fn is_flat(self) -> bool {
+    pub(crate) fn is_flat(&self) -> bool {
         match self {
             Self::Euclidean
             | Self::RigidQuotient
@@ -445,7 +445,7 @@ impl ManifoldKind {
     }
 
     /// C ABI / INI token.
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Euclidean => "euclidean",
             Self::Sphere => "sphere",

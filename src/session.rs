@@ -1257,7 +1257,7 @@ impl Solver {
 
     /// Tangent projection. Periodic cells drop rotation (Sella `proj_rot`).
     fn project_vec(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
-        match self.manifold {
+        match &self.manifold {
             ManifoldKind::MwRigid => {
                 let mut w = v.clone();
                 let masses = self.masses.as_ref().and_then(|m| m.as_slice());
@@ -1440,7 +1440,7 @@ impl Solver {
     }
 
     fn horizontal_grad(&self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
-        let mut g = match self.manifold {
+        let mut g = match &self.manifold {
             ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => self.project_vec(x, grad),
             other => other.egrad2rgrad(x, grad),
         };
@@ -1462,7 +1462,7 @@ impl Solver {
         x_to: &Array1<f64>,
         v: &Array1<f64>,
     ) -> Array1<f64> {
-        match self.manifold {
+        match &self.manifold {
             ManifoldKind::RigidQuotient | ManifoldKind::MwRigid => self.project_vec(x_to, v),
             other => other.transport(x_from, x_to, v),
         }
@@ -1873,7 +1873,7 @@ impl Solver {
                 project_rigid: self.project_rigid,
                 precondition,
                 seed: self.steps as u64,
-                manifold: (!self.manifold.is_flat()).then_some(self.manifold),
+                manifold: (!self.manifold.is_flat()).then(|| self.manifold.clone()),
             },
             action,
         );
@@ -2861,7 +2861,7 @@ impl Solver {
                 accept: self.accept,
                 e_hist: &mut self.e_hist,
                 atom_maxmove: self.atom_maxmove,
-                manifold: self.manifold,
+                manifold: self.manifold.clone(),
             },
         );
         if moved {
@@ -2934,7 +2934,7 @@ impl Solver {
                 &dir,
                 self.atom_maxmove,
                 self.control.maxmove,
-                self.manifold,
+                &self.manifold,
             );
             let Some(pair) = fitted else {
                 // Refused before any oracle: a failed trust step.
@@ -3165,7 +3165,7 @@ impl Solver {
                         &self.control,
                         &mut self.e_hist,
                         self.atom_maxmove,
-                        self.manifold,
+                        &self.manifold,
                     );
                     let (npos, nval, ngrad) = match trial {
                         Trial::Accepted(npos, nval, ngrad) => (npos, nval, ngrad),
@@ -3215,7 +3215,7 @@ impl Solver {
                         accept: self.accept,
                         e_hist: &mut self.e_hist,
                         atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold,
+                        manifold: self.manifold.clone(),
                     },
                 );
                 *x = npos;
@@ -3261,7 +3261,7 @@ impl Solver {
                         accept: self.accept,
                         e_hist: &mut self.e_hist,
                         atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold,
+                        manifold: self.manifold.clone(),
                     },
                 );
                 *x = npos;
@@ -3341,7 +3341,7 @@ impl Solver {
                         accept: self.accept,
                         e_hist: &mut self.e_hist,
                         atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold,
+                        manifold: self.manifold.clone(),
                     },
                 );
                 *x = npos;
@@ -3384,7 +3384,7 @@ impl Solver {
                         accept: self.accept,
                         e_hist: &mut self.e_hist,
                         atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold,
+                        manifold: self.manifold.clone(),
                     },
                 );
                 *x = npos;
@@ -3428,7 +3428,7 @@ impl Solver {
                         accept: self.accept,
                         e_hist: &mut self.e_hist,
                         atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold,
+                        manifold: self.manifold.clone(),
                     },
                 );
                 *x = npos;
@@ -3472,7 +3472,7 @@ impl Solver {
                         accept: self.accept,
                         e_hist: &mut self.e_hist,
                         atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold,
+                        manifold: self.manifold.clone(),
                     },
                 );
                 *x = npos;
@@ -3488,7 +3488,7 @@ impl Solver {
                 let mut raw = grad.mapv(|g| -g);
                 project_box_tangent(obj.bounds(), x, &mut raw);
                 project_box_tangent(obj.bounds(), x, &mut state.vel);
-                let manifold = self.manifold;
+                let manifold = self.manifold.clone();
                 let curved = !manifold.is_flat();
                 match fire_prepare_v2(state, &raw) {
                     FirePreparation::Ready => {}
@@ -3496,7 +3496,7 @@ impl Solver {
                         if curved {
                             let back = manifold.project(x, &correction);
                             let Some((point, _)) =
-                                retract_within_cap(obj, x, &back, None, None, manifold)
+                                retract_within_cap(obj, x, &back, None, None, &manifold)
                             else {
                                 state.restore(saved);
                                 *x = start;
@@ -3549,7 +3549,7 @@ impl Solver {
                 let trial = if curved {
                     let tangent = manifold.project(x, &dx);
                     let Some((trial, _)) =
-                        retract_within_cap(obj, x, &tangent, atom_cap, cap, manifold)
+                        retract_within_cap(obj, x, &tangent, atom_cap, cap, &manifold)
                     else {
                         state.restore(saved);
                         *x = start;
@@ -3617,7 +3617,7 @@ impl Solver {
                         accept: self.accept,
                         e_hist: &mut self.e_hist,
                         atom_maxmove: self.atom_maxmove,
-                        manifold: self.manifold,
+                        manifold: self.manifold.clone(),
                     },
                 );
                 *x = npos;
@@ -4315,7 +4315,7 @@ mod tests {
         radii: [f64; 3],
     ) {
         let mut solver = Solver::new(Method::Dogleg, Control::default(), x.len());
-        solver.set_manifold(kind);
+        solver.set_manifold(kind.clone());
         for radius in radii {
             let s = solver.dogleg_point(x, hess, grad, radius);
             let residual = l2(&(&s - &kind.project(x, &s)));
