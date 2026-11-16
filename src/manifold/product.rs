@@ -1,0 +1,568 @@
+//! Weighted Riemannian product \(\mathcal{M} = \mathcal{M}_1 \times \cdots
+//! \times \mathcal{M}_k\).
+//!
+//! A point packs the factor points end to end. The metric is
+//! \(g = \sum_i w_i\, g_i\) with every \(w_i > 0\), so the tangent space
+//! splits into orthogonal blocks. Projection, retraction, vector and
+//! parallel transport, exponential and logarithm act factor by factor.
+//! The weights enter the inner product, the Riemannian gradient
+//! \((w_i^{-1}\,\mathrm{grad}_i f)_i\), the Hessian
+//! \((w_i^{-1}\,\mathrm{Hess}_i f)_i\), the distance
+//! \(\sqrt{\sum_i w_i d_i^2}\) and the typical distance. All weights one
+//! is the product of manopt `productmanifold`, Manopt.jl
+//! `ProductManifold`, pymanopt `Product` and geomstats
+//! `ProductRiemannianMetric`.
+//!
+//! The map \(z_i = \sqrt{w_i}\,x_i\) is an isometry onto the product of
+//! the scaled factors \(\sqrt{w_i}\,\mathcal{M}_i\) with unit weights.
+//! There the metric of every embedded factor is the Euclidean one of the
+//! packed vector, which is the metric the session steppers assume; see
+//! [`ProductManifold::chart`]. A block stores \(s_i x_i\) for a factor
+//! point \(x_i\) and carries the metric \(c_i\, g_i\) in those
+//! coordinates, with \(c_i s_i^2 = w_i\): \(s_i = 1, c_i = w_i\) in natural
+//! coordinates and \(s_i = \sqrt{w_i}, c_i = 1\) in the chart.
+//!
+//! The derivation is the explanation page `product-manifold`.
+//! Absil, Mahony, Sepulchre, *Optimization Algorithms on Matrix
+//! Manifolds*, <https://doi.org/10.1515/9781400830244>.
+//! Boumal, *An Introduction to Optimization on Smooth Manifolds*,
+//! <https://doi.org/10.1017/9781009166164>.
+
+use std::ops::Range;
+
+use ndarray::{Array1, s};
+
+use crate::error::{Error, Result};
+
+use super::{Manifold, ManifoldKind};
+
+/// One factor of a [`ProductManifold`]: a geometry, its packed length
+/// and its metric weight.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ProductFactor {
+    /// Geometry of the factor.
+    pub kind: ManifoldKind,
+    /// Packed length of a factor point.
+    pub len: usize,
+    /// Weight \(w_i > 0\) of the factor metric in the product metric.
+    pub weight: f64,
+}
+
+impl Default for ProductFactor {
+    fn default() -> Self {
+        Self {
+            kind: ManifoldKind::Euclidean,
+            len: 1,
+            weight: 1.0,
+        }
+    }
+}
+
+impl ProductFactor {
+    /// `kind` at packed length `len`, weight one.
+    pub fn new(kind: ManifoldKind, len: usize) -> Self {
+        Self {
+            kind,
+            len,
+            weight: 1.0,
+        }
+    }
+
+    /// Set the geometry.
+    pub fn with_kind(mut self, kind: ManifoldKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Set the packed length.
+    pub fn with_len(mut self, len: usize) -> Self {
+        self.len = len;
+        self
+    }
+
+    /// Set the metric weight.
+    pub fn with_weight(mut self, weight: f64) -> Self {
+        self.weight = weight;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Block {
+    kind: ManifoldKind,
+    start: usize,
+    len: usize,
+    /// \(c_i\): multiplier of the factor metric in stored coordinates.
+    metric: f64,
+    /// \(s_i\): the block stores \(s_i x_i\).
+    scale: f64,
+}
+
+impl Block {
+    fn range(&self) -> Range<usize> {
+        self.start..self.start + self.len
+    }
+
+    fn weight(&self) -> f64 {
+        self.metric * self.scale * self.scale
+    }
+
+    fn part(&self, a: &Array1<f64>) -> Array1<f64> {
+        a.slice(s![self.range()]).to_owned()
+    }
+
+    /// The block divided by \(s_i\): a factor point from a stored point,
+    /// or a factor tangent from a stored tangent.
+    fn unscale(&self, a: &Array1<f64>) -> Array1<f64> {
+        let v = a.slice(s![self.range()]);
+        if self.scale == 1.0 {
+            v.to_owned()
+        } else {
+            v.mapv(|e| e / self.scale)
+        }
+    }
+
+    fn rescale(&self, mut a: Array1<f64>) -> Array1<f64> {
+        if self.scale != 1.0 {
+            a.mapv_inplace(|e| e * self.scale);
+        }
+        a
+    }
+
+    fn over_metric(&self, mut a: Array1<f64>) -> Array1<f64> {
+        if self.metric != 1.0 {
+            a.mapv_inplace(|e| e / self.metric);
+        }
+        a
+    }
+}
+
+/// Weighted Riemannian product of [`ManifoldKind`] factors, packed end to
+/// end. Nested products are flattened; their weights multiply.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProductManifold {
+    blocks: Vec<Block>,
+    len: usize,
+}
+
+// Weights and scales are validated finite and positive, never NaN.
+impl Eq for ProductManifold {}
+
+impl ProductManifold {
+    /// Product of `factors` in packing order.
+    ///
+    /// Fails with [`Error::ProductFactor`] when there is no factor, a
+    /// weight is not finite and positive, or a length is zero or does
+    /// not fit its kind.
+    pub fn new<I>(factors: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = ProductFactor>,
+    {
+        let mut blocks = Vec::new();
+        let mut len = 0usize;
+        for (index, factor) in factors.into_iter().enumerate() {
+            let refuse = |what| Error::ProductFactor { index, what };
+            if !(factor.weight.is_finite() && factor.weight > 0.0) {
+                return Err(refuse("weight must be finite and positive"));
+            }
+            if factor.len == 0 {
+                return Err(refuse("packed length must be positive"));
+            }
+            if factor.kind.required_dim(factor.len).is_err() {
+                return Err(refuse("packed length does not fit the kind"));
+            }
+            match &factor.kind {
+                ManifoldKind::Product(inner) => {
+                    for b in &inner.blocks {
+                        blocks.push(Block {
+                            kind: b.kind.clone(),
+                            start: len + b.start,
+                            len: b.len,
+                            metric: factor.weight * b.metric,
+                            scale: b.scale,
+                        });
+                    }
+                }
+                kind => blocks.push(Block {
+                    kind: kind.clone(),
+                    start: len,
+                    len: factor.len,
+                    metric: factor.weight,
+                    scale: 1.0,
+                }),
+            }
+            len = len
+                .checked_add(factor.len)
+                .ok_or_else(|| refuse("packed length overflows"))?;
+        }
+        if blocks.is_empty() {
+            return Err(Error::ProductFactor {
+                index: 0,
+                what: "a product needs at least one factor",
+            });
+        }
+        Ok(Self { blocks, len })
+    }
+
+    /// manopt `powermanifold`: `count` unit-weight copies of `kind`, each
+    /// of packed length `block`.
+    pub fn power(kind: ManifoldKind, block: usize, count: usize) -> Result<Self> {
+        if count == 0 {
+            return Err(Error::ProductFactor {
+                index: 0,
+                what: "a power needs at least one copy",
+            });
+        }
+        Self::new(std::iter::repeat_n(ProductFactor::new(kind, block), count))
+    }
+
+    /// Packed length of a point.
+    pub fn packed_len(&self) -> usize {
+        self.len
+    }
+
+    /// Number of factors after flattening.
+    pub fn factor_count(&self) -> usize {
+        self.blocks.len()
+    }
+
+    /// Factors after flattening, with their weights in the metric.
+    pub fn factors(&self) -> Vec<ProductFactor> {
+        self.blocks
+            .iter()
+            .map(|b| ProductFactor::new(b.kind.clone(), b.len).with_weight(b.weight()))
+            .collect()
+    }
+
+    /// Slice of the packed vector that holds factor `index`.
+    pub fn range(&self, index: usize) -> Option<Range<usize>> {
+        self.blocks.get(index).map(Block::range)
+    }
+
+    /// `true` when every factor keeps a straight step on its set.
+    pub fn is_flat(&self) -> bool {
+        self.blocks.iter().all(|b| b.kind.is_flat())
+    }
+
+    /// `true` when every factor carries its own metric with weight one in
+    /// these coordinates, so the chart is the identity.
+    pub fn is_chart(&self) -> bool {
+        self.blocks.iter().all(|b| b.metric == 1.0)
+    }
+
+    /// Per-coordinate factor \(\sqrt{c_i}\) of the isometric chart: the
+    /// point `x` of this product is the point `d * x` of [`Self::chart`],
+    /// tangent vectors map the same way, and a Euclidean gradient maps
+    /// as `g / d`.
+    pub fn chart_scales(&self) -> Array1<f64> {
+        let mut d = Array1::ones(self.len);
+        for b in &self.blocks {
+            d.slice_mut(s![b.range()]).fill(b.metric.sqrt());
+        }
+        d
+    }
+
+    /// The same Riemannian manifold in the coordinates \(z_i =
+    /// \sqrt{w_i}\,x_i\), where every factor has weight one and the
+    /// metric of an embedded factor is the Euclidean inner product of the
+    /// packed vector.
+    pub fn chart(&self) -> Self {
+        let blocks = self
+            .blocks
+            .iter()
+            .map(|b| Block {
+                metric: 1.0,
+                scale: b.scale * b.metric.sqrt(),
+                ..b.clone()
+            })
+            .collect();
+        Self {
+            blocks,
+            len: self.len,
+        }
+    }
+
+    fn fits(&self, arrays: &[&Array1<f64>]) -> bool {
+        arrays.iter().all(|a| a.len() == self.len)
+    }
+
+    /// Assemble the blocks `op` returns. `None` as soon as one is `None`
+    /// or has the wrong length.
+    fn assemble<F>(&self, mut op: F) -> Option<Array1<f64>>
+    where
+        F: FnMut(&Block) -> Option<Array1<f64>>,
+    {
+        let mut out = Array1::zeros(self.len);
+        for b in &self.blocks {
+            let part = op(b)?;
+            if part.len() != b.len {
+                return None;
+            }
+            out.slice_mut(s![b.range()]).assign(&part);
+        }
+        Some(out)
+    }
+}
+
+impl Manifold for ProductManifold {
+    fn required_dim(&self, n: usize) -> std::result::Result<(), usize> {
+        if n == self.len { Ok(()) } else { Err(self.len) }
+    }
+
+    fn project(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+        if !self.fits(&[x, v]) {
+            return v.clone();
+        }
+        self.assemble(|b| Some(b.kind.project(&b.unscale(x), &b.part(v))))
+            .unwrap_or_else(|| v.clone())
+    }
+
+    fn egrad2rgrad(&self, x: &Array1<f64>, egrad: &Array1<f64>) -> Array1<f64> {
+        if !self.fits(&[x, egrad]) {
+            return egrad.clone();
+        }
+        self.assemble(|b| Some(b.over_metric(b.kind.egrad2rgrad(&b.unscale(x), &b.part(egrad)))))
+            .unwrap_or_else(|| egrad.clone())
+    }
+
+    fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+        if !self.fits(&[x, v]) {
+            return x.clone();
+        }
+        self.assemble(|b| {
+            let step = b.kind.retract(&b.unscale(x), &b.unscale(v));
+            Some(b.rescale(step))
+        })
+        .unwrap_or_else(|| x.clone())
+    }
+
+    fn transport(&self, x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+        if !self.fits(&[x_from, x_to, v]) {
+            return v.clone();
+        }
+        self.assemble(|b| {
+            Some(
+                b.kind
+                    .transport(&b.unscale(x_from), &b.unscale(x_to), &b.part(v)),
+            )
+        })
+        .unwrap_or_else(|| v.clone())
+    }
+
+    fn inner(&self, x: &Array1<f64>, u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        if !self.fits(&[x, u, v]) {
+            return f64::NAN;
+        }
+        self.blocks
+            .iter()
+            .map(|b| b.metric * b.kind.inner(&b.unscale(x), &b.part(u), &b.part(v)))
+            .sum()
+    }
+
+    fn norm(&self, x: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        let q = self.inner(x, v, v);
+        if q.is_nan() { q } else { q.max(0.0).sqrt() }
+    }
+
+    /// Blockwise \(c_i^{-1}\,\mathrm{Hess}_i\) at the factor point, with
+    /// the factor gradient \(\nabla_i f / s_i\): the Weingarten term of
+    /// the scaled factor \(s_i \mathcal{M}_i\) is \(1/s_i\) times the
+    /// unit one.
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        if !self.fits(&[x, egrad, ehess, v]) {
+            return None;
+        }
+        self.assemble(|b| {
+            let h =
+                b.kind
+                    .ehess2rhess(&b.unscale(x), &b.unscale(egrad), &b.part(ehess), &b.part(v))?;
+            Some(b.over_metric(h))
+        })
+    }
+
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        if !self.fits(&[x, v]) {
+            return None;
+        }
+        self.assemble(|b| Some(b.rescale(b.kind.exp(&b.unscale(x), &b.unscale(v))?)))
+    }
+
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        if !self.fits(&[x, y]) {
+            return None;
+        }
+        self.assemble(|b| Some(b.rescale(b.kind.log(&b.unscale(x), &b.unscale(y))?)))
+    }
+
+    fn dist(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<f64> {
+        if !self.fits(&[x, y]) {
+            return None;
+        }
+        let mut sum = 0.0;
+        for b in &self.blocks {
+            let d = b.kind.dist(&b.unscale(x), &b.unscale(y))?;
+            sum += b.weight() * d * d;
+        }
+        Some(sum.sqrt())
+    }
+
+    fn parallel_transport_along(
+        &self,
+        x: &Array1<f64>,
+        d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        if !self.fits(&[x, d, v]) {
+            return None;
+        }
+        self.assemble(|b| {
+            b.kind
+                .parallel_transport_along(&b.unscale(x), &b.unscale(d), &b.part(v))
+        })
+    }
+
+    fn parallel_transport(
+        &self,
+        x_from: &Array1<f64>,
+        x_to: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        if !self.fits(&[x_from, x_to, v]) {
+            return None;
+        }
+        self.assemble(|b| {
+            b.kind
+                .parallel_transport(&b.unscale(x_from), &b.unscale(x_to), &b.part(v))
+        })
+    }
+
+    fn transport_is_isometric(&self) -> bool {
+        self.blocks.iter().all(|b| b.kind.transport_is_isometric())
+    }
+
+    /// \(\sqrt{\sum_i w_i\,\mathrm{typicaldist}_i^2}\); manopt's at unit
+    /// weights.
+    fn typical_dist(&self, _n: usize) -> f64 {
+        self.blocks
+            .iter()
+            .map(|b| {
+                let t = b.kind.typical_dist(b.len);
+                b.weight() * t * t
+            })
+            .sum::<f64>()
+            .sqrt()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vecops::dot;
+    use ndarray::array;
+
+    fn hyperplane(wp: f64, wn: f64) -> ProductManifold {
+        ProductManifold::new([
+            ProductFactor::new(ManifoldKind::Euclidean, 3).with_weight(wp),
+            ProductFactor::new(ManifoldKind::Sphere, 3).with_weight(wn),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn inner_is_the_weighted_sum() {
+        let m = hyperplane(4.0, 0.25);
+        let x = array![1.0, 2.0, 3.0, 0.0, 0.6, 0.8];
+        let u = array![1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let v = array![2.0, 1.0, 0.0, 3.0, 0.0, 0.0];
+        assert!((m.inner(&x, &u, &v) - (4.0 * 2.0 + 0.25 * 3.0)).abs() < 1e-15);
+        assert!((m.norm(&x, &u) - (4.25_f64).sqrt()).abs() < 1e-15);
+    }
+
+    #[test]
+    fn rgrad_represents_the_differential() {
+        let m = hyperplane(4.0, 0.25);
+        let x = array![1.0, 2.0, 3.0, 0.0, 0.6, 0.8];
+        let g = array![0.3, -1.0, 2.0, 0.5, -0.2, 0.7];
+        let r = m.egrad2rgrad(&x, &g);
+        for v in [
+            array![1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            array![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            array![0.0, 1.0, -1.0, 0.0, 0.8, -0.6],
+        ] {
+            let t = m.project(&x, &v);
+            assert!((m.inner(&x, &r, &t) - dot(g.view(), t.view())).abs() < 1e-14);
+        }
+        assert!((r[0] - 0.3 / 4.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn nested_products_flatten_and_weights_multiply() {
+        let inner = ManifoldKind::Product(std::sync::Arc::new(hyperplane(2.0, 3.0)));
+        let outer = ProductManifold::new([
+            ProductFactor::new(inner, 6).with_weight(5.0),
+            ProductFactor::new(ManifoldKind::So3, 9),
+        ])
+        .unwrap();
+        assert_eq!(outer.factor_count(), 3);
+        assert_eq!(outer.packed_len(), 15);
+        let weights: Vec<f64> = outer.factors().iter().map(|f| f.weight).collect();
+        assert_eq!(weights, vec![10.0, 15.0, 1.0]);
+        assert_eq!(outer.range(2), Some(6..15));
+    }
+
+    #[test]
+    fn construction_refuses_bad_factors() {
+        let bad_weight = ProductFactor::new(ManifoldKind::Sphere, 3).with_weight(0.0);
+        assert!(matches!(
+            ProductManifold::new([bad_weight]),
+            Err(Error::ProductFactor { index: 0, .. })
+        ));
+        let bad_len = ProductFactor::new(ManifoldKind::So3, 8);
+        assert!(matches!(
+            ProductManifold::new([ProductFactor::default(), bad_len]),
+            Err(Error::ProductFactor { index: 1, .. })
+        ));
+        assert!(ProductManifold::new([]).is_err());
+        assert!(ProductManifold::power(ManifoldKind::Sphere, 3, 0).is_err());
+    }
+
+    #[test]
+    fn the_chart_is_an_isometry() {
+        let m = hyperplane(9.0, 0.04);
+        let c = m.chart();
+        assert!(c.is_chart() && !m.is_chart());
+        let d = m.chart_scales();
+        let x = array![1.0, 2.0, 3.0, 0.0, 0.6, 0.8];
+        let u = m.project(&x, &array![0.1, 0.2, -0.3, 0.4, 0.5, -0.6]);
+        let v = m.project(&x, &array![-0.2, 0.0, 0.5, 1.0, -0.3, 0.1]);
+        let z = &x * &d;
+        let (uz, vz) = (&u * &d, &v * &d);
+        assert!((m.inner(&x, &u, &v) - dot(uz.view(), vz.view())).abs() < 1e-14);
+        assert!((c.inner(&z, &uz, &vz) - m.inner(&x, &u, &v)).abs() < 1e-14);
+        let y = m.retract(&x, &u);
+        let yz = c.retract(&z, &uz);
+        assert!((&yz - &(&y * &d)).mapv(f64::abs).sum() < 1e-14);
+        let g = array![0.3, -1.0, 2.0, 0.5, -0.2, 0.7];
+        let rz = c.egrad2rgrad(&z, &(&g / &d));
+        let r = m.egrad2rgrad(&x, &g);
+        assert!((&rz - &(&r * &d)).mapv(f64::abs).sum() < 1e-14);
+        let dz = c.dist(&z, &yz).unwrap();
+        assert!((dz - m.dist(&x, &y).unwrap()).abs() < 1e-14);
+    }
+
+    #[test]
+    fn power_is_a_unit_weight_product() {
+        let p = ProductManifold::power(ManifoldKind::Sphere, 3, 4).unwrap();
+        assert_eq!(p.packed_len(), 12);
+        assert!(p.is_chart());
+        assert!(p.factors().iter().all(|f| f.weight == 1.0 && f.len == 3));
+        assert!((p.typical_dist(12) - 2.0 * std::f64::consts::PI).abs() < 1e-12);
+    }
+}

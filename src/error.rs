@@ -146,6 +146,14 @@ pub enum Error {
         /// What was refused.
         what: &'static str,
     },
+    /// [`crate::manifold::ProductManifold::new`] refused a factor.
+    #[error("product factor {index}: {what}")]
+    ProductFactor {
+        /// Position of the factor in the list.
+        index: usize,
+        /// What was refused.
+        what: &'static str,
+    },
 }
 
 /// Result alias for this crate.
