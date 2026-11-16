@@ -34,11 +34,12 @@ without a callback shim in each consumer.
 CPU f64 is wired now. A non-CPU tensor returns `RGMIN_UNSUPPORTED_DEVICE`
 so a CUDA path does not change the ABI.
 
-The production unconstrained local method is [`Lbfgs`] with the strong
-Wolfe line search. `LbfgsStep::Capped` opts into the eOn cap: the
-longest atom move is at most 0.2, the first step probes curvature, and
-a longer proposal clears the memory. `LbfgsStep::Scaled` shortens the
-quasi-Newton step and keeps the pairs.
+The production unconstrained local method is [`Lbfgs`] with the eOn cap.
+That step is the default, `LbfgsStep::Capped` at 0.2, and it runs no
+line search: the longest atom move is at most 0.2, the first step probes
+curvature, and a longer proposal clears the memory.
+`LbfgsStep::Wolfe` opts into the strong Wolfe line search.
+`LbfgsStep::Scaled` shortens the quasi-Newton step and keeps the pairs.
 anneal `WarmLbfgs` holds
 that type so hopping does not ship a second two-loop. Feature `highs` keeps the two-loop direction and projects it with
 HiGHS (`Q = I`) onto a box, trust region, or equalities.
@@ -59,10 +60,11 @@ Packwood et al., J. Chem. Phys. 144, 164109 (2016).
 `rgmin_linesearch` (ABI minor 37) takes a caller-supplied energy and gradient.
 `lbfgs_direction` (ABI minor 38) applies a caller-supplied initial inverse Hessian.
 `lowest_eigenpairs` (ABI minor 39) is block LOBPCG for the k lowest pairs.
-Line search: Brent, Armijo, Goldstein, strong Wolfe with zoom; a
-session defaults to strong Wolfe, starts every search from the value and
-gradient it holds, and bounds trials by the displacement cap
-(`LineSearch::search_from`). FIRE 2.0 as Guénolé et al. 2020 publish it
+A session's line search defaults to strong Wolfe. Steepest descent,
+NLCG, BFGS, Adam, DIIS, and L-BFGS after `LbfgsStep::Wolfe` use it; the
+default L-BFGS step does not search a line. Each search starts from the
+value and gradient the session holds and bounds trials by the
+displacement cap (`LineSearch::search_from`). FIRE 2.0 as Guénolé et al. 2020 publish it
 is `Solver::set_fire_variant(FireVariant::Guenole2020)`. Quick-min
 (`Method::QuickMin`) runs eOn's step with
 `Solver::set_quickmin_options(QuickMinOptions::eon())` and one

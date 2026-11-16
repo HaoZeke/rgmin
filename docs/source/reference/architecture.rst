@@ -45,8 +45,9 @@ Objects
     Cold-start dispatch for every ``Method``.
 
 ``LineSearch::Wolfe``
-    Nocedal-Wright 3.5 / 3.6. Default production
-    choice for quasi-Newton directions.
+    Nocedal-Wright 3.5 / 3.6. The default line
+    search of a session's line-searched methods, BFGS among them. The
+    default L-BFGS step does not search a line.
 
 ``Oracle``
     Closure adapter that implements

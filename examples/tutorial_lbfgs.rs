@@ -1,4 +1,4 @@
-//! Default L-BFGS is the strong Wolfe search. `Lbfgs::capped` is the eOn cap.
+//! Default L-BFGS is the eOn cap, with no line search. `Lbfgs::capped` sets the cap.
 //!
 //! `cargo run --example tutorial_lbfgs`
 
