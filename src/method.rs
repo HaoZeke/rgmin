@@ -113,11 +113,24 @@ pub enum Method {
     Bb,
     /// Powell dogleg on a caller-supplied dense Hessian.
     ///
+    /// On a curved manifold kind the model is the Hessian compressed to
+    /// the tangent space, without the Weingarten term of
+    /// [`crate::manifold::Manifold::ehess2rhess`]. It is the Riemannian
+    /// Hessian when the gradient has no normal part, as for the
+    /// degree-zero extension `f(x / |x|)` of a cost on the sphere.
+    ///
     /// Nocedal and Wright, algorithm 4.1,
     /// <https://doi.org/10.1007/978-0-387-40065-5>.
     Dogleg,
     /// Steihaug-Toint Newton-CG. Hessian access is a product `H v`,
     /// never a dense matrix.
+    ///
+    /// On a curved manifold kind the model is `P H P + (I - P)` for the
+    /// tangent projection `P`, without the Weingarten term of
+    /// [`crate::manifold::Manifold::ehess2rhess`]. That is exact for the
+    /// degree-zero extension `f(x / |x|)` of a cost on the sphere; with
+    /// another extension the model is off by the normal gradient and the
+    /// final rate is linear. [`crate::rtr::minimize_rtr`] keeps the term.
     ///
     /// Steihaug, *The Conjugate Gradient Method and Trust Regions in
     /// Large Scale Optimization*,
@@ -127,7 +140,8 @@ pub enum Method {
     NewtonCg,
     /// Steihaug-Toint Newton-CG with a Nyström preconditioner
     /// ([`crate::NystromPrecond`], rank 16) rebuilt at the current point.
-    /// The trust ceiling stays Euclidean.
+    /// The trust ceiling stays Euclidean. On a curved kind the model is
+    /// that of [`Self::NewtonCg`].
     ///
     /// Steihaug, <https://doi.org/10.1137/0720042>.
     /// Nocedal and Wright, chapter 7,
