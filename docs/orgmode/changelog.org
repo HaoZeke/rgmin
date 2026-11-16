@@ -6,6 +6,10 @@
 
 ** Unreleased
 
+~rgmin.optimize~ is a drop-in for ~ase.optimize~ on the maturin session.
+~BFGS~, ~LBFGS~, ~LBFGSLineSearch~, ~FIRE~ and ~FIRE2~ take ASE's constructor and drive ~self.optimizable~.
+~Adam~ takes ~learning_rate~ as the session step scale. ~Session~ takes ~h0~, ~maxmove~, ~preset~, ~abc~, ~accept~ and ~istep~.
+
 ~Solver::set_lbfgs_trust_radius~ truncates the L-BFGS ray and updates the radius by Burdakov's Algorithm 1.
 It is off by default. ~set_lbfgs_trust~ stays the eOn Newton-model radius.
 The capped step stays the default until the radius is on. C: ~rgmin_solver_set_lbfgs_trust~, ~abi_minor~ 45.

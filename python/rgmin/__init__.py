@@ -21,10 +21,39 @@ __version__ = getattr(_core, "__version__", None)
 if __version__ is None:
     __version__ = getattr(_core, "version", None)
 
+_OPTIMIZERS = frozenset(
+    {
+        "Adam",
+        "BFGS",
+        "BarzilaiBorwein",
+        "CG",
+        "ConjugateDescent",
+        "DaiYuan",
+        "EonCG",
+        "FIRE",
+        "FIRE2",
+        "FRPR",
+        "FletcherReeves",
+        "HagerZhang",
+        "HestenesStiefel",
+        "LBFGS",
+        "LBFGSLineSearch",
+        "LiuStorey",
+        "NewtonCG",
+        "NewtonPCG",
+        "PolakRibiere",
+        "SR1",
+        "SR2",
+        "SteepestDescent",
+    }
+)
+
 _EXPORTS = [
     "BFGS",
     "FIRE",
+    "FIRE2",
     "LBFGS",
+    "LBFGSLineSearch",
     "LbfgsPairs",
     "LineSearch",
     "Method",
@@ -143,7 +172,7 @@ class SolverConfig(_SolverConfigBase):
 
 
 def __getattr__(name: str):
-    if name in {"BFGS", "FIRE", "LBFGS"}:
+    if name in _OPTIMIZERS:
         from rgmin import optimize
 
         return getattr(optimize, name)
