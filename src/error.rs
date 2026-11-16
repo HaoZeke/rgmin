@@ -161,6 +161,12 @@ pub enum Error {
         /// The refused setting.
         what: &'static str,
     },
+    /// [`crate::manifold::SubspaceSphere`] refused its basis.
+    #[error("subspace sphere: {what}")]
+    SubspaceBasis {
+        /// What was refused.
+        what: &'static str,
+    },
 }
 
 /// Result alias for this crate.

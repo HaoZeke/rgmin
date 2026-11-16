@@ -26,10 +26,12 @@
 //! [`ManifoldKind::CenteredMatrix`] is manopt `centeredmatrixfactory`.
 //! [`ManifoldKind::Product`] is manopt `productmanifold` with a weight on
 //! each factor metric; [`ManifoldKind::power`] is `powermanifold`.
+//! [`ManifoldKind::SubspaceSphere`] is the unit sphere of a linear
+//! subspace.
 
 use std::sync::Arc;
 
-use ndarray::Array1;
+use ndarray::{Array1, Array2};
 
 /// Bind the geometry a [`ManifoldKind`] names to `$f` and evaluate `$body`.
 macro_rules! with_kind {
@@ -127,6 +129,10 @@ macro_rules! with_kind {
                 let $f: &ProductManifold = product;
                 $body
             }
+            ManifoldKind::SubspaceSphere(sphere) => {
+                let $f: &SubspaceSphere = sphere;
+                $body
+            }
         }
     };
 }
@@ -193,6 +199,7 @@ mod spd;
 mod sphere;
 mod sphere_complex;
 mod stiefel;
+mod subspace_sphere;
 mod symmetric;
 
 pub use centered::{
@@ -233,6 +240,7 @@ pub use sphere_complex::{
     SphereComplex, inner as inner_scplx, is_sphere_complex, typical_dist as typical_dist_scplx,
 };
 pub use stiefel::{Stiefel, StiefelNp};
+pub use subspace_sphere::SubspaceSphere;
 pub use symmetric::{
     Symmetric, inner as inner_sym, is_symmetric, pack as pack_sym, side as side_sym,
     typical_dist as typical_dist_sym, unpack as unpack_sym,
@@ -350,6 +358,10 @@ pub enum ManifoldKind {
     /// end. Construct with [`ManifoldKind::product`] or
     /// [`ManifoldKind::power`].
     Product(Arc<ProductManifold>),
+    /// Unit sphere of a linear subspace \(U \subset \mathbb{R}^n\), packed
+    /// length `n`. Construct with [`ManifoldKind::sphere_within`] or
+    /// [`ManifoldKind::sphere_excluding`].
+    SubspaceSphere(Arc<SubspaceSphere>),
 }
 
 impl ManifoldKind {
@@ -366,6 +378,18 @@ impl ManifoldKind {
     /// factors; [`Self::Oblique`] stays the dedicated power of spheres.
     pub fn power(factor: Self, block: usize, count: usize) -> crate::Result<Self> {
         ProductManifold::power(factor, block, count).map(|p| Self::Product(Arc::new(p)))
+    }
+
+    /// Unit sphere of the span of the rows of `basis`. See
+    /// [`SubspaceSphere::within`].
+    pub fn sphere_within(basis: Array2<f64>) -> crate::Result<Self> {
+        SubspaceSphere::within(basis).map(|s| Self::SubspaceSphere(Arc::new(s)))
+    }
+
+    /// Unit vectors orthogonal to the rows of `basis`. See
+    /// [`SubspaceSphere::excluding`].
+    pub fn sphere_excluding(basis: Array2<f64>) -> crate::Result<Self> {
+        SubspaceSphere::excluding(basis).map(|s| Self::SubspaceSphere(Arc::new(s)))
     }
 
     /// Stiefel \(\mathrm{St}(n,p)\). `p = 1` is the sphere packing.
@@ -471,7 +495,8 @@ impl ManifoldKind {
             | Self::MultinomialDoublyStochastic { .. }
             | Self::MultinomialSymmetric { .. }
             | Self::SphereComplex { .. }
-            | Self::Positive { .. } => false,
+            | Self::Positive { .. }
+            | Self::SubspaceSphere(_) => false,
         }
     }
 
@@ -499,6 +524,7 @@ impl ManifoldKind {
             Self::Positive { .. } => "positive",
             Self::CenteredMatrix { .. } => "centeredmatrix",
             Self::Product(_) => "product",
+            Self::SubspaceSphere(_) => "subspace_sphere",
         }
     }
 }
