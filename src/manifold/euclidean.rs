@@ -31,6 +31,37 @@ impl Manifold for Euclidean {
     ) -> Array1<f64> {
         v.clone()
     }
+
+    fn ehess2rhess(
+        &self,
+        _x: &Array1<f64>,
+        _egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        _v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        Some(ehess.clone())
+    }
+
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        (x.len() == v.len()).then(|| x + v)
+    }
+
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        (x.len() == y.len()).then(|| y - x)
+    }
+
+    fn parallel_transport_along(
+        &self,
+        _x: &Array1<f64>,
+        _d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        Some(v.clone())
+    }
+
+    fn transport_is_isometric(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -63,5 +94,13 @@ mod tests {
     #[test]
     fn par_retract_stays_on_the_euclidean_set() {
         retract_stays_on_the_euclidean_set();
+    }
+
+    #[test]
+    fn distance_is_the_straight_line() {
+        let x = array![1.0, 2.0];
+        let y = array![4.0, 6.0];
+        assert!((Euclidean.dist(&x, &y).unwrap() - 5.0).abs() < 1e-15);
+        assert!((Euclidean.typical_dist(4) - 2.0).abs() < 1e-15);
     }
 }

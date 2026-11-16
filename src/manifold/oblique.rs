@@ -9,13 +9,11 @@
 //! This is not a 3N cluster. Isolated molecules use
 //! [`super::RigidQuotient`]. A single sphere uses [`super::Sphere`].
 
-#[cfg(any(test, feature = "par"))]
-use ndarray::ArrayView1;
-use ndarray::{Array1, Array2, s};
+use ndarray::{Array1, Array2, ArrayView1, s};
 
 use crate::vecops::{dot, nrm2};
 
-use super::Manifold;
+use super::{Manifold, sphere};
 
 /// Product of `m` unit spheres in \(\mathbb{R}^n\).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,6 +173,91 @@ impl Manifold for Oblique {
     fn transport(&self, _x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
         self.project(x_to, v)
     }
+
+    fn ehess2rhess(
+        &self,
+        x: &Array1<f64>,
+        egrad: &Array1<f64>,
+        ehess: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        if !self.fits(x.len()) || [egrad, ehess, v].iter().any(|a| a.len() != x.len()) {
+            return None;
+        }
+        let n = self.n;
+        let mut out = Array1::zeros(x.len());
+        for j in 0..self.m {
+            let r = s![j * n..(j + 1) * n];
+            let h = sphere::hess_unit(x.slice(r), egrad.slice(r), ehess.slice(r), v.slice(r));
+            out.slice_mut(r).assign(&h);
+        }
+        Some(out)
+    }
+
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        self.pair_columns(x, v, sphere::exp_unit)
+    }
+
+    fn log(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<Array1<f64>> {
+        self.pair_columns(x, y, sphere::log_unit)
+    }
+
+    fn dist(&self, x: &Array1<f64>, y: &Array1<f64>) -> Option<f64> {
+        if !self.fits(x.len()) || y.len() != x.len() {
+            return None;
+        }
+        let n = self.n;
+        let sq: f64 = (0..self.m)
+            .map(|j| {
+                let r = s![j * n..(j + 1) * n];
+                sphere::dist_unit(x.slice(r), y.slice(r)).powi(2)
+            })
+            .sum();
+        Some(sq.sqrt())
+    }
+
+    fn parallel_transport_along(
+        &self,
+        x: &Array1<f64>,
+        d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        if !self.fits(x.len()) || d.len() != x.len() || v.len() != x.len() {
+            return None;
+        }
+        let n = self.n;
+        let mut out = Array1::zeros(x.len());
+        for j in 0..self.m {
+            let r = s![j * n..(j + 1) * n];
+            let t = sphere::transport_along_unit(x.slice(r), d.slice(r), v.slice(r));
+            out.slice_mut(r).assign(&t);
+        }
+        Some(out)
+    }
+
+    fn typical_dist(&self, _n: usize) -> f64 {
+        std::f64::consts::PI * (self.m as f64).sqrt()
+    }
+}
+
+impl Oblique {
+    fn pair_columns(
+        &self,
+        x: &Array1<f64>,
+        y: &Array1<f64>,
+        f: fn(ArrayView1<f64>, ArrayView1<f64>) -> Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        if !self.fits(x.len()) || y.len() != x.len() {
+            return None;
+        }
+        let n = self.n;
+        let mut out = Array1::zeros(x.len());
+        for j in 0..self.m {
+            let r = s![j * n..(j + 1) * n];
+            out.slice_mut(r).assign(&f(x.slice(r), y.slice(r)));
+        }
+        Some(out)
+    }
 }
 
 #[cfg(test)]
@@ -235,6 +318,24 @@ mod tests {
         let d1 = dot(m.col(&y, 1), m.col(&t, 1));
         assert!(d0.abs() < 1e-14, "col0 {d0}");
         assert!(d1.abs() < 1e-14, "col1 {d1}");
+    }
+
+    #[test]
+    fn geodesics_are_columnwise_great_circles() {
+        let m = two_by_three();
+        let x = unit_pair();
+        let v = array![0.0, 0.5, 0.0, 1.0, 0.0, 0.0];
+        let y = m.exp(&x, &v).unwrap();
+        assert!((nrm2(m.col(&y, 0)) - 1.0).abs() < 1e-15);
+        assert!((nrm2(m.col(&y, 1)) - 1.0).abs() < 1e-15);
+        let d = m.dist(&x, &y).unwrap();
+        assert!((d - (0.25_f64 + 1.0).sqrt()).abs() < 1e-14, "{d}");
+        let back = m.log(&x, &y).unwrap();
+        assert!((&back - &v).iter().all(|e| e.abs() < 1e-14));
+        let w = array![0.0, 0.0, 0.3, 0.0, 0.0, -0.7];
+        let moved = m.parallel_transport_along(&x, &v, &w).unwrap();
+        assert!((dot(moved.view(), moved.view()) - dot(w.view(), w.view())).abs() < 1e-14);
+        assert!((m.typical_dist(6) - std::f64::consts::PI * 2.0_f64.sqrt()).abs() < 1e-15);
     }
 
     #[test]
