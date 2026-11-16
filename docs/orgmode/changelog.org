@@ -6,75 +6,9 @@
 
 ** Unreleased
 
-~rgmin.optimize~ is a drop-in for ~ase.optimize~ on the maturin session.
-~BFGS~, ~LBFGS~, ~LBFGSLineSearch~, ~FIRE~ and ~FIRE2~ take ASE's constructor and drive ~self.optimizable~.
-~Adam~ takes ~learning_rate~ as the session step scale. ~Session~ takes ~h0~, ~maxmove~, ~preset~, ~abc~, ~accept~ and ~istep~.
-
-~Solver::set_lbfgs_trust_radius~ truncates the L-BFGS ray and updates the radius by Burdakov's Algorithm 1.
-It is off by default. ~set_lbfgs_trust~ stays the eOn Newton-model radius.
-The capped step stays the default until the radius is on. C: ~rgmin_solver_set_lbfgs_trust~, ~abi_minor~ 45.
-
-~Lbfgs::minimize_on~ and ~Lbfgs::minimize_box_on~ offer each accepted iterate as the iteration, the value and the coordinates.
-Returning false ends the run there. ~minimize_watched~ and ~minimize_box_watched~ call these methods.
-
-~Lbfgs::approx_wolfe~ is an opt-in approximate Wolfe test for the rounding floor.
-A positive value accepts a trial within that fraction of abs(f) of the start of a strong Wolfe search when the strong curvature test holds.
-Zero, the default, keeps the strict search. The eOn cap does not consult it.
-
-The FIRE fill step cap folds atom distances with iterators instead of an indexed ~f64::max~ loop.
-rustc 1.93 and 1.94 (LLVM 21) segfault in LoopVectorizePass on that indexed loop, so a release build failed there.
-A non-positive or non-finite cap still leaves the trial alone.
-
-~RiemannianManifold~ is ~St(n, p)~ with a QR or polar retraction, ~SPD(p)~ under the affine-invariant or log-Euclidean metric, or a product of them.
-Each has projection, Riemannian gradient, retraction, exponential, SPD logarithm, transport, inner product and one gradient step on caller-owned column-major buffers.
-C: ~rgmin_manifold_handle_t~ and the ~rgmin_manifold_*~ functions, ABI minor 41. C++: ~rgmin::Manifold~. Python: ~rgmin.Stiefel~, ~rgmin.SPD~ and ~rgmin.Product~.
-
-~ManifoldKind::Product~ is the weighted Riemannian product of other kinds, with the metric ~g = sum_i w_i g_i~ for weights ~w_i > 0~.
-~ManifoldKind::product~ builds it from ~ProductFactor~ values, each a kind, a packed length and a weight, and ~ManifoldKind::power~ is manopt's ~powermanifold~; ~Solver::set_product~ and ~Solver::set_power~ select them.
-Projection, retraction, transport, exponential, logarithm and parallel transport act per factor, a factor's gradient and Hessian are divided by its weight, and the distance is ~sqrt(sum_i w_i d_i^2)~.
-A session steps a weighted product in the chart ~z_i = sqrt(w_i) x_i~, so steepest descent, L-BFGS and the Newton-CG trust region run on it unchanged, and the iterates do not depend on the unit of a factor whose weight carries that unit.
-The exponential preconditioner, the Lindh model, ~set_project_rigid~ and the HiGHS box read raw coordinates and return ~Error::ProductChart~ on such a product.
-~MwRigid~ and ~RigidQuotient~ factors project with the session's masses and periodic flag.
-~explanation/product-manifold~ derives the geometry and compares it with manopt, Manopt.jl and Manifolds.jl, pymanopt and geomstats.
-
-~Manifold~ gains manopt's ~inner~, ~norm~, ~ehess2rhess~, ~exp~, ~log~, ~dist~, ~parallel_transport~, ~parallel_transport_along~, ~transport_is_isometric~ and ~typical_dist~.
-Their defaults keep every kind as it was: the Euclidean metric, and ~None~ where no closed form is supplied.
-Every kind but the multinomial and rigid kinds supplies its Riemannian Hessian, the sphere family, SO(3), SE(3), ~Positive~ and the linear kinds also their geodesics, and ~Positive~, ~Spd~ and the doubly stochastic kinds expose the metrics their ~egrad2rgrad~ already used, as does the trait implementation of ~RiemannianManifold~.
-~reference/product-manifold~ lists what each kind supplies.
-
-~rtr::minimize_rtr~ is the Riemannian trust region of Absil, Baker and Gallivan with Steihaug-Toint truncated CG, measured in ~Manifold::inner~.
-Its Hessian action is ~ehess2rhess~, Weingarten term included, where the kind supplies one, and the projected Euclidean action otherwise.
-~RtrOptions~ takes the defaults of manopt's ~trustregions~, and ~RtrMin~ returns the point, the value, the gradient norm and the outer, accepted and inner iteration counts.
-~rtr::truncated_cg_riemannian~ is one inner solve in the manifold metric, for a caller that accepts or rejects steps itself with ~RtrRadius~.
-~truncated_cg_projected~ keeps the Euclidean inner product.
-
-~ManifoldKind::sphere_within(basis)~ is the unit sphere of the span of the rows of ~basis~, and ~ManifoldKind::sphere_excluding(basis)~ the unit sphere orthogonal to them, such as a unit normal that leaves a centre of mass in place.
-Both are ~SubspaceSphere~, with the projection ~P_U - x x^T~, the metric-projection retraction, and the sphere's exponential, logarithm, distance, parallel transport and Hessian.
-~Error::SubspaceBasis~ reports an empty, non-finite or dependent basis, or excluded rows that span the whole space.
-
-~ProductFactor::with_metric~ gives a factor a caller's ~TangentMetric~ ~G_x~, self-adjoint and positive definite on each tangent space, so that its part of the product metric is ~w g(u, G_x v)~.
-~egrad2rgrad~ returns the factor's gradient times ~(w G_x)^{-1}~, and ~minimize_rtr~ then has the iterates of manopt's truncated CG preconditioned by ~(w G_x)^{-1}~.
-Such a product has no exponential, logarithm, distance or parallel transport, and sessions refuse it with ~Error::ProductTangentMetric~.
-
-~rtr::minimize_rtr_gauged~ calls a gauge after every accepted step: a map to another representation of the same point, such as the pivot of a plane moved along the plane.
-The step is accepted on the value before the move, and the moved point is evaluated afresh.
-~Solver::run_gauged~ calls the gauge before every session step but the first and rebases the session when it moves the point.
-
-~rgmin_solver_set_power(solver, factor, block, count)~ is ~Solver::set_power~ for the manifold tokens without shape parameters.
-~xts.h~ aliases it and ~rgmin::Solver::set_power~ wraps it. ~abi_minor~ 44.
-Weighted products, subspace spheres, tangent metrics and gauges stay Rust only.
-
-~ManifoldKind~ is no longer ~Copy~, since a product and a subspace sphere share their geometry through an ~Arc~; clone it where a copy was implied.
-~stiefel_p~ and ~as_str~ take ~&self~, and the new ~Product~ and ~SubspaceSphere~ variants extend exhaustive matches on the kind.
-
-An unconstrained Newton-CG or Newton-PCG ~Solver::run~ ends with the Riemannian gradient in its report.
-It reported the Euclidean gradient that its difference products keep, so on a curved manifold a run that stopped on a vanishing Riemannian gradient reported the normal part of the Euclidean one.
-
-~rgmin_lowest_eigenpairs_ex~ reports each pair's residual ~||Hv − θv||~ and a converged flag, and takes an optional preconditioner. A null preconditioner is the identity and matches ~rgmin_lowest_eigenpairs~ bit for bit. ~rgmin_eigenpair_t~ stays the minor-39 record. Python ~lowest_eigenpairs~ returns residuals and converged flags. ~strict=False~ returns the flags instead of raising. ~precond~ applies ~T~ to a block. ~abi_minor~ 42.
-
-~LbfgsPairs::push_rho~ stores a pair with the caller's ~rho~ in place of ~1 / (s · y)~, for an L-BFGS direction with a caller-supplied ~H0~. The pair passes the curvature gate of ~LbfgsPairs::push~ and ~Lbfgs::record~ first, and a ~rho~ that is not finite and positive is declined, so a pair with non-positive curvature never enters the two-loop. ~LbfgsPairs~, ~Lbfgs::two_loop~ and the eOn capped step share one two-loop, so the direction from a capped session's pairs is that session's step bit for bit. C: ~rgmin_lbfgs_pairs_push_rho~, ~abi_minor~ 43. ~rgmin_lbfgs_direction~ keeps its signature and minor 38. C++: ~rgmin::LbfgsPairs::push_rho~. Python: ~LbfgsPairs.push(s, y, rho=None)~.
-
-~rgmin_solver_set_highs_callback~ compiles when ~capi~ and ~highs~ are both on. It wraps the callback and its ~user~ pointer in ~HighsCallback::new~, and a NULL callback clears it. The C signature and ABI minor 43 are unchanged. ~examples/compare_highs.rs~ and the ~highs~ C tests build again.
+# Notes for the next release live in docs/newsfragments/.
+# towncrier build writes them into CHANGELOG.md.
+# This heading stays empty so an entry is not listed twice.
 
 ** 0.6.0 (2026-11-13)
 

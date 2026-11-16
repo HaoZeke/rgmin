@@ -9,7 +9,10 @@ Everyone who takes part follows the `code of conduct <https://github.com/OmniPot
 
 Pull requests go to the ``develop`` branch.
 Commit subjects take the form ``type(scope): summary``, as in ``fix(session): report a stall when the energy test refuses a restart``.
-A change that users can see adds a fragment to ``docs/newsfragments/`` and a line under Unreleased in ``docs/orgmode/changelog.org``.
+A change that users can see adds a fragment to ``docs/newsfragments/`` and nowhere else.
+The Unreleased sections of ``CHANGELOG.md`` and ``docs/orgmode/changelog.org`` stay empty, so ``towncrier build`` does not list an entry twice.
+The release commit copies the notes into the org page under a heading for the version.
+``python3 scripts/check_changelog.py`` fails when a fragment is paired with an Unreleased line.
 Name the fragment ``<issue>.<type>.md``, or ``+<name>.<type>.md`` for a change with no issue.
 The type is ``added``, ``changed``, ``deprecated``, ``removed``, ``fixed`` or ``security``, the sections of ``CHANGELOG.md``.
 Write it as one sentence per line, the way ``CHANGELOG.md`` reads.
