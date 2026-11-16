@@ -41,6 +41,7 @@ vector: ~project~, ~retract~, ~transport~. Citations:
 | ~EuclideanComplex { n }~ | interleaved ~(re, im)~, length ~2 n~ | ~x + v~ |
 | ~Constant { n }~ | singleton of length ~n~ | the fixed point |
 | ~Positive { n }~ | positive orthant, length ~n~ | ~x odot exp(v oslash x)~ |
+| ~Product~ | the factor packings end to end | each factor's retraction |
 
 An isolated molecule or cluster lives on ~RigidQuotient~
 (~R^{3N}/SE(3)~): Sella Cartesian ~fix_translation~ plus
@@ -123,6 +124,7 @@ rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SYMMETRIC);
 rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_SKEWSYMMETRIC);
 rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN_COMPLEX);
 rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_CONSTANT);
+rgmin_solver_set_power(s, RGMIN_MANIFOLD_SO3, 9, 2);
 rgmin_solver_set_manifold(s, RGMIN_MANIFOLD_EUCLIDEAN);
 #+end_src
 
@@ -148,6 +150,40 @@ For a symmetric matrix \(H\), minimizing \(f(u)=u^T H u/2\) on
 this sphere gives a lowest eigenvector at a minimum. An arbitrary
 stationary point can be a higher eigenvector; a small projected gradient
 alone does not certify that the lowest eigenvalue has been found.
+
+** Products and powers
+
+~ManifoldKind::Product~ is the weighted Riemannian product of other kinds, with the metric \(g = \sum_i w_i\, g_i\).
+~Solver::set_product~ takes the factors in packing order, each a kind, a packed length and a weight:
+
+#+begin_src rust
+use rgmin::manifold::ProductFactor;
+use rgmin::{Control, ManifoldKind, Method, Solver};
+
+let n = 3;
+let mut solver = Solver::new(Method::lbfgs(), Control::default(), 2 * n);
+solver.set_product([
+    ProductFactor::new(ManifoldKind::Euclidean, n).with_weight(0.25),
+    ProductFactor::new(ManifoldKind::Sphere, n),
+])?;
+#+end_src
+
+A point is the factor points end to end, here a position ~p~ and then a unit normal, of length ~2 n~.
+The weight of a factor fixes how its steps are measured against those of the others.
+For a position in length units next to a unit vector, take \(w_p = \ell^{-2}\) for a length \(\ell\) over which the objective changes, and the iterates no longer depend on the unit of length.
+@@rst::doc:`../explanation/product-manifold`@@ derives that choice, and @@rst::doc:`../reference/product-manifold`@@ lists the operations of every factor kind.
+
+With a weight other than one the session steps in the metric chart \(z_i = \sqrt{w_i}\, x_i\).
+Points, gradients and reports stay in the coordinates of the factors.
+The exponential preconditioner, the Lindh model, ~set_project_rigid~ and the HiGHS box read raw coordinates, and a step with any of them returns ~Error::ProductChart~.
+~MwRigid~ and ~RigidQuotient~ factors project block by block with the session's masses and periodic flag.
+
+~Solver::set_power(kind, block, count)~ is manopt's ~powermanifold~, ~count~ unit-weight copies of one kind.
+It returns ~false~ and keeps the manifold when the kind cannot hold ~block~.
+From C, ~rgmin_solver_set_power~ does the same for the tokens without shape parameters; weighted products are Rust only.
+
+Steepest descent, L-BFGS and the Newton-CG trust region step on a product unchanged.
+~rtr::minimize_rtr~ runs the Riemannian trust region in the product metric with the full Riemannian Hessian, Weingarten term included.
 
 ** Packing notes
 
@@ -235,5 +271,8 @@ alone does not certify that the lowest eigenvalue has been found.
   It is not the sphere and not a 3N cluster. C token 22
   (~rgmin_solver_set_centered_matrix~). Tokens 7-10 stay
   reserved.
+- ~Product~ packs its factors end to end in the order given. A
+  product inside a product is flattened and the weights multiply.
+  ~Oblique { n, m }~ stays the token for a power of spheres.
 - ~set_project_rigid~ is the same horizontal projection as
   ~RigidQuotient~ and stays available on Euclidean.
