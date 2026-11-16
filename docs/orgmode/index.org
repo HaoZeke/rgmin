@@ -124,6 +124,7 @@ It also covers the features of each route, the C library and a checkout.
    explanation/randomized
    explanation/simd
    explanation/precon
+   explanation/product-manifold
 
 .. toctree::
    :maxdepth: 2
