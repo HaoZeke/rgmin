@@ -22,7 +22,14 @@ The curvature condition demands abs(phi'(a)) <= c2 abs(phi'(0)) with
 c1 < c2 < 1: the slope must have flattened enough that the quasi-Newton
 update built from this step carries curvature information. Nocedal and
 Wright's algorithms 3.5 and 3.6 (the bracket and the zoom) find a point
-satisfying both. ~src/linesearch/known.rs~ implements them from a
+satisfying both.
+
+Near a minimum the decrease test can fail on rounding alone. ~Lbfgs::approx_wolfe~,
+zero by default, is a fraction of abs(f) at the start of a strong Wolfe search.
+A positive value accepts a trial inside that band when the strong curvature
+test holds (Hager and Zhang 2005, stop T2) and places a trial inside the band
+that fails the curvature test by the sign of its slope. The eOn cap does not
+consult it. ~LbfgsStep::Wolfe~ and ~Lbfgs::minimize_box~ do. ~src/linesearch/known.rs~ implements them from a
 point whose value and gradient the caller already holds: the start is
 never re-evaluated, the accepted point comes back with its gradient,
 and a displacement cap bounds every trial (~alpha_max~).

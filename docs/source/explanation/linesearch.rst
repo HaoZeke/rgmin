@@ -31,6 +31,13 @@ Wright's algorithms 3.5 and 3.6 (the bracket and the zoom) find a point
 satisfying both, and ``src/linesearch/zoom.rs`` is a direct
 implementation.
 
+Near a minimum the decrease test can fail on rounding alone. ``Lbfgs::approx_wolfe``,
+zero by default, is a fraction of abs(f) at the start of a strong Wolfe search.
+A positive value accepts a trial inside that band when the strong curvature
+test holds (Hager and Zhang 2005, stop T2) and places a trial inside the band
+that fails the curvature test by the sign of its slope. The eOn cap does not
+consult it. ``LbfgsStep::Wolfe`` and ``Lbfgs::minimize_box`` do.
+
 2 The bracket and the zoom
 --------------------------
 

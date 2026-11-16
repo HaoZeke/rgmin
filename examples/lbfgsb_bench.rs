@@ -12,7 +12,8 @@
 //! Arms: `lbfgs` is `Lbfgs::minimize` with `LbfgsStep::Wolfe` (8 pairs,
 //! `||g||_inf < 1e-6`). The crate default is the eOn cap, so this arm
 //! opts into the strong Wolfe search the recorded table measured.
-//! `lbfgs-box` is `Lbfgs::minimize_box`, the generalized Cauchy point
+//! `lbfgs-approx` and `lbfgs-box-approx` repeat those arms with
+//! `approx_wolfe = 1e-12`. `lbfgs-box` is `Lbfgs::minimize_box`, the generalized Cauchy point
 //! and subspace step, with the same settings on `lj75` and with 5 pairs
 //! and `1e-5` on `driver1`, the values of the L-BFGS-B driver. The
 //! iteration cap is 3000 per run.
@@ -176,23 +177,22 @@ fn trace(
         }
         true
     };
-    let (f, evals) = match arm {
-        "lbfgs" => {
-            let mut opt = Lbfgs::default();
-            opt.step = LbfgsStep::Wolfe;
-            let (f, _, e) = opt.minimize_watched(p.view(), 3000, logged, watch);
-            (f, e)
-        }
-        _ => {
-            let mut opt = Lbfgs::default();
-            if problem == "driver1" {
-                opt = Lbfgs::with_capacity(5);
-                opt.gtol = 1e-5;
-            }
-            let (f, _, e) =
-                opt.minimize_box_watched(p.view(), lo.view(), hi.view(), 3000, logged, watch);
-            (f, e)
-        }
+    let mut opt = Lbfgs::default();
+    if problem == "driver1" {
+        opt = Lbfgs::with_capacity(5);
+        opt.gtol = 1e-5;
+    }
+    if arm.ends_with("-approx") {
+        opt.approx_wolfe = 1e-12;
+    }
+    let (f, evals) = if arm.starts_with("lbfgs-box") {
+        let (f, _, e) =
+            opt.minimize_box_watched(p.view(), lo.view(), hi.view(), 3000, logged, watch);
+        (f, e)
+    } else {
+        opt.step = LbfgsStep::Wolfe;
+        let (f, _, e) = opt.minimize_watched(p.view(), 3000, logged, watch);
+        (f, e)
     };
     let log = log.into_inner();
     assert_eq!(log.len(), evals);
@@ -228,7 +228,7 @@ fn main() {
         Array1::from_elem(25, 100.0),
     );
     println!("problem,arm,start,eval,f,ginf,accepted");
-    for arm in ["lbfgs", "lbfgs-box"] {
+    for arm in ["lbfgs", "lbfgs-box", "lbfgs-approx", "lbfgs-box-approx"] {
         for (k, p) in lj75.iter().enumerate() {
             trace("lj75", arm, k, p, lj, &free);
         }
