@@ -615,7 +615,7 @@ struct SessionAction<'a, O: ?Sized, A> {
     hvps: &'a AtomicUsize,
     action: &'a A,
     /// Curved kind and the point of its tangent model `P H P + (I - P)`.
-    tangent: Option<(ManifoldKind, &'a Array1<f64>)>,
+    tangent: Option<(&'a ManifoldKind, &'a Array1<f64>)>,
     /// Apply the whole model. Without it a product takes `v` as tangent.
     whole_model: bool,
 }
@@ -769,7 +769,7 @@ where
         fd_grad,
         hvps: &hvps,
         action,
-        tangent: req.manifold.map(|kind| (kind, x)),
+        tangent: req.manifold.as_ref().map(|kind| (kind, x)),
         whole_model: req.precondition,
     };
     let n = x.len();
@@ -808,7 +808,7 @@ where
             collapsed: radius < RADIUS_FLOOR,
         }
     };
-    let (trial, step) = if let Some(kind) = req.manifold {
+    let (trial, step) = if let Some(kind) = &req.manifold {
         kind.project_in_place(x, &mut p);
         match retract_within_cap(obj, x, &p, req.atom_cap, req.euclid_cap, kind) {
             Some(pair) => pair,

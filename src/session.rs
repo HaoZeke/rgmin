@@ -1453,7 +1453,7 @@ impl Solver {
 
     /// Tangent projection. Periodic cells drop rotation (Sella `proj_rot`).
     fn project_vec(&mut self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
-        let mut w = match self.manifold {
+        let mut w = match &self.manifold {
             ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => v.clone(),
             other => other.project(x, v),
         };
@@ -1610,7 +1610,7 @@ impl Solver {
     }
 
     fn horizontal_grad(&mut self, x: &Array1<f64>, grad: &Array1<f64>) -> Array1<f64> {
-        let mut g = match self.manifold {
+        let mut g = match &self.manifold {
             ManifoldKind::MwRigid | ManifoldKind::RigidQuotient => grad.clone(),
             other => other.egrad2rgrad(x, grad),
         };
@@ -1625,7 +1625,7 @@ impl Solver {
         x_to: &Array1<f64>,
         v: &Array1<f64>,
     ) -> Array1<f64> {
-        match self.manifold {
+        match &self.manifold {
             ManifoldKind::RigidQuotient | ManifoldKind::MwRigid => self.project_vec(x_to, v),
             other => other.transport(x_from, x_to, v),
         }
@@ -2216,7 +2216,7 @@ impl Solver {
                 project_rigid,
                 precondition,
                 seed: self.steps as u64,
-                manifold: (!self.manifold.is_flat()).then_some(self.manifold),
+                manifold: (!self.manifold.is_flat()).then(|| self.manifold.clone()),
             },
             action,
         );
@@ -3025,7 +3025,7 @@ impl Solver {
                 accept: self.accept,
                 e_hist: &mut self.e_hist,
                 atom_maxmove: self.atom_maxmove,
-                manifold: self.manifold,
+                manifold: &self.manifold,
             },
         );
         if moved {
@@ -3096,7 +3096,7 @@ impl Solver {
                 &dir,
                 self.atom_maxmove,
                 self.control.maxmove_cap(),
-                self.manifold,
+                &self.manifold,
             );
             let Some(pair) = fitted else {
                 // Refused before any oracle: a failed trust step.
@@ -3359,7 +3359,7 @@ impl Solver {
                 &self.control,
                 &mut self.e_hist,
                 self.atom_maxmove,
-                self.manifold,
+                &self.manifold,
             ) {
                 Trial::Accepted(npos, nval, ngrad) => {
                     *x = npos;
@@ -3387,7 +3387,7 @@ impl Solver {
                     accept: self.accept,
                     e_hist: &mut self.e_hist,
                     atom_maxmove: self.atom_maxmove,
-                    manifold: self.manifold,
+                    manifold: &self.manifold,
                 },
             );
             if moved {
@@ -3486,7 +3486,7 @@ impl Solver {
                         self.atom_maxmove,
                         self.accept,
                         &mut self.e_hist,
-                        self.manifold,
+                        &self.manifold,
                         self.istep,
                         line_options,
                     );
@@ -3550,7 +3550,7 @@ impl Solver {
                         self.atom_maxmove,
                         self.accept,
                         &mut self.e_hist,
-                        self.manifold,
+                        &self.manifold,
                         1.0,
                         line_options,
                     );
@@ -3622,7 +3622,7 @@ impl Solver {
                         self.atom_maxmove,
                         self.accept,
                         &mut self.e_hist,
-                        self.manifold,
+                        &self.manifold,
                         1.0,
                         line_options,
                     );
@@ -3664,7 +3664,7 @@ impl Solver {
                         self.atom_maxmove,
                         self.accept,
                         &mut self.e_hist,
-                        self.manifold,
+                        &self.manifold,
                         self.istep,
                         line_options,
                     );
@@ -3687,7 +3687,7 @@ impl Solver {
                     // A refused trial returns with the integrator as it was,
                     // so a retry probes the same point.
                     let saved = state.checkpoint();
-                    let manifold = self.manifold;
+                    let manifold = self.manifold.clone();
                     let curved = !manifold.is_flat();
                     let n_pos_saved = state.n_pos;
                     let dt_saved = state.dt;
@@ -3753,7 +3753,7 @@ impl Solver {
                                 if curved {
                                     let back = manifold.project(x, &correction);
                                     let Some((point, _)) =
-                                        retract_within_cap(obj, x, &back, None, None, manifold)
+                                        retract_within_cap(obj, x, &back, None, None, &manifold)
                                     else {
                                         state.restore(saved);
                                         *x = start;
@@ -3830,7 +3830,7 @@ impl Solver {
                             };
                             let tangent = manifold.project(x, &dx);
                             let Some((trial, _)) =
-                                retract_within_cap(obj, x, &tangent, atom_cap, cap, manifold)
+                                retract_within_cap(obj, x, &tangent, atom_cap, cap, &manifold)
                             else {
                                 state.restore(saved);
                                 *x = start;
@@ -3970,7 +3970,7 @@ impl Solver {
                             accept: self.accept,
                             e_hist: &mut self.e_hist,
                             atom_maxmove: self.atom_maxmove,
-                            manifold: self.manifold,
+                            manifold: &self.manifold,
                         },
                     );
                     *x = npos;
@@ -4992,7 +4992,7 @@ impl Solver {
                     self.atom_maxmove,
                     self.accept,
                     &mut self.e_hist,
-                    self.manifold,
+                    &self.manifold,
                     direct,
                     line_options,
                 );
@@ -5036,7 +5036,7 @@ fn take_session_step<O>(
     atom_maxmove: Option<f64>,
     accept: Accept,
     e_hist: &mut VecDeque<f64>,
-    manifold: ManifoldKind,
+    manifold: &ManifoldKind,
     direct_scale: f64,
     options: LineSearchOptions,
 ) -> Taken

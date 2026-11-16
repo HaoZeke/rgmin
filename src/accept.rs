@@ -50,7 +50,7 @@ pub(crate) fn retract_within_cap<O>(
     step: &Array1<f64>,
     atom_maxmove: Option<f64>,
     maxmove: Option<f64>,
-    manifold: ManifoldKind,
+    manifold: &ManifoldKind,
 ) -> Option<(Array1<f64>, Array1<f64>)>
 where
     O: DifferentiableObjective<f64> + ?Sized,
@@ -117,7 +117,7 @@ fn trial_point<O>(
     alpha: f64,
     control: &Control,
     atom_maxmove: Option<f64>,
-    manifold: ManifoldKind,
+    manifold: &ManifoldKind,
 ) -> Option<Array1<f64>>
 where
     O: DifferentiableObjective<f64> + ?Sized,
@@ -171,7 +171,7 @@ pub(crate) fn single_trial<O>(
     control: &Control,
     e_hist: &mut VecDeque<f64>,
     atom_maxmove: Option<f64>,
-    manifold: ManifoldKind,
+    manifold: &ManifoldKind,
 ) -> Trial
 where
     O: DifferentiableObjective<f64> + ?Sized,
@@ -194,7 +194,7 @@ pub(crate) struct Acceptance<'a> {
     pub(crate) accept: Accept,
     pub(crate) e_hist: &'a mut VecDeque<f64>,
     pub(crate) atom_maxmove: Option<f64>,
-    pub(crate) manifold: ManifoldKind,
+    pub(crate) manifold: &'a ManifoldKind,
 }
 
 /// Apply `dir` under `accept`. Each trial is one `value_and_gradient`.
@@ -244,7 +244,7 @@ pub(crate) fn accept_step_with_fallback<O>(
     accept: Accept,
     e_hist: &mut VecDeque<f64>,
     atom_maxmove: Option<f64>,
-    manifold: ManifoldKind,
+    manifold: &ManifoldKind,
     allow_gradient_fallback: bool,
 ) -> (Array1<f64>, f64, Array1<f64>, bool)
 where
@@ -382,7 +382,7 @@ mod tests {
                 accept: Accept::None,
                 e_hist: &mut hist,
                 atom_maxmove: None,
-                manifold: ManifoldKind::Euclidean,
+                manifold: &ManifoldKind::Euclidean,
             },
         );
         assert!(moved);
@@ -437,7 +437,7 @@ mod tests {
                 accept: Accept::None,
                 e_hist: &mut hist,
                 atom_maxmove: None,
-                manifold: ManifoldKind::Euclidean,
+                manifold: &ManifoldKind::Euclidean,
             },
         );
         assert!(!moved);
@@ -465,7 +465,7 @@ mod tests {
                 accept: Accept::Energy,
                 e_hist: &mut hist,
                 atom_maxmove: None,
-                manifold: ManifoldKind::Euclidean,
+                manifold: &ManifoldKind::Euclidean,
             },
         );
         // 10 rejected halvings + one short steepest fallback.
@@ -496,7 +496,7 @@ mod tests {
                 accept: Accept::Energy,
                 e_hist: &mut hist,
                 atom_maxmove: None,
-                manifold: ManifoldKind::Euclidean,
+                manifold: &ManifoldKind::Euclidean,
             },
         );
         assert!(moved);
@@ -520,7 +520,7 @@ mod tests {
                 accept: Accept::Energy,
                 e_hist: &mut hist,
                 atom_maxmove: None,
-                manifold: ManifoldKind::Euclidean,
+                manifold: &ManifoldKind::Euclidean,
             },
         );
         assert!(moved);
@@ -598,7 +598,7 @@ mod tests {
                         scale_step(&pos, &mut expect, cap);
                     }
                     let expect = obj.bounds().clip(expect.view());
-                    let got = trial_point(&obj, &pos, &dir, 0.5, &control, atom, kind).unwrap();
+                    let got = trial_point(&obj, &pos, &dir, 0.5, &control, atom, &kind).unwrap();
                     assert_eq!(got, expect, "{kind:?} k={k} atom={atom:?} cap={maxmove:?}");
                 }
             }
@@ -610,7 +610,7 @@ mod tests {
         let obj = Boxed::new(array![-2.0, -0.01, -2.0], array![2.0, 2.0, 2.0]);
         let pos = array![1.0, 0.0, 0.0];
         let dir = array![0.0, -0.05, 0.0];
-        assert!(trial_point(&obj, &pos, &dir, 1.0, &ctrl(), None, ManifoldKind::Sphere).is_none());
+        assert!(trial_point(&obj, &pos, &dir, 1.0, &ctrl(), None, &ManifoldKind::Sphere).is_none());
         let mut hist = VecDeque::new();
         let (x, _, _, moved) = accept_step(
             &obj,
@@ -623,7 +623,7 @@ mod tests {
                 accept: Accept::None,
                 e_hist: &mut hist,
                 atom_maxmove: None,
-                manifold: ManifoldKind::Sphere,
+                manifold: &ManifoldKind::Sphere,
             },
         );
         assert!(!moved);
