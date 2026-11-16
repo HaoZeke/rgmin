@@ -737,31 +737,37 @@ ManifoldsBase.jl supplies the Weingarten map per factor for the same purpose, an
 
 .. table::
 
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | Aspect             | rgmin                       | manopt                  | Manifolds.jl                          | pymanopt                | geomstats                           |
-    +====================+=============================+=========================+=======================================+=========================+=====================================+
-    | weights            | :math:`w_i > 0` per factor  | none                    | none                                  | none                    | per factor, ``ScalarProductMetric`` |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | points             | one packed vector           | struct of fields        | ``ArrayPartition``                    | list                    | one vector, or stacked              |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | nested product     | flattened, weights multiply | nested structs          | ``×`` flattens                        | refused                 | an ordinary factor                  |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | missing operation  | ``None`` at the call        | field absent            | method error                          | factor raises           | numerical solver, else error        |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | distance           | weighted :math:`\ell_2`     | :math:`\ell_2`          | :math:`\ell_r`, default :math:`r = 2` | :math:`\ell_2`          | :math:`\ell_2`                      |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | typical distance   | weighted :math:`\ell_2`     | :math:`\ell_2`          | none                                  | :math:`\ell_2`          | none                                |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | random tangent     | none                        | scaled :math:`k^{-1/2}` | per factor                            | scaled :math:`k^{-1/2}` | per factor                          |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | retraction choice  | one per kind                | one per factory         | ``ProductRetraction``                 | one per factor          | exponential                         |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | parallel transport | per factor, optional        | if all factors have it  | per factor                            | none                    | per factor                          |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | injectivity radius | not exposed                 | not exposed             | minimum                               | not exposed             | minimum                             |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
-    | power manifold     | unit-weight product         | ``powermanifold``       | ``PowerManifold``                     | none                    | ``NFoldManifold``                   |
-    +--------------------+-----------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | Aspect             | rgmin                                 | manopt                  | Manifolds.jl                          | pymanopt                | geomstats                           |
+    +====================+=======================================+=========================+=======================================+=========================+=====================================+
+    | weights            | :math:`w_i > 0` per factor            | none                    | none                                  | none                    | per factor, ``ScalarProductMetric`` |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | points             | one packed vector                     | struct of fields        | ``ArrayPartition``                    | list                    | one vector, or stacked              |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | nested product     | flattened, weights multiply           | nested structs          | ``×`` flattens                        | refused                 | an ordinary factor                  |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | missing operation  | ``None`` at the call                  | field absent            | method error                          | factor raises           | numerical solver, else error        |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | distance           | weighted :math:`\ell_2`               | :math:`\ell_2`          | :math:`\ell_r`, default :math:`r = 2` | :math:`\ell_2`          | :math:`\ell_2`                      |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | typical distance   | weighted :math:`\ell_2`               | :math:`\ell_2`          | none                                  | :math:`\ell_2`          | none                                |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | random tangent     | none                                  | scaled :math:`k^{-1/2}` | per factor                            | scaled :math:`k^{-1/2}` | per factor                          |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | retraction choice  | one per kind                          | one per factory         | ``ProductRetraction``                 | one per factor          | exponential                         |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | parallel transport | per factor, optional                  | if all factors have it  | per factor                            | none                    | per factor                          |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | injectivity radius | not exposed                           | not exposed             | minimum                               | not exposed             | minimum                             |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | power manifold     | unit-weight product                   | ``powermanifold``       | ``PowerManifold``                     | none                    | ``NFoldManifold``                   |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | subspace sphere    | kept or excluded basis                | two fixed subspaces     | symmetric matrices                    | kept or excluded basis  | none                                |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | preconditioner     | ``TangentMetric``, in the metric      | in truncated CG         | in truncated CG (Manopt.jl)           | in truncated CG         | none                                |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
+    | point hook         | after accepted steps; sessions rebase | ``options.hook``        | step callbacks (Manopt.jl)            | none                    | none                                |
+    +--------------------+---------------------------------------+-------------------------+---------------------------------------+-------------------------+-------------------------------------+
 
 The differences in detail:
 
@@ -831,13 +837,30 @@ The differences in detail:
   geomstats' ``ProductRiemannianMetric`` also offers a block-diagonal ``metric_matrix`` and the summed signature.
   The trait here has only ``inner`` on tangent vectors.
 
-18 Reconciliation with the unlanded manifold branches
------------------------------------------------------
+- *Subspace spheres.*
+  pymanopt's ``SphereSubspaceIntersection`` and ``SphereSubspaceComplementIntersection`` (`sphere.py at 35b022f <https://github.com/pymanopt/pymanopt/blob/35b022ff6043b893f32c903b428e811dea200dc2/src/pymanopt/manifolds/sphere.py>`_) are the counterparts of ``within`` and ``excluding``, with the same projector, Weingarten term, exponential, logarithm and distance.
+  They build the dense projector :math:`Q Q^\top` from a QR factorization of the spanning columns and do not refuse a rank-deficient matrix, and their retraction normalizes :math:`x + v` without projecting back onto the subspace, so rounding off it is not removed.
+  manopt and Manifolds.jl have the spheres of fixed subspaces only: unit-norm symmetric matrices (manopt's ``spheresymmetricfactory``, Manifolds.jl's ``SphereSymmetricMatrices``) and, in manopt, the unit tangent vectors at one point of a manifold (``tangentspherefactory``).
+  geomstats has none.
 
-Two earlier branches carried product designs.
-Neither landed, and this one supersedes both.
+- *Preconditioners.*
+  manopt's ``problem.precon`` (`trs\_tCG.m <https://github.com/NicolasBoumal/manopt/blob/a149c85ca3cf23ca828d8bc6a6b125a4ac82d656/manopt/solvers/trustregions/trs_tCG.m>`_), pymanopt's ``Problem(preconditioner=...)`` and the ``preconditioner`` keyword of Manopt.jl's ``trust_regions`` approximate the inverse Hessian inside the truncated CG of the trust region.
+  A ``TangentMetric`` gives the same iterates, but it is part of the manifold: ``egrad2rgrad`` returns the preconditioned gradient, so a first-order or sampled driver sees it as well, and the inner and outer stopping tests read lengths in it.
+  geomstats has no trust region.
+
+- *Point hooks.*
+  manopt's ``options.hook`` (``applyHook``) replaces the iterate at the start of every iteration of ``trustregions`` and ``steepestdescent``, before the stopping test, and the solver evaluates the cost and gradient again when it moved; the other solvers do not call it.
+  ``minimize_rtr_gauged`` has the same semantics after accepted steps, and ``Solver::run_gauged`` adds the rebase that a solver with curvature memory needs.
+  Manopt.jl's solver states take callbacks before and after each step (``:BeforeStep``, ``:Step``), which receive the state and may change it (`callback.jl at 01ae0f6 <https://github.com/JuliaManifolds/Manopt.jl/blob/01ae0f62e90c9def032e8e32b3e4ffc988ca9288/src/base/state/callback.jl>`_).
+  pymanopt and geomstats have no hook.
+
+18 Reconciliation with the earlier manifold branches
+----------------------------------------------------
+
+Two earlier branches carried product designs, and this one supersedes both.
 
 ``feat/manifold-api-060`` (``cdc8f5dd``) added ``RiemannianManifold``, a product of Stiefel and SPD factors over caller-owned column-major slices.
+It never reached ``develop``, but it is part of the 0.6.0 line (``d3f94d11``), at which the OH-TST design pins rgmin.
 It had QR and polar Stiefel retractions, the Edelman, Arias and Smith exponential, SPD under the affine-invariant and log-Euclidean metrics, and a ``gradient_step`` helper.
 It sat beside ``ManifoldKind``, so no session could step it, and it implemented the old ``Manifold`` trait, whose only metric was the dot product.
 With the affine-invariant SPD gradient :math:`X \nabla f X`, a stepper's secant pairs would have mixed two metrics.
@@ -845,6 +868,32 @@ Here the product is a ``ManifoldKind`` over every kind, with weights, and the tr
 Stiefel frames keep the column-major packing that both designs use.
 The polar retraction and the two SPD metrics are not ported: the ``Spd`` kind stays Frobenius, whose gradient is the symmetrized Euclidean one.
 An affine-invariant SPD kind can now be added through ``inner`` and ``egrad2rgrad``, and it would enter a product unchanged.
+
+A caller of the 0.6.0 API moves over as follows:
+
+.. table::
+
+    +------------------------------------+-----------------------------------------------------------------------------------------+
+    | 0.6.0, ``RiemannianManifold``      | Here                                                                                    |
+    +====================================+=========================================================================================+
+    | ``stiefel(n, 1, _)``               | ``ManifoldKind::Sphere``, or ``sphere_within`` and ``sphere_excluding`` for a subspace  |
+    +------------------------------------+-----------------------------------------------------------------------------------------+
+    | ``stiefel(n, p, _)``               | ``ManifoldKind::stiefel(n, p)``, with the QR retraction                                 |
+    +------------------------------------+-----------------------------------------------------------------------------------------+
+    | ``spd(p, _)``                      | ``ManifoldKind::Spd`` at packed length :math:`p^2`, in the Frobenius metric             |
+    +------------------------------------+-----------------------------------------------------------------------------------------+
+    | no flat factor                     | ``ManifoldKind::Euclidean``                                                             |
+    +------------------------------------+-----------------------------------------------------------------------------------------+
+    | ``product(parts)``                 | ``ManifoldKind::product`` of ``ProductFactor`` values, with weights and tangent metrics |
+    +------------------------------------+-----------------------------------------------------------------------------------------+
+    | slice methods writing into ``out`` | ``Manifold`` methods on ``Array1`` that return the result                               |
+    +------------------------------------+-----------------------------------------------------------------------------------------+
+    | ``gradient_step``                  | a session step, or ``minimize_rtr``                                                     |
+    +------------------------------------+-----------------------------------------------------------------------------------------+
+
+The plane of the design, ``product([stiefel(D, 1, _), spd(1, _)])`` in 0.6.0, becomes
+``ManifoldKind::product([ProductFactor::new(ManifoldKind::sphere_excluding(e)?, D).with_weight(l2), ProductFactor::new(ManifoldKind::Euclidean, 1)])``
+with ``e`` the excluded directions and ``l2`` the block weight :math:`\ell^2`, or ``with_metric`` in place of ``with_weight`` for a harmonic metric on the normal.
 
 ``feat/power-manifold`` (``3bb6f1df``) added ``ManifoldKind::Power`` over four factors (Euclidean, sphere, MwRigid, rigid quotient), ``Solver::set_power``, a C setter with private factor codes 0 to 3 and the token ``RGMIN_MANIFOLD_POWER``, and ``minimize_rtr`` in the dot-product metric.
 The power is now a special case of the product.
