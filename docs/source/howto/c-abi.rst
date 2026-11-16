@@ -191,7 +191,7 @@ Tokens 7-10 stay reserved. See
 :doc:`retract onto an embedded manifold <manifolds>`.
 ``rgmin_solver_set_masses`` supplies N atomic masses for ``MW_RIGID``.
 
-``rgmin_solver_set_power(s, factor, block, count)`` (``abi_minor`` 41) selects ``count`` unit-weight copies of a token without shape parameters, each of packed length ``block``, as manopt's ``powermanifold`` does.
+``rgmin_solver_set_power(s, factor, block, count)`` (``abi_minor`` 44) selects ``count`` unit-weight copies of a token without shape parameters, each of packed length ``block``, as manopt's ``powermanifold`` does.
 It returns 1 and keeps the manifold for a null session, a token with shape parameters, a block the token cannot hold, or a count of zero.
 ``MW_RIGID`` copies read ``rgmin_solver_set_masses`` as one molecule reused on every copy or as every copy's masses in order.
 Weighted products of arbitrary factors are Rust only; :doc:`../reference/product-manifold` lists them.

@@ -106,13 +106,13 @@ Arrays of the wrong length leave the input unchanged: ~project~, ~egrad2rgrad~ a
 | ~CenteredMatrix { m, n, rows }~                             | yes           | yes   | yes                               | yes                   | \(\sqrt{\dim}\)                   |
 | ~EuclideanComplex { n }~                                    | yes           | yes   | yes                               | yes                   | \(\sqrt{n}\)                      |
 | ~Constant { n }~                                            | yes           | yes   | yes                               | yes                   | 0                                 |
-| ~Spd~                                                       | yes           | no    | yes                               | yes                   | \(\sqrt{\mathrm{len}}\)           |
+| ~Spd~                                                       | yes           | no    | no                                | no                    | \(\sqrt{\mathrm{len}}\)           |
 | ~Multinomial~                                               | no            | no    | no                                | no                    | \(\sqrt{\mathrm{len}}\)           |
 | ~MultinomialDoublyStochastic~, ~MultinomialSymmetric~       | no            | no    | no                                | no                    | \(\sqrt{\mathrm{len}}\)           |
 | ~MwRigid~, ~RigidQuotient~                                  | no            | no    | no                                | no                    | \(\sqrt{\mathrm{len}}\)           |
 
 \(\mathrm{len}\) is the packed length and \(\dim\) the dimension of the centered matrices, \(m n - n\) for centered rows and \(m n - m\) for centered columns.
-~Positive~ and the doubly stochastic kinds carry their own metric through ~inner~ and ~egrad2rgrad~; every other kind uses the dot product of its packed coordinates.
+~Positive~, ~Spd~ and the doubly stochastic kinds carry their own metric through ~inner~ and ~egrad2rgrad~; every other kind uses the dot product of its packed coordinates.
 ~Multinomial~ pairs a Fisher-orthogonal projection with the dot product, so its gradient does not represent the differential in its inner product.
 
 ** Subspace sphere

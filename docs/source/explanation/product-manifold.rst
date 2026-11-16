@@ -266,7 +266,7 @@ If each is, then
 
 If one is not, vectors supported on that block break the identity.
 The weights can neither repair nor break isometry, so ``transport_is_isometric`` is the conjunction over the factors.
-Projection is an isometry only where the tangent space does not turn: Euclidean space, the linear subspaces and the SPD cone.
+Projection is an isometry only where neither the tangent space nor the metric changes: Euclidean space and the linear subspaces.
 On :math:`\mathbb{R}^n \times S^{n-1}` it is not.
 
 8 Parallel transport and the locking condition
@@ -678,7 +678,7 @@ The items of section 4.6 map onto the crate as follows.
    ``ProductFactor::new(ManifoldKind::Euclidean, 1)`` carries the offset.
    SPD(1) is the half-line :math:`d > 0`, and no metric on it lets the offset change sign.
    From a pivot at the origin the optimal offset of the test plane is :math:`e_1 \cdot q^\ddagger = -0.8`.
-   On SPD(1) the retraction :math:`d + v + v^2 / (2d)` never goes below :math:`d / 2`, and the run ends its 1000 iterations at :math:`d \approx 10^{-13}` with :math:`f` still 0.47 above :math:`f^*`.
+   On SPD(1) the retraction :math:`d + v + v^2 / (2d)` never goes below :math:`d / 2`, and in the affine-invariant metric the gradient norm :math:`d\,|\partial f / \partial d|` vanishes with :math:`d`, so the run stops on the gradient tolerance after 116 iterations at :math:`d \approx 5 \times 10^{-11}` with :math:`f` still 0.47 above :math:`f^*`.
 
 2. *Weights and a preconditioner.*
    ``ProductFactor::with_weight`` sets the block weights of the design's section 4.2, and ``ProductFactor::with_metric`` attaches a tangent metric, here the harmonic rotation block :math:`k_B T (I + |\lambda_1| H_\parallel^{-1})` compressed to the tangent space.
@@ -860,23 +860,24 @@ The differences in detail:
 Two earlier branches carried product designs, and this one supersedes both.
 
 ``feat/manifold-api-060`` added ``RiemannianManifold`` in ``cdc8f5dd``, a product of Stiefel and SPD factors over caller-owned column-major slices.
-It never reached ``develop``, but it is part of the 0.6.0 line (``d3f94d11``), at which the OH-TST design pins rgmin.
-It had QR and polar Stiefel retractions, the Edelman, Arias and Smith exponential, SPD under the affine-invariant and log-Euclidean metrics, and a ``gradient_step`` helper.
-It sat beside ``ManifoldKind``, so no session could step it, and it implemented the old ``Manifold`` trait, whose only metric was the dot product.
-With the affine-invariant SPD gradient :math:`X \nabla f X`, a stepper's secant pairs would have mixed two metrics.
+It is part of the 0.6.0 line (``d3f94d11``), at which the OH-TST design pins rgmin, and this branch is built on that line.
+It has QR and polar Stiefel retractions, the Edelman, Arias and Smith exponential, SPD under the affine-invariant and log-Euclidean metrics, and a ``gradient_step`` helper.
+It sits beside ``ManifoldKind``, so no session can step it.
+It implemented the old ``Manifold`` trait, whose only metric was the dot product, so a driver would have measured its affine-invariant SPD gradient :math:`X \nabla f X` in another metric; its trait implementation now forwards ``inner`` to the factor metrics.
 Here the product is a ``ManifoldKind`` over every kind, with weights, and the trait carries ``inner``, so gradient and metric agree.
 Stiefel frames keep the column-major packing that both designs use.
-The polar retraction and the two SPD metrics are not ported: the ``Spd`` kind stays Frobenius, whose gradient is the symmetrized Euclidean one.
-An affine-invariant SPD kind can now be added through ``inner`` and ``egrad2rgrad``, and it would enter a product unchanged.
+``RiemannianManifold`` stays, and its polar retraction and log-Euclidean metric have no ``ManifoldKind``.
+The ``Spd`` kind of the 0.6.0 line already took the affine-invariant gradient :math:`X \nabla f X`, and it now carries the matching inner product :math:`\mathrm{tr}(X^{-1} U X^{-1} V)` and Hessian, so it enters a product in that metric.
+Sessions still form their secant pairs in the dot product of the packed coordinates, as on the 0.6.0 line, while ``minimize_rtr`` measures ``Spd`` in its own metric.
 
 The rest of the branch, up to ``7ea30e08``, binds ``RiemannianManifold`` outside Rust.
 Its C handles are built by ``rgmin_manifold_stiefel``, ``rgmin_manifold_spd`` and ``rgmin_manifold_product``, released by ``rgmin_manifold_free``, and passed to one function per slice method, ``gradient_step`` included.
 C++ wraps them in ``rgmin::Manifold``, and the Python module ``rgmin.manifold`` has ``Stiefel``, ``SPD`` and ``Product`` classes over NumPy arrays, a product point being a tuple of factor arrays.
 No function hands a handle to a session, whose manifold stays the unrelated ``rgmin_manifold_t`` token.
-None of the three bindings is ported, since each wraps the slice methods that this branch replaces.
-The 0.6.0 line numbers the handles ABI minor 41, the minor this branch gives ``rgmin_solver_set_power``, so merging the two lines renumbers one of them.
+The three bindings stay as they were and reach no ``ManifoldKind`` product.
+The handles hold ABI minor 41 and the line's minors 42 and 43 follow, so ``rgmin_solver_set_power`` takes minor 44.
 
-A caller of the 0.6.0 API moves over as follows:
+A caller of the 0.6.0 API who wants a session or the trust region moves over as follows:
 
 .. table::
 
@@ -887,7 +888,7 @@ A caller of the 0.6.0 API moves over as follows:
     +------------------------------------+-----------------------------------------------------------------------------------------+
     | ``stiefel(n, p, _)``               | ``ManifoldKind::stiefel(n, p)``, with the QR retraction                                 |
     +------------------------------------+-----------------------------------------------------------------------------------------+
-    | ``spd(p, _)``                      | ``ManifoldKind::Spd`` at packed length :math:`p^2`, in the Frobenius metric             |
+    | ``spd(p, _)``                      | ``ManifoldKind::Spd`` at packed length :math:`p^2`, in the affine-invariant metric      |
     +------------------------------------+-----------------------------------------------------------------------------------------+
     | no flat factor                     | ``ManifoldKind::Euclidean``                                                             |
     +------------------------------------+-----------------------------------------------------------------------------------------+
@@ -897,9 +898,9 @@ A caller of the 0.6.0 API moves over as follows:
     +------------------------------------+-----------------------------------------------------------------------------------------+
     | ``gradient_step``                  | a session step, or ``minimize_rtr``                                                     |
     +------------------------------------+-----------------------------------------------------------------------------------------+
-    | C handles, C++ ``rgmin::Manifold`` | not ported; ``rgmin_solver_set_power`` selects a power in a session                     |
+    | C handles, C++ ``rgmin::Manifold`` | kept; ``rgmin_solver_set_power`` selects a power in a session                           |
     +------------------------------------+-----------------------------------------------------------------------------------------+
-    | Python ``rgmin.manifold``          | not ported                                                                              |
+    | Python ``rgmin.manifold``          | kept, over the slice methods                                                            |
     +------------------------------------+-----------------------------------------------------------------------------------------+
 
 The plane of the design, ``product([stiefel(D, 1, _), spd(1, _)])`` in 0.6.0, becomes
@@ -965,7 +966,8 @@ It also checks that the gradient is the Riesz vector of the harmonic metric, run
   Sessions refuse it with ``Error::ProductTangentMetric``.
 
 - The stochastic drivers of the OH-TST design (its item 5) are not here: stochastic gradient ascent with a step schedule and iterate averaging, the norm test on the sample size, a trust region that weighs a measured decrease against its standard error, and ``NoiseFloor`` driven by a caller's covariance.
-  Each needs an interface for noisy values and gradients with their covariance, which the ``Manifold`` trait and the sessions do not have, and convergence tests on sampled objectives; ``NoiseFloor`` belongs to the 0.6.0 line and comes with its port.
+  Each needs an interface for noisy values and gradients with their covariance, which the ``Manifold`` trait and the sessions do not have, and convergence tests on sampled objectives.
+  ``Control::noise_floor`` of the 0.6.0 line stops a session at :math:`c \sqrt{n_\mathrm{free}}\, \varepsilon_g` for a caller's gradient noise :math:`\varepsilon_g`, a scalar in place of a covariance, and ``minimize_rtr`` has no such stop.
   The deterministic core of such a driver is here: ``egrad2rgrad`` gives the preconditioned direction, ``truncated_cg_riemannian`` the trust-region step in the metric and ``RtrRadius::update`` the radius from a decrease measured outside the model.
 
 - Item 6, a Hessian-vector product with an error bar and a preconditioner built from the harmonic model, is not here either.
@@ -977,11 +979,10 @@ It also checks that the gradient is the Riesz vector of the harmonic metric, run
 - ``Multinomial`` projects Fisher-orthogonally but keeps the dot product as its inner product, so its gradient does not represent the differential in that inner product, and the derivative tests leave it out.
   The doubly stochastic kinds carry the Fisher inner product and are consistent.
 
-- ``Spd`` is the Frobenius metric on the cone.
-  Its retraction :math:`x + v + \tfrac12 v x^{-1} v` is not second order for that metric, and it has no exponential, because straight lines leave the cone.
-  Its logarithm :math:`y - x`, its parallel transport, the identity, and its Hessian are exact.
+- ``Spd`` carries the affine-invariant metric of the 0.6.0 line, in which its gradient, inner product and Hessian agree and its retraction :math:`x + v + \tfrac12 v x^{-1} v` is second order.
+  Its transport, the identity on tangents, is not an isometry of that metric.
 
-- ``Multinomial`` and its doubly stochastic variants, ``MwRigid`` and ``RigidQuotient`` have no Hessian or geodesic closed forms, and ``StiefelP`` has a Hessian but no exponential, logarithm or parallel transport.
+- ``Multinomial`` and its doubly stochastic variants, ``MwRigid`` and ``RigidQuotient`` have no Hessian or geodesic closed forms, and ``StiefelP`` and ``Spd`` have a Hessian but no exponential, logarithm or parallel transport.
   A product containing one returns ``None`` for those operations; projection, retraction, transport and the gradient still work.
 
 - A weighted product refuses the settings that read raw coordinates, with ``Error::ProductChart``.
@@ -990,4 +991,4 @@ It also checks that the gradient is the Riesz vector of the harmonic metric, run
   A general weighted product has to carry its parameterized factors (the sizes of Oblique, Stiefel and the complex kinds), their weights and the basis of a subspace sphere across the ABI.
   A descriptor struct or composed handles like those of the 0.6.0 line can do that, and either is a separate ABI design.
   Tangent metrics and gauges are Rust callbacks: the C ABI exposes sessions, which refuse tangent metrics, and has no entry for ``minimize_rtr``, so both wait for a callback design.
-  The Python extension on ``develop`` selects no manifold, and ``rgmin.manifold`` of the 0.6.0 line binds the slice methods and is not ported, so a Python product waits for a binding of ``ManifoldKind``.
+  The Python module ``rgmin.manifold`` binds the slice methods of ``RiemannianManifold`` and no ``ManifoldKind``, so a Python product waits for a binding of ``ManifoldKind``.

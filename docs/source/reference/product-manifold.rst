@@ -166,7 +166,7 @@ Factor capabilities
     +-----------------------------------------------------------+-----------------+---------+---------------------------------------+-------------------------+-----------------------------+
     | ``Constant { n }``                                        | yes             | yes     | yes                                   | yes                     | 0                           |
     +-----------------------------------------------------------+-----------------+---------+---------------------------------------+-------------------------+-----------------------------+
-    | ``Spd``                                                   | yes             | no      | yes                                   | yes                     | :math:`\sqrt{\mathrm{len}}` |
+    | ``Spd``                                                   | yes             | no      | no                                    | no                      | :math:`\sqrt{\mathrm{len}}` |
     +-----------------------------------------------------------+-----------------+---------+---------------------------------------+-------------------------+-----------------------------+
     | ``Multinomial``                                           | no              | no      | no                                    | no                      | :math:`\sqrt{\mathrm{len}}` |
     +-----------------------------------------------------------+-----------------+---------+---------------------------------------+-------------------------+-----------------------------+
@@ -176,7 +176,7 @@ Factor capabilities
     +-----------------------------------------------------------+-----------------+---------+---------------------------------------+-------------------------+-----------------------------+
 
 :math:`\mathrm{len}` is the packed length and :math:`\dim` the dimension of the centered matrices, :math:`m n - n` for centered rows and :math:`m n - m` for centered columns.
-``Positive`` and the doubly stochastic kinds carry their own metric through ``inner`` and ``egrad2rgrad``; every other kind uses the dot product of its packed coordinates.
+``Positive``, ``Spd`` and the doubly stochastic kinds carry their own metric through ``inner`` and ``egrad2rgrad``; every other kind uses the dot product of its packed coordinates.
 ``Multinomial`` pairs a Fisher-orthogonal projection with the dot product, so its gradient does not represent the differential in its inner product.
 
 Subspace sphere
