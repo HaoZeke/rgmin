@@ -27,6 +27,102 @@
 
 use ndarray::Array1;
 
+/// Bind the geometry a [`ManifoldKind`] names to `$f` and evaluate `$body`.
+macro_rules! with_kind {
+    ($kind:expr, |$f:ident| $body:expr) => {
+        match $kind {
+            ManifoldKind::Euclidean => {
+                let $f = Euclidean;
+                $body
+            }
+            ManifoldKind::Sphere => {
+                let $f = Sphere;
+                $body
+            }
+            ManifoldKind::So3 => {
+                let $f = So3;
+                $body
+            }
+            ManifoldKind::Stiefel => {
+                let $f = Stiefel;
+                $body
+            }
+            ManifoldKind::Se3 => {
+                let $f = Se3;
+                $body
+            }
+            ManifoldKind::RigidQuotient => {
+                let $f = RigidQuotient;
+                $body
+            }
+            ManifoldKind::MwRigid => {
+                let $f = MwRigid;
+                $body
+            }
+            ManifoldKind::Oblique { n, m } => {
+                let $f = Oblique { n: *n, m: *m };
+                $body
+            }
+            ManifoldKind::Multinomial => {
+                let $f = Multinomial;
+                $body
+            }
+            ManifoldKind::StiefelP { n, p } => {
+                let $f = StiefelNp { n: *n, p: *p };
+                $body
+            }
+            ManifoldKind::Spd => {
+                let $f = Spd;
+                $body
+            }
+            ManifoldKind::Symmetric => {
+                let $f = Symmetric;
+                $body
+            }
+            ManifoldKind::SkewSymmetric => {
+                let $f = SkewSymmetric;
+                $body
+            }
+            ManifoldKind::ComplexCircle { n } => {
+                let $f = ComplexCircle { n: *n };
+                $body
+            }
+            ManifoldKind::EuclideanComplex { n } => {
+                let $f = EuclideanComplex { n: *n };
+                $body
+            }
+            ManifoldKind::Constant { n } => {
+                let $f = Constant { n: *n };
+                $body
+            }
+            ManifoldKind::MultinomialDoublyStochastic { n } => {
+                let $f = MultinomialDoublyStochastic { n: *n };
+                $body
+            }
+            ManifoldKind::MultinomialSymmetric { n } => {
+                let $f = MultinomialSymmetric { n: *n };
+                $body
+            }
+            ManifoldKind::SphereComplex { n } => {
+                let $f = SphereComplex { n: *n };
+                $body
+            }
+            ManifoldKind::Positive { n } => {
+                let $f = Positive { n: *n };
+                $body
+            }
+            ManifoldKind::CenteredMatrix { m, n, rows } => {
+                let $f = CenteredMatrix {
+                    m: *m,
+                    n: *n,
+                    rows: *rows,
+                };
+                $body
+            }
+        }
+    };
+}
+
 mod centered;
 mod complex_circle;
 mod constant;
@@ -355,171 +451,22 @@ pub trait Manifold {
 
 impl Manifold for ManifoldKind {
     fn required_dim(&self, n: usize) -> Result<(), usize> {
-        match self {
-            Self::Euclidean => Euclidean.required_dim(n),
-            Self::Sphere => Sphere.required_dim(n),
-            Self::So3 => So3.required_dim(n),
-            Self::Stiefel => Stiefel.required_dim(n),
-            Self::Se3 => Se3.required_dim(n),
-            Self::RigidQuotient => RigidQuotient.required_dim(n),
-            Self::MwRigid => MwRigid.required_dim(n),
-            Self::Oblique { n: an, m } => Oblique { n: *an, m: *m }.required_dim(n),
-            Self::Multinomial => Multinomial.required_dim(n),
-            Self::StiefelP { n: sn, p } => StiefelNp { n: *sn, p: *p }.required_dim(n),
-            Self::Spd => Spd.required_dim(n),
-            Self::Symmetric => Symmetric.required_dim(n),
-            Self::SkewSymmetric => SkewSymmetric.required_dim(n),
-            Self::ComplexCircle { n: cn } => ComplexCircle { n: *cn }.required_dim(n),
-            Self::EuclideanComplex { n: en } => EuclideanComplex { n: *en }.required_dim(n),
-            Self::Constant { n: kn } => Constant { n: *kn }.required_dim(n),
-            Self::MultinomialDoublyStochastic { n: dn } => {
-                MultinomialDoublyStochastic { n: *dn }.required_dim(n)
-            }
-            Self::MultinomialSymmetric { n: sn } => MultinomialSymmetric { n: *sn }.required_dim(n),
-            Self::SphereComplex { n: cn } => SphereComplex { n: *cn }.required_dim(n),
-            Self::Positive { n: pn } => Positive { n: *pn }.required_dim(n),
-            Self::CenteredMatrix { m, n: cn, rows } => CenteredMatrix {
-                m: *m,
-                n: *cn,
-                rows: *rows,
-            }
-            .required_dim(n),
-        }
+        with_kind!(self, |f| f.required_dim(n))
     }
 
     fn project(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
-        match self {
-            Self::Euclidean => Euclidean.project(x, v),
-            Self::Sphere => Sphere.project(x, v),
-            Self::So3 => So3.project(x, v),
-            Self::Stiefel => Stiefel.project(x, v),
-            Self::Se3 => Se3.project(x, v),
-            Self::RigidQuotient => RigidQuotient.project(x, v),
-            Self::MwRigid => MwRigid.project(x, v),
-            Self::Oblique { n, m } => Oblique { n: *n, m: *m }.project(x, v),
-            Self::Multinomial => Multinomial.project(x, v),
-            Self::StiefelP { n, p } => StiefelNp { n: *n, p: *p }.project(x, v),
-            Self::Spd => Spd.project(x, v),
-            Self::Symmetric => Symmetric.project(x, v),
-            Self::SkewSymmetric => SkewSymmetric.project(x, v),
-            Self::ComplexCircle { n } => ComplexCircle { n: *n }.project(x, v),
-            Self::EuclideanComplex { n } => EuclideanComplex { n: *n }.project(x, v),
-            Self::Constant { n } => Constant { n: *n }.project(x, v),
-            Self::MultinomialDoublyStochastic { n } => {
-                MultinomialDoublyStochastic { n: *n }.project(x, v)
-            }
-            Self::MultinomialSymmetric { n } => MultinomialSymmetric { n: *n }.project(x, v),
-            Self::SphereComplex { n } => SphereComplex { n: *n }.project(x, v),
-            Self::Positive { n } => Positive { n: *n }.project(x, v),
-            Self::CenteredMatrix { m, n, rows } => CenteredMatrix {
-                m: *m,
-                n: *n,
-                rows: *rows,
-            }
-            .project(x, v),
-        }
+        with_kind!(self, |f| f.project(x, v))
     }
 
     fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
-        match self {
-            Self::Euclidean => Euclidean.retract(x, v),
-            Self::Sphere => Sphere.retract(x, v),
-            Self::So3 => So3.retract(x, v),
-            Self::Stiefel => Stiefel.retract(x, v),
-            Self::Se3 => Se3.retract(x, v),
-            Self::RigidQuotient => RigidQuotient.retract(x, v),
-            Self::MwRigid => MwRigid.retract(x, v),
-            Self::Oblique { n, m } => Oblique { n: *n, m: *m }.retract(x, v),
-            Self::Multinomial => Multinomial.retract(x, v),
-            Self::StiefelP { n, p } => StiefelNp { n: *n, p: *p }.retract(x, v),
-            Self::Spd => Spd.retract(x, v),
-            Self::Symmetric => Symmetric.retract(x, v),
-            Self::SkewSymmetric => SkewSymmetric.retract(x, v),
-            Self::ComplexCircle { n } => ComplexCircle { n: *n }.retract(x, v),
-            Self::EuclideanComplex { n } => EuclideanComplex { n: *n }.retract(x, v),
-            Self::Constant { n } => Constant { n: *n }.retract(x, v),
-            Self::MultinomialDoublyStochastic { n } => {
-                MultinomialDoublyStochastic { n: *n }.retract(x, v)
-            }
-            Self::MultinomialSymmetric { n } => MultinomialSymmetric { n: *n }.retract(x, v),
-            Self::SphereComplex { n } => SphereComplex { n: *n }.retract(x, v),
-            Self::Positive { n } => Positive { n: *n }.retract(x, v),
-            Self::CenteredMatrix { m, n, rows } => CenteredMatrix {
-                m: *m,
-                n: *n,
-                rows: *rows,
-            }
-            .retract(x, v),
-        }
+        with_kind!(self, |f| f.retract(x, v))
     }
 
     fn transport(&self, x_from: &Array1<f64>, x_to: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
-        match self {
-            Self::Euclidean => Euclidean.transport(x_from, x_to, v),
-            Self::Sphere => Sphere.transport(x_from, x_to, v),
-            Self::So3 => So3.transport(x_from, x_to, v),
-            Self::Stiefel => Stiefel.transport(x_from, x_to, v),
-            Self::Se3 => Se3.transport(x_from, x_to, v),
-            Self::RigidQuotient => RigidQuotient.transport(x_from, x_to, v),
-            Self::MwRigid => MwRigid.transport(x_from, x_to, v),
-            Self::Oblique { n, m } => Oblique { n: *n, m: *m }.transport(x_from, x_to, v),
-            Self::Multinomial => Multinomial.transport(x_from, x_to, v),
-            Self::StiefelP { n, p } => StiefelNp { n: *n, p: *p }.transport(x_from, x_to, v),
-            Self::Spd => Spd.transport(x_from, x_to, v),
-            Self::Symmetric => Symmetric.transport(x_from, x_to, v),
-            Self::SkewSymmetric => SkewSymmetric.transport(x_from, x_to, v),
-            Self::ComplexCircle { n } => ComplexCircle { n: *n }.transport(x_from, x_to, v),
-            Self::EuclideanComplex { n } => EuclideanComplex { n: *n }.transport(x_from, x_to, v),
-            Self::Constant { n } => Constant { n: *n }.transport(x_from, x_to, v),
-            Self::MultinomialDoublyStochastic { n } => {
-                MultinomialDoublyStochastic { n: *n }.transport(x_from, x_to, v)
-            }
-            Self::MultinomialSymmetric { n } => {
-                MultinomialSymmetric { n: *n }.transport(x_from, x_to, v)
-            }
-            Self::SphereComplex { n } => SphereComplex { n: *n }.transport(x_from, x_to, v),
-            Self::Positive { n } => Positive { n: *n }.transport(x_from, x_to, v),
-            Self::CenteredMatrix { m, n, rows } => CenteredMatrix {
-                m: *m,
-                n: *n,
-                rows: *rows,
-            }
-            .transport(x_from, x_to, v),
-        }
+        with_kind!(self, |f| f.transport(x_from, x_to, v))
     }
 
     fn egrad2rgrad(&self, x: &Array1<f64>, egrad: &Array1<f64>) -> Array1<f64> {
-        match self {
-            Self::Euclidean => Euclidean.egrad2rgrad(x, egrad),
-            Self::Sphere => Sphere.egrad2rgrad(x, egrad),
-            Self::So3 => So3.egrad2rgrad(x, egrad),
-            Self::Stiefel => Stiefel.egrad2rgrad(x, egrad),
-            Self::Se3 => Se3.egrad2rgrad(x, egrad),
-            Self::RigidQuotient => RigidQuotient.egrad2rgrad(x, egrad),
-            Self::MwRigid => MwRigid.egrad2rgrad(x, egrad),
-            Self::Oblique { n, m } => Oblique { n: *n, m: *m }.egrad2rgrad(x, egrad),
-            Self::Multinomial => Multinomial.egrad2rgrad(x, egrad),
-            Self::StiefelP { n, p } => StiefelNp { n: *n, p: *p }.egrad2rgrad(x, egrad),
-            Self::Spd => Spd.egrad2rgrad(x, egrad),
-            Self::Symmetric => Symmetric.egrad2rgrad(x, egrad),
-            Self::SkewSymmetric => SkewSymmetric.egrad2rgrad(x, egrad),
-            Self::ComplexCircle { n } => ComplexCircle { n: *n }.egrad2rgrad(x, egrad),
-            Self::EuclideanComplex { n } => EuclideanComplex { n: *n }.egrad2rgrad(x, egrad),
-            Self::Constant { n } => Constant { n: *n }.egrad2rgrad(x, egrad),
-            Self::MultinomialDoublyStochastic { n } => {
-                MultinomialDoublyStochastic { n: *n }.egrad2rgrad(x, egrad)
-            }
-            Self::MultinomialSymmetric { n } => {
-                MultinomialSymmetric { n: *n }.egrad2rgrad(x, egrad)
-            }
-            Self::SphereComplex { n } => SphereComplex { n: *n }.egrad2rgrad(x, egrad),
-            Self::Positive { n } => Positive { n: *n }.egrad2rgrad(x, egrad),
-            Self::CenteredMatrix { m, n, rows } => CenteredMatrix {
-                m: *m,
-                n: *n,
-                rows: *rows,
-            }
-            .egrad2rgrad(x, egrad),
-        }
+        with_kind!(self, |f| f.egrad2rgrad(x, egrad))
     }
 }
