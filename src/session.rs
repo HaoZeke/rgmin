@@ -4820,12 +4820,18 @@ impl Solver {
     /// same point: a map that leaves the objective unchanged, such as
     /// re-centring the pivot of a hyperplane on the plane. It acts on the
     /// caller's coordinates before every step but the first, so the
-    /// returned report describes the point left in `x`. A step after a move
-    /// evaluates the objective at the moved point and keeps the method
-    /// memory, as a step after any change of `x` does. Every report carries
-    /// its coordinates and gradient. The run ends as [`Self::run`] does,
-    /// on the first step whose status is not [`Status::Iterating`], and a
-    /// spent budget is [`Status::Budget`].
+    /// returned report describes the point left in `x`. Every report
+    /// carries its coordinates and gradient. The run ends as [`Self::run`]
+    /// does, on the first step whose status is not [`Status::Iterating`],
+    /// and a spent budget is [`Status::Budget`].
+    ///
+    /// A move is not a step: the value and gradient before it belong to
+    /// the old representation, where a plane rotates about the old pivot,
+    /// so their secant with the moved point holds no curvature. A gauge
+    /// that changes `x` therefore rebases the session, as
+    /// [`Self::rebase`]: the next step evaluates the objective afresh at
+    /// the moved point and the retained curvature preconditions it. A
+    /// gauge that leaves `x` as it was is no move.
     pub fn run_gauged<O, G>(&mut self, obj: &O, x: &mut Array1<f64>, mut gauge: G) -> Result<Report>
     where
         O: DifferentiableObjective<f64> + ?Sized,
@@ -4840,7 +4846,11 @@ impl Solver {
             if report.grad_norm < tol || report.status != Status::Iterating {
                 break;
             }
+            let before = x.clone();
             gauge(x);
+            if *x != before {
+                self.rebase();
+            }
             report = self.step(obj, x)?;
         }
         report.status = match report.status {
