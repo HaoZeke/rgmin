@@ -48,6 +48,9 @@ Weighted products, subspace spheres, tangent metrics and gauges stay Rust only.
 An unconstrained Newton-CG or Newton-PCG ``Solver::run`` ends with the Riemannian gradient in its report.
 It reported the Euclidean gradient that its difference products keep, so on a curved manifold a run that stopped on a vanishing Riemannian gradient reported the normal part of the Euclidean one.
 
+The documentation of ``ManifoldKind::Spd`` and ``Spd`` names the Frobenius metric that the kind measures in.
+It said affine-invariant, the metric of manopt's ``sympositivedefinitefactory``, whose retraction the kind keeps.
+
 ``Lbfgs::minimize_on`` and ``Lbfgs::minimize_box_on`` offer each accepted iterate to a callback as the iteration, the value and the coordinates.
 Returning false ends the run at that point, as ``minimize_watched`` does.
 A caller can project those coordinates, a bond length or a height above a slab, without the solver storing that map.
