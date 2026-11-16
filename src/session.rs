@@ -1585,7 +1585,7 @@ impl Solver {
                 Ok(rep) if rep.grad_norm < tol => {
                     let value = rep.value;
                     self.brief = false;
-                    let g = self.last_grad.clone();
+                    let g = self.reported_grad(x);
                     return Ok(self.report(value, x, &g));
                 }
                 Ok(_) => {}
@@ -1600,9 +1600,22 @@ impl Solver {
             Err(err) => Err(err),
             Ok(()) => {
                 let value = self.last_value;
-                let g = self.last_grad.clone();
+                let g = self.reported_grad(x);
                 Ok(self.report(value, x, &g))
             }
+        }
+    }
+
+    /// The gradient a step report carries, for the report at the end of a
+    /// run. The unconstrained Newton-CG path remembers the raw gradient,
+    /// which its difference products need; its reports are horizontal.
+    fn reported_grad(&self, x: &Array1<f64>) -> Array1<f64> {
+        let raw = self.constraints.is_none()
+            && matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. });
+        if raw && self.last_grad.len() == x.len() {
+            self.horizontal_grad(x, &self.last_grad)
+        } else {
+            self.last_grad.clone()
         }
     }
 
