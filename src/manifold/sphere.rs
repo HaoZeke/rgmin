@@ -9,6 +9,16 @@
 //! and the Hessian \(P_x(\nabla^2 f\,v - (x^\top \nabla f)\,v)\). The
 //! free functions act on one unit vector so that the oblique manifold,
 //! the complex circle and the complex sphere reuse them blockwise.
+//!
+//! The Hessian keeps the Weingarten term \(-(x^\top\nabla f)\,v\)
+//! explicit, so it holds for any smooth extension of the cost off the
+//! sphere. If \(h\) vanishes on the sphere then \(\nabla h = \mu x\)
+//! there, and \(P_x\nabla^2 h\,v = \mu v\) for tangent \(v\), which the
+//! term removes. The degree-zero extension \(f(x/\|x\|)\) has
+//! \(x^\top\nabla f = 0\) on the sphere, where the projected Hessian
+//! alone is exact. The session's dogleg and Newton-CG steps model the
+//! Hessian that way, without the term; [`crate::rtr::minimize_rtr`]
+//! calls this one.
 
 use ndarray::{Array1, ArrayView1};
 

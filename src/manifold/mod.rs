@@ -688,7 +688,7 @@ pub trait Manifold {
         self.inner(x, v, v).max(0.0).sqrt()
     }
 
-    /// Riemannian Hessian action \(\mathrm{Hess} f(x)[v]\), manopt
+    /// Riemannian Hessian action \(\mathrm{Hess} f(x)\,v\), manopt
     /// `ehess2rhess`.
     ///
     /// `egrad` is the Euclidean gradient at `x`, `ehess` the Euclidean
@@ -696,6 +696,16 @@ pub trait Manifold {
     /// The result adds the curvature (Weingarten) term of the embedding
     /// to the projected `ehess`. `None` when the kind does not supply that
     /// term, which is the default.
+    ///
+    /// `egrad` and `ehess` may come from any smooth extension \(\bar f\)
+    /// of the cost off the manifold. On an embedded kind two extensions
+    /// differ by a function that vanishes on the manifold, so its
+    /// gradient there is normal, and the Weingarten term cancels what that
+    /// normal gradient adds to the projected Hessian: the result does not
+    /// depend on the choice. The projected `ehess` alone is the Riemannian
+    /// Hessian where the normal part of `egrad` adds no curvature; on the
+    /// sphere that is \(x^\top\nabla\bar f = 0\), which the degree-zero
+    /// extension \(\bar f(x) = f(x/\|x\|)\) satisfies.
     fn ehess2rhess(
         &self,
         x: &Array1<f64>,
