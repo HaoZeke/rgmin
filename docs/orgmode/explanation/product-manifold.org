@@ -633,7 +633,7 @@ The differences in detail:
 
 Two earlier branches carried product designs, and this one supersedes both.
 
-~feat/manifold-api-060~ (~cdc8f5dd~) added ~RiemannianManifold~, a product of Stiefel and SPD factors over caller-owned column-major slices.
+~feat/manifold-api-060~ added ~RiemannianManifold~ in ~cdc8f5dd~, a product of Stiefel and SPD factors over caller-owned column-major slices.
 It never reached ~develop~, but it is part of the 0.6.0 line (~d3f94d11~), at which the OH-TST design pins rgmin.
 It had QR and polar Stiefel retractions, the Edelman, Arias and Smith exponential, SPD under the affine-invariant and log-Euclidean metrics, and a ~gradient_step~ helper.
 It sat beside ~ManifoldKind~, so no session could step it, and it implemented the old ~Manifold~ trait, whose only metric was the dot product.
@@ -642,6 +642,13 @@ Here the product is a ~ManifoldKind~ over every kind, with weights, and the trai
 Stiefel frames keep the column-major packing that both designs use.
 The polar retraction and the two SPD metrics are not ported: the ~Spd~ kind stays Frobenius, whose gradient is the symmetrized Euclidean one.
 An affine-invariant SPD kind can now be added through ~inner~ and ~egrad2rgrad~, and it would enter a product unchanged.
+
+The rest of the branch, up to ~7ea30e08~, binds ~RiemannianManifold~ outside Rust.
+Its C handles are built by ~rgmin_manifold_stiefel~, ~rgmin_manifold_spd~ and ~rgmin_manifold_product~, released by ~rgmin_manifold_free~, and passed to one function per slice method, ~gradient_step~ included.
+C++ wraps them in ~rgmin::Manifold~, and the Python module ~rgmin.manifold~ has ~Stiefel~, ~SPD~ and ~Product~ classes over NumPy arrays, a product point being a tuple of factor arrays.
+No function hands a handle to a session, whose manifold stays the unrelated ~rgmin_manifold_t~ token.
+None of the three bindings is ported, since each wraps the slice methods that this branch replaces.
+The 0.6.0 line numbers the handles ABI minor 41, the minor this branch gives ~rgmin_solver_set_power~, so merging the two lines renumbers one of them.
 
 A caller of the 0.6.0 API moves over as follows:
 
@@ -654,6 +661,8 @@ A caller of the 0.6.0 API moves over as follows:
 | ~product(parts)~                     | ~ManifoldKind::product~ of ~ProductFactor~ values, with weights and tangent metrics |
 | slice methods writing into ~out~     | ~Manifold~ methods on ~Array1~ that return the result                        |
 | ~gradient_step~                      | a session step, or ~minimize_rtr~                                            |
+| C handles, C++ ~rgmin::Manifold~     | not ported; ~rgmin_solver_set_power~ selects a power in a session            |
+| Python ~rgmin.manifold~              | not ported                                                                   |
 
 The plane of the design, ~product([stiefel(D, 1, _), spd(1, _)])~ in 0.6.0, becomes
 ~ManifoldKind::product([ProductFactor::new(ManifoldKind::sphere_excluding(e)?, D).with_weight(l2), ProductFactor::new(ManifoldKind::Euclidean, 1)])~
@@ -715,7 +724,7 @@ It also checks that the gradient is the Riesz vector of the harmonic metric, run
   A product containing one returns ~None~ for those operations; projection, retraction, transport and the gradient still work.
 - A weighted product refuses the settings that read raw coordinates, with ~Error::ProductChart~.
 - The C ABI selects powers only, through ~rgmin_solver_set_power~.
-  A general weighted product needs a descriptor for parameterized factors (the sizes of Oblique, Stiefel and the complex kinds) and their weights, and that struct is a separate ABI design.
-  A subspace sphere needs its basis passed as an array, which belongs in the same descriptor.
+  A general weighted product has to carry its parameterized factors (the sizes of Oblique, Stiefel and the complex kinds), their weights and the basis of a subspace sphere across the ABI.
+  A descriptor struct or composed handles like those of the 0.6.0 line can do that, and either is a separate ABI design.
   Tangent metrics and gauges are Rust callbacks: the C ABI exposes sessions, which refuse tangent metrics, and has no entry for ~minimize_rtr~, so both wait for a callback design.
-  The Python extension selects no manifold at all yet; a product waits for that API.
+  The Python extension on ~develop~ selects no manifold, and ~rgmin.manifold~ of the 0.6.0 line binds the slice methods and is not ported, so a Python product waits for a binding of ~ManifoldKind~.
