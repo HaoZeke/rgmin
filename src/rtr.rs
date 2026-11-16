@@ -21,14 +21,16 @@
 //! `rho = 3/4` at the boundary, never past `Delta_bar`. Nothing here is a
 //! per-fixture number.
 //!
-//! [`minimize_rtr`] runs the whole loop in the metric of the manifold:
-//! the gradient through [`Manifold::egrad2rgrad`], the Hessian through
+//! [`minimize_rtr`](crate::rtr::minimize_rtr) runs the whole loop in the
+//! metric of the manifold: the gradient through
+//! [`Manifold::egrad2rgrad`], the Hessian through
 //! [`Manifold::ehess2rhess`] with its Weingarten term where the kind
 //! supplies one, and every inner product and the trust ball in
-//! [`Manifold::inner`]. [`truncated_cg_riemannian`] is one of its
-//! subproblems, for a driver that measures the decrease itself.
-//! [`minimize_rtr_gauged`] moves to another representation of the same
-//! point after every accepted step.
+//! [`Manifold::inner`].
+//! [`truncated_cg_riemannian`](crate::rtr::truncated_cg_riemannian) is one
+//! of its subproblems, for a driver that measures the decrease itself.
+//! [`minimize_rtr_gauged`](crate::rtr::minimize_rtr_gauged) moves to
+//! another representation of the same point after every accepted step.
 //!
 //! For `f(x) = x^2` at `x = 1`, the model has its minimizer at `eta = -1`:
 //! ```
