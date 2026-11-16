@@ -21,6 +21,12 @@
 //! `rho = 3/4` at the boundary, never past `Delta_bar`. Nothing here is a
 //! per-fixture number.
 //!
+//! [`minimize_rtr`] runs the whole loop in the metric of the manifold:
+//! the gradient through [`Manifold::egrad2rgrad`], the Hessian through
+//! [`Manifold::ehess2rhess`] with its Weingarten term where the kind
+//! supplies one, and every inner product and the trust ball in
+//! [`Manifold::inner`].
+//!
 //! For `f(x) = x^2` at `x = 1`, the model has its minimizer at `eta = -1`:
 //! ```
 //! use ndarray::array;
@@ -35,7 +41,7 @@
 use ndarray::{Array1, ArrayView1};
 
 use crate::manifold::Manifold;
-use crate::vecops::{dot, nrm2};
+use crate::vecops::dot;
 
 /// Why the truncated CG iteration stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,16 +74,32 @@ pub struct TcgResult {
     pub iterations: usize,
 }
 
-/// Positive root `tau` of `||eta + tau delta|| = radius`.
-fn boundary_tau(eta: &Array1<f64>, delta: &Array1<f64>, radius: f64) -> f64 {
-    let dd = dot(delta.view(), delta.view());
+/// Positive root `tau` of `||eta + tau delta|| = radius` in `inner`.
+fn boundary_tau<I>(inner: &I, eta: &Array1<f64>, delta: &Array1<f64>, radius: f64) -> f64
+where
+    I: Fn(&Array1<f64>, &Array1<f64>) -> f64,
+{
+    let dd = inner(delta, delta);
     if dd <= 0.0 {
         return 0.0;
     }
-    let ed = dot(eta.view(), delta.view());
-    let ee = dot(eta.view(), eta.view());
+    let ed = inner(eta, delta);
+    let ee = inner(eta, eta);
     let disc = (ed * ed - dd * (ee - radius * radius)).max(0.0);
     (-ed + disc.sqrt()) / dd
+}
+
+fn euclidean(a: &Array1<f64>, b: &Array1<f64>) -> f64 {
+    dot(a.view(), b.view())
+}
+
+/// Trust radius and the inner stopping rule of one subproblem.
+#[derive(Clone, Copy)]
+struct TcgLimits {
+    radius: f64,
+    theta: f64,
+    kappa: f64,
+    maxiter: usize,
 }
 
 /// Truncated CG for the trust-region subproblem on a tangent space given by
@@ -88,9 +110,9 @@ fn boundary_tau(eta: &Array1<f64>, delta: &Array1<f64>, radius: f64) -> f64 {
 /// superlinear inner stopping rule (`theta = 1`, `kappa = 0.1` are the
 /// reference defaults).
 pub fn truncated_cg_projected<P, F>(
-    mut project: P,
+    project: P,
     grad: ArrayView1<f64>,
-    mut hvp: F,
+    hvp: F,
     radius: f64,
     theta: f64,
     kappa: f64,
@@ -100,12 +122,41 @@ where
     P: FnMut(&Array1<f64>) -> Array1<f64>,
     F: FnMut(&Array1<f64>) -> Array1<f64>,
 {
+    let limits = TcgLimits {
+        radius,
+        theta,
+        kappa,
+        maxiter,
+    };
+    tcg(euclidean, project, grad, hvp, limits)
+}
+
+/// Steihaug–Toint truncated CG with every inner product and the trust
+/// ball measured in `inner`.
+fn tcg<I, P, F>(
+    inner: I,
+    mut project: P,
+    grad: ArrayView1<f64>,
+    mut hvp: F,
+    limits: TcgLimits,
+) -> TcgResult
+where
+    I: Fn(&Array1<f64>, &Array1<f64>) -> f64,
+    P: FnMut(&Array1<f64>) -> Array1<f64>,
+    F: FnMut(&Array1<f64>) -> Array1<f64>,
+{
+    let TcgLimits {
+        radius,
+        theta,
+        kappa,
+        maxiter,
+    } = limits;
     let n = grad.len();
     let g = project(&grad.to_owned());
     let mut eta = Array1::<f64>::zeros(n);
     let mut r = g.clone();
     let mut delta = -&r;
-    let r0 = nrm2(r.view());
+    let r0 = inner(&r, &r).sqrt();
     if r0.is_nan() || r0 <= 0.0 {
         return TcgResult {
             eta,
@@ -121,24 +172,24 @@ where
     for _ in 0..maxiter {
         iterations += 1;
         let hd = project(&hvp(&delta));
-        let kap = dot(delta.view(), hd.view());
+        let kap = inner(&delta, &hd);
         if kap <= 0.0 {
-            let tau = boundary_tau(&eta, &delta, radius);
+            let tau = boundary_tau(&inner, &eta, &delta, radius);
             eta = &eta + &(&delta * tau);
             stop = TcgStop::NegativeCurvature;
             break;
         }
         let alpha = rr / kap;
         let eta_new = &eta + &(&delta * alpha);
-        if nrm2(eta_new.view()) >= radius {
-            let tau = boundary_tau(&eta, &delta, radius);
+        if inner(&eta_new, &eta_new).sqrt() >= radius {
+            let tau = boundary_tau(&inner, &eta, &delta, radius);
             eta = &eta + &(&delta * tau);
             stop = TcgStop::Boundary;
             break;
         }
         eta = eta_new;
         r = &r + &(&hd * alpha);
-        let rr_new = dot(r.view(), r.view());
+        let rr_new = inner(&r, &r);
         if rr_new.sqrt() <= tol {
             stop = TcgStop::Residual;
             break;
@@ -148,7 +199,7 @@ where
         delta = &(-&r) + &(&delta * beta);
     }
     let heta = project(&hvp(&eta));
-    let model_decrease = -(dot(g.view(), eta.view()) + 0.5 * dot(eta.view(), heta.view()));
+    let model_decrease = -(inner(&g, &eta) + 0.5 * inner(&eta, &heta));
     TcgResult {
         eta,
         model_decrease,
@@ -227,10 +278,198 @@ where
     )
 }
 
+/// Options for [`minimize_rtr`]. The acceptance and radius constants are
+/// those of [`RtrRadius`]. The defaults are manopt `trustregions`'.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct RtrOptions {
+    /// Upper bound \(\bar\Delta\) on the trust radius; the first radius is
+    /// one eighth of it. `None` takes [`Manifold::typical_dist`].
+    pub radius_max: Option<f64>,
+    /// Stop when the Riemannian gradient is at most this long.
+    pub grad_tol: f64,
+    /// Outer iteration budget.
+    pub max_iter: usize,
+    /// Inner CG budget. `None` takes the packed length, which bounds the
+    /// dimension of the tangent space.
+    pub cg_max: Option<usize>,
+    /// Exponent \(\theta\) of the inner stopping rule.
+    pub theta: f64,
+    /// Factor \(\kappa\) of the inner stopping rule.
+    pub kappa: f64,
+    /// Both decreases in the ratio \(\rho\) gain \(\max(1, |f|)\,
+    /// \varepsilon\) times this, so steps whose decrease is below the
+    /// rounding of `f` read \(\rho \approx 1\) instead of noise.
+    pub rho_regularization: f64,
+}
+
+impl Default for RtrOptions {
+    fn default() -> Self {
+        Self {
+            radius_max: None,
+            grad_tol: 1e-6,
+            max_iter: 1000,
+            cg_max: None,
+            theta: 1.0,
+            kappa: 0.1,
+            rho_regularization: 1e3,
+        }
+    }
+}
+
+impl RtrOptions {
+    /// Set [`Self::radius_max`].
+    pub fn with_radius_max(mut self, radius_max: f64) -> Self {
+        self.radius_max = Some(radius_max);
+        self
+    }
+
+    /// Set [`Self::grad_tol`].
+    pub fn with_grad_tol(mut self, grad_tol: f64) -> Self {
+        self.grad_tol = grad_tol;
+        self
+    }
+
+    /// Set [`Self::max_iter`].
+    pub fn with_max_iter(mut self, max_iter: usize) -> Self {
+        self.max_iter = max_iter;
+        self
+    }
+
+    /// Set [`Self::cg_max`].
+    pub fn with_cg_max(mut self, cg_max: usize) -> Self {
+        self.cg_max = Some(cg_max);
+        self
+    }
+
+    /// Set [`Self::theta`].
+    pub fn with_theta(mut self, theta: f64) -> Self {
+        self.theta = theta;
+        self
+    }
+
+    /// Set [`Self::kappa`].
+    pub fn with_kappa(mut self, kappa: f64) -> Self {
+        self.kappa = kappa;
+        self
+    }
+
+    /// Set [`Self::rho_regularization`].
+    pub fn with_rho_regularization(mut self, rho_regularization: f64) -> Self {
+        self.rho_regularization = rho_regularization;
+        self
+    }
+}
+
+/// Result of [`minimize_rtr`].
+#[derive(Clone, Debug)]
+pub struct RtrMin {
+    /// Point on the manifold.
+    pub x: Array1<f64>,
+    /// Objective value at `x`.
+    pub value: f64,
+    /// Length of the Riemannian gradient at `x` in the manifold metric.
+    pub grad_norm: f64,
+    /// Outer iterations performed.
+    pub iterations: usize,
+    /// Steps the radius update accepted.
+    pub accepted: usize,
+}
+
+/// Minimise `value` on `manifold` by the Absil–Baker–Gallivan trust
+/// region.
+///
+/// `egrad(x)` is the Euclidean gradient and `ehess(x, v)` the Euclidean
+/// Hessian action, both in the packed ambient coordinates. The model is
+/// built in the Riemannian metric: the gradient by
+/// [`Manifold::egrad2rgrad`], the Hessian by [`Manifold::ehess2rhess`]
+/// or, for a kind without the Weingarten term, by
+/// [`Manifold::egrad2rgrad`] of the ambient action, its Gauss–Newton part.
+/// A weighted [`crate::manifold::ProductManifold`] therefore runs in its
+/// own metric, and [`RtrOptions::radius_max`] defaults to its typical
+/// distance.
+pub fn minimize_rtr<M, FV, GG, HH>(
+    manifold: &M,
+    x0: Array1<f64>,
+    mut value: FV,
+    mut egrad: GG,
+    mut ehess: HH,
+    opts: RtrOptions,
+) -> RtrMin
+where
+    M: Manifold + ?Sized,
+    FV: FnMut(&Array1<f64>) -> f64,
+    GG: FnMut(&Array1<f64>) -> Array1<f64>,
+    HH: FnMut(&Array1<f64>, &Array1<f64>) -> Array1<f64>,
+{
+    let radius_max = opts
+        .radius_max
+        .unwrap_or_else(|| manifold.typical_dist(x0.len()));
+    let radius_max = if radius_max.is_finite() && radius_max > 0.0 {
+        radius_max
+    } else {
+        1.0
+    };
+    let maxiter = opts.cg_max.unwrap_or(x0.len()).max(1);
+    let mut radius = RtrRadius::new(radius_max);
+    let mut x = x0;
+    let mut f = value(&x);
+    let mut g = egrad(&x);
+    let mut rgrad = manifold.egrad2rgrad(&x, &g);
+    let mut gnorm = manifold.norm(&x, &rgrad);
+    let mut iterations = 0;
+    let mut accepted = 0;
+    while iterations < opts.max_iter && gnorm.is_finite() && gnorm > opts.grad_tol {
+        iterations += 1;
+        let step = tcg(
+            |a, b| manifold.inner(&x, a, b),
+            |v| manifold.project(&x, v),
+            rgrad.view(),
+            |v| {
+                let hv = ehess(&x, v);
+                manifold
+                    .ehess2rhess(&x, &g, &hv, v)
+                    .unwrap_or_else(|| manifold.egrad2rgrad(&x, &hv))
+            },
+            TcgLimits {
+                radius: radius.radius,
+                theta: opts.theta,
+                kappa: opts.kappa,
+                maxiter,
+            },
+        );
+        let x_try = manifold.retract(&x, &step.eta);
+        let f_try = value(&x_try);
+        let shift = f.abs().max(1.0) * f64::EPSILON * opts.rho_regularization;
+        let actual = if f_try.is_finite() {
+            f - f_try + shift
+        } else {
+            f64::NEG_INFINITY
+        };
+        let predicted = step.model_decrease + shift;
+        if radius.update(actual, predicted, manifold.norm(&x, &step.eta)) {
+            x = x_try;
+            f = f_try;
+            g = egrad(&x);
+            rgrad = manifold.egrad2rgrad(&x, &g);
+            gnorm = manifold.norm(&x, &rgrad);
+            accepted += 1;
+        }
+    }
+    RtrMin {
+        x,
+        value: f,
+        grad_norm: gnorm,
+        iterations,
+        accepted,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::manifold::{Euclidean, Sphere};
+    use crate::vecops::nrm2;
     use ndarray::{Array2, array};
 
     fn quad_hvp(h: &Array2<f64>) -> impl Fn(&Array1<f64>) -> Array1<f64> + '_ {
@@ -318,6 +557,25 @@ mod tests {
         }
         assert!((f(&x) - 1.0).abs() < 1e-8, "f = {}", f(&x));
         assert!(x[1].abs() > 1.0 - 1e-6);
+    }
+
+    #[test]
+    fn minimize_rtr_finds_the_smallest_eigenvector() {
+        let a = Array2::from_diag(&array![3.0, 1.0, 2.0]);
+        let mut x = array![0.6, 0.48, 0.64];
+        x /= nrm2(x.view());
+        let out = minimize_rtr(
+            &Sphere,
+            x,
+            |z| z.dot(&a.dot(z)),
+            |z| &a.dot(z) * 2.0,
+            |_z, v| &a.dot(v) * 2.0,
+            RtrOptions::default().with_grad_tol(1e-12),
+        );
+        assert!(out.grad_norm <= 1e-12, "grad {}", out.grad_norm);
+        assert!((out.value - 1.0).abs() < 1e-12, "f = {}", out.value);
+        assert!(out.x[1].abs() > 1.0 - 1e-12);
+        assert!(out.iterations < 20, "{} iterations", out.iterations);
     }
 
     #[test]
