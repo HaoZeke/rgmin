@@ -237,6 +237,15 @@ pub enum Error {
         /// The refused setting.
         what: &'static str,
     },
+    /// A session measures in the Euclidean inner product of the packed
+    /// vector or of the metric chart, which a
+    /// [`crate::manifold::TangentMetric`] replaces.
+    /// [`crate::rtr::minimize_rtr`] runs in that metric.
+    #[error("product factor {index} carries a tangent metric, which sessions do not measure in")]
+    ProductTangentMetric {
+        /// Position of the first such factor after flattening.
+        index: usize,
+    },
     /// [`crate::manifold::SubspaceSphere`] refused its basis.
     #[error("subspace sphere: {what}")]
     SubspaceBasis {
