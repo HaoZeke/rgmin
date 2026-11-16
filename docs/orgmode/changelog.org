@@ -25,6 +25,18 @@ Its Hessian action is ~ehess2rhess~, Weingarten term included, where the kind su
 ~rtr::truncated_cg_riemannian~ is one inner solve in the manifold metric, for a caller that accepts or rejects steps itself with ~RtrRadius~.
 ~truncated_cg_projected~ keeps the Euclidean inner product.
 
+~ManifoldKind::sphere_within(basis)~ is the unit sphere of the span of the rows of ~basis~, and ~ManifoldKind::sphere_excluding(basis)~ the unit sphere orthogonal to them, such as a unit normal that leaves a centre of mass in place.
+Both are ~SubspaceSphere~, with the projection ~P_U - x x^T~, the metric-projection retraction, and the sphere's exponential, logarithm, distance, parallel transport and Hessian.
+~Error::SubspaceBasis~ reports an empty, non-finite or dependent basis, or excluded rows that span the whole space.
+
+~ProductFactor::with_metric~ gives a factor a caller's ~TangentMetric~ ~G_x~, self-adjoint and positive definite on each tangent space, so that its part of the product metric is ~w g(u, G_x v)~.
+~egrad2rgrad~ returns the factor's gradient times ~(w G_x)^{-1}~, and ~minimize_rtr~ then has the iterates of manopt's truncated CG preconditioned by ~(w G_x)^{-1}~.
+Such a product has no exponential, logarithm, distance or parallel transport, and sessions refuse it with ~Error::ProductTangentMetric~.
+
+~rtr::minimize_rtr_gauged~ calls a gauge after every accepted step: a map to another representation of the same point, such as the pivot of a plane moved along the plane.
+The step is accepted on the value before the move, and the moved point is evaluated afresh.
+~Solver::run_gauged~ calls the gauge before every session step but the first and rebases the session when it moves the point.
+
 ~rgmin_solver_set_power(solver, factor, block, count)~ is ~Solver::set_power~ for the manifold tokens without shape parameters.
 ~xts.h~ aliases it and ~rgmin::Solver::set_power~ wraps it. ~abi_minor~ 41.
 Weighted products, subspace spheres, tangent metrics and gauges stay Rust only.
