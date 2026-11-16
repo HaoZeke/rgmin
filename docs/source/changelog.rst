@@ -7,6 +7,17 @@ Unreleased
 
 ~~~~~~~~~~
 
+``Solver::set_lbfgs_trust_radius`` truncates the L-BFGS ray and updates the radius by Burdakov's Algorithm 1.
+It is off by default. ``set_lbfgs_trust`` stays the eOn Newton-model radius.
+The capped step stays the default until the radius is on. C: ``rgmin_solver_set_lbfgs_trust``, ``abi_minor`` 45.
+
+``Lbfgs::minimize_on`` and ``Lbfgs::minimize_box_on`` offer each accepted iterate as the iteration, the value and the coordinates.
+Returning false ends the run there. ``minimize_watched`` and ``minimize_box_watched`` call these methods.
+
+``Lbfgs::approx_wolfe`` is an opt-in approximate Wolfe test for the rounding floor.
+A positive value accepts a trial within that fraction of abs(f) of the start of a strong Wolfe search when the strong curvature test holds.
+Zero, the default, keeps the strict search. The eOn cap does not consult it.
+
 The FIRE fill step cap folds atom distances with iterators instead of an indexed ``f64::max`` loop.
 rustc 1.93 and 1.94 (LLVM 21) segfault in LoopVectorizePass on that indexed loop, so a release build failed there.
 A non-positive or non-finite cap still leaves the trial alone.
