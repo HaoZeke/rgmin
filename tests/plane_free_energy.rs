@@ -362,9 +362,9 @@ fn the_optimal_plane_has_a_negative_offset_from_a_fixed_pivot() {
     assert_optimal_plane(&energy, &out.x, out.value, "Euclidean offset");
     assert!(out.x[D] < -0.5, "d = {}", out.x[D]);
 
-    // On SPD(1), the positive half-line, the offset cannot change sign.
-    // The affine-invariant gradient d^2 f'(d) vanishes as d -> 0, so the
-    // run stops near zero, well short of the optimum.
+    // On SPD(1), the positive half-line, the offset cannot change sign:
+    // the retraction d + v + v^2 / (2d) never goes below d / 2, so the run
+    // creeps toward zero and ends well short of the optimum.
     let product = ProductManifold::new([
         normal_factor().with_weight(block_weight()),
         ProductFactor::new(ManifoldKind::Spd, 1),
