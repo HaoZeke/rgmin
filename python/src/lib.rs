@@ -79,6 +79,7 @@ impl Session {
     /// parameter set and ABC-FIRE. `accept` is `none`, `energy` or
     /// `nonmonotone`; `downhill` is `energy`. `istep` is the step scale
     /// of a method other than FIRE, whose scale is `dt`.
+    #[allow(clippy::too_many_arguments)]
     #[new]
     #[pyo3(signature = (
         kind,
@@ -302,6 +303,7 @@ struct LineSearchPy {
 #[pymethods]
 impl LineSearchPy {
     /// `kind` is `brent`, `backtracking`, `goldstein`, or `wolfe`.
+    #[allow(clippy::too_many_arguments)]
     #[new]
     #[pyo3(signature = (kind, x, direction, *, istep=1.0, c1=1e-4, c2=0.9, beta=0.5, maxiter=40, tol=1e-10))]
     fn new(
