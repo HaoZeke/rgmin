@@ -114,6 +114,7 @@ It also covers the features of each route, the C library and a checkout.
    reference/architecture
    reference/api
    reference/constraints
+   reference/product-manifold
    reference/sota
    reference/proofs
    reference/bibliography
