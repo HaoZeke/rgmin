@@ -9,9 +9,10 @@
 //! \((w_i^{-1}\,\mathrm{grad}_i f)_i\), the Hessian
 //! \((w_i^{-1}\,\mathrm{Hess}_i f)_i\), the distance
 //! \(\sqrt{\sum_i w_i d_i^2}\) and the typical distance. All weights one
-//! is the product of manopt `productmanifold`, Manopt.jl
-//! `ProductManifold`, pymanopt `Product` and geomstats
-//! `ProductRiemannianMetric`.
+//! is the product of manopt `productmanifold`, ManifoldsBase.jl
+//! `ProductManifold` (the one Manifolds.jl and Manopt.jl use), pymanopt
+//! `Product` and geomstats `ProductRiemannianMetric`; geomstats weights a
+//! factor by wrapping its metric in `ScalarProductMetric`.
 //!
 //! The map \(z_i = \sqrt{w_i}\,x_i\) is an isometry onto the product of
 //! the scaled factors \(\sqrt{w_i}\,\mathcal{M}_i\) with unit weights.
