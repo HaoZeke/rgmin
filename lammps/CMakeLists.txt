@@ -13,7 +13,16 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
   message(FATAL_ERROR "Configure min_style rgmin in a separate build directory")
 endif()
 
-project(rgmin_lammps VERSION 0.2.0 LANGUAGES C CXX)
+# The plugin is versioned with the crate it links, so read [package]
+# version from ../Cargo.toml instead of keeping a second copy here.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../Cargo.toml" rgmin_version_line
+  REGEX "^version = \"[0-9]+\\.[0-9]+\\.[0-9]+\"" LIMIT_COUNT 1)
+string(REGEX REPLACE "^version = \"([0-9.]+)\".*" "\\1" rgmin_version "${rgmin_version_line}")
+if(NOT rgmin_version MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "No package version in ${CMAKE_CURRENT_SOURCE_DIR}/../Cargo.toml")
+endif()
+
+project(rgmin_lammps VERSION ${rgmin_version} LANGUAGES C CXX)
 
 set(LAMMPS_SOURCE_DIR "" CACHE PATH "The src directory of the LAMMPS tree that built lmp")
 set(LAMMPS_SIZES "smallbig" CACHE STRING "LAMMPS integer sizes: smallbig, bigbig or smallsmall")
