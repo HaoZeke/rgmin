@@ -4709,8 +4709,22 @@ impl Solver {
             Status::Iterating => Status::Budget,
             other => other,
         };
-        let g = self.last_grad.clone();
+        let g = self.reported_grad(x);
         Ok(self.finish(value, x, &g, grad_norm, status))
+    }
+
+    /// The gradient a step report carries, for the report at the end of a
+    /// run. The unconstrained Newton-CG path remembers the raw gradient,
+    /// which its difference products need; its reports are horizontal.
+    fn reported_grad(&mut self, x: &Array1<f64>) -> Array1<f64> {
+        let raw = self.constraints.is_none()
+            && matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. });
+        if raw && self.last_grad.len() == x.len() {
+            let g = self.last_grad.clone();
+            self.horizontal_grad(x, &g)
+        } else {
+            self.last_grad.clone()
+        }
     }
 
     /// Euclidean FIRE with the default preset and no preconditioner.

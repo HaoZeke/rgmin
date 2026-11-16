@@ -298,6 +298,26 @@ fn newton_pcg_stays_on_the_sphere() {
     assert_on_sphere(&walk);
 }
 
+/// At the minimum of `Tilt::new(2.0)` on the sphere the Euclidean
+/// gradient is the unit normal `x`. The run must end on the Riemannian
+/// gradient, which vanishes there.
+#[test]
+fn a_newton_cg_run_reports_the_riemannian_gradient() {
+    let tilt = Tilt::new(2.0);
+    let control = Control::default()
+        .with_maxiter(200)
+        .with_gtol(1e-6)
+        .with_istep(1.0);
+    let mut solver = Solver::new(Method::NewtonCg, control, 3);
+    solver.set_manifold(ManifoldKind::Sphere);
+    let mut x = array![0.6, 0.0, 0.8];
+    let report = solver.run(&tilt, &mut x).unwrap();
+    assert!(report.grad_norm < 1e-6, "grad_norm {}", report.grad_norm);
+    let g = report.grad.as_ref().expect("a run reports its gradient");
+    assert!(g.dot(&x).abs() < 1e-10, "normal part in the report: {g}");
+    assert!((x[2] - 1.0).abs() < 1e-10, "not at the north pole: {x}");
+}
+
 #[test]
 fn lbfgs_reports_a_trial_the_box_refuses() {
     // The first trial climbs to x_3 = sin(atan(CAP)), above this bound.
