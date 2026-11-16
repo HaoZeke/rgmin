@@ -21,7 +21,18 @@ class Session:
         alpha: float = 0.1,
         f_alpha: float = 0.99,
         downhill: bool = False,
+        h0: float | None = None,
+        maxmove: float | None = None,
+        preset: str | None = None,
+        abc: bool = False,
+        accept: str | None = None,
+        istep: float | None = None,
     ) -> None: ...
+    def push_pair(self, s: list[float], y: list[float]) -> bool: ...
+    def pair_count(self) -> int: ...
+    @property
+    def steps(self) -> int: ...
+    def forget(self) -> None: ...
     def step(
         self,
         x: list[float],

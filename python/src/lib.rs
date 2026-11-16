@@ -13,9 +13,9 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rgmin::{
-    Accept, ApplyBlockPreconditioner, ApplyHessian, Control, Error, FireConfig, FireKind, LbfgsH0,
-    LbfgsPairs, LbfgsStep, LineSearch, ManifoldFactor, Method, Oracle, RiemannianManifold,
-    SearchStep, Solver, SpdMetric, StiefelRetraction, StopNorm, SuppliedSearch,
+    Accept, ApplyBlockPreconditioner, ApplyHessian, Control, Error, FireConfig, FireKind,
+    FirePreset, LbfgsH0, LbfgsPairs, LbfgsStep, LineSearch, ManifoldFactor, Method, Oracle,
+    RiemannianManifold, SearchStep, Solver, SpdMetric, StiefelRetraction, StopNorm, SuppliedSearch,
     lowest_eigenpairs as solve_lowest_eigenpairs, lowest_eigenpairs_precond,
 };
 
@@ -33,9 +33,52 @@ fn control(dt: f64) -> Control {
         .with_stop_norm(StopNorm::MaxAtom)
 }
 
+fn session_method(kind: &str, memory: usize) -> PyResult<Method> {
+    if kind == "cg" {
+        return Ok(Method::polak_ribiere_plus());
+    }
+    match Method::from_name(kind) {
+        Ok(Method::Lbfgs { .. }) => Ok(Method::lbfgs_with_memory(memory.max(1))),
+        Ok(Method::Newton { .. } | Method::Dogleg) => Err(PyValueError::new_err(format!(
+            "method {kind} needs a dense Hessian, which a gradient callback does not supply"
+        ))),
+        Ok(Method::Pso { .. }) => Err(PyValueError::new_err(
+            "method pso needs a bounded objective, which a gradient callback does not supply",
+        )),
+        Ok(method) => Ok(method),
+        Err(err) => Err(PyValueError::new_err(err.to_string())),
+    }
+}
+
+fn session_accept(accept: Option<&str>, downhill: bool) -> PyResult<Accept> {
+    match accept {
+        None if downhill => Ok(Accept::Energy),
+        None | Some("none") => Ok(Accept::None),
+        Some("energy") => Ok(Accept::Energy),
+        Some("nonmonotone") => Ok(Accept::Nonmonotone),
+        Some(other) => Err(PyValueError::new_err(format!(
+            "accept is none, energy or nonmonotone, not {other}"
+        ))),
+    }
+}
+
+fn value_error(err: Error) -> PyErr {
+    PyValueError::new_err(err.to_string())
+}
+
 #[pymethods]
 impl Session {
-    /// `kind` is `lbfgs`, `bfgs`, `fire`, `fire2`, or `cg`.
+    /// `kind` is any gradient-only token of `Method::from_name`.
+    /// `cg` is Polak-Ribiere-Plus. `newton`, `rfo`, `dogleg` and `pso`
+    /// are refused: they need a Hessian or a box.
+    ///
+    /// `max_atom` caps the longest per-atom displacement and `maxmove`
+    /// the Euclidean length of the whole step; a non-positive value
+    /// leaves that cap off. `h0` is the fixed L-BFGS inverse-Hessian
+    /// scale. `preset="guenole2020"` and `abc` select the FIRE 2.0
+    /// parameter set and ABC-FIRE. `accept` is `none`, `energy` or
+    /// `nonmonotone`; `downhill` is `energy`. `istep` is the step scale
+    /// of a method other than FIRE, whose scale is `dt`.
     #[new]
     #[pyo3(signature = (
         kind,
@@ -53,6 +96,12 @@ impl Session {
         alpha=0.1,
         f_alpha=0.99,
         downhill=false,
+        h0=None,
+        maxmove=None,
+        preset=None,
+        abc=false,
+        accept=None,
+        istep=None,
     ))]
     fn new(
         kind: &str,
@@ -69,58 +118,131 @@ impl Session {
         alpha: f64,
         f_alpha: f64,
         downhill: bool,
+        h0: Option<f64>,
+        maxmove: Option<f64>,
+        preset: Option<&str>,
+        abc: bool,
+        accept: Option<&str>,
+        istep: Option<f64>,
     ) -> PyResult<Self> {
         if n == 0 {
             return Err(PyValueError::new_err("dimension must be positive"));
         }
-        let method = match kind {
-            "lbfgs" => Method::lbfgs_with_memory(memory.max(1)),
-            "bfgs" => Method::Bfgs,
-            "fire" => Method::fire(FireKind::V1),
-            "fire2" => Method::fire(FireKind::V2),
-            "cg" => Method::polak_ribiere_plus(),
-            other => {
-                return Err(PyValueError::new_err(format!("unknown method {other}")));
+        let method = session_method(kind, memory)?;
+        let fire = matches!(method, Method::Fire { .. });
+        let fire2 = matches!(
+            method,
+            Method::Fire {
+                kind: FireKind::V2,
+                ..
             }
+        );
+        let lbfgs = matches!(method, Method::Lbfgs { .. });
+        let nlcg = matches!(method, Method::Nlcg { .. });
+        let istep = match istep {
+            Some(_) if fire => {
+                return Err(PyValueError::new_err(
+                    "istep does not apply to FIRE, whose step scale is dt",
+                ));
+            }
+            Some(scale) if !(scale.is_finite() && scale > 0.0) => {
+                return Err(PyValueError::new_err(format!(
+                    "istep must be positive and finite, not {scale}"
+                )));
+            }
+            Some(scale) => scale,
+            None if fire => dt,
+            None => 1.0,
         };
-        let istep = if kind.starts_with("fire") { dt } else { 1.0 };
+        let accept = session_accept(accept, downhill)?;
         let mut solver = Solver::new(method, control(istep), n);
-        match kind {
-            "lbfgs" => {
-                let step = if wolfe {
-                    LbfgsStep::Wolfe
-                } else if eon_cap {
-                    LbfgsStep::capped(max_atom)
-                } else {
-                    LbfgsStep::scaled(max_atom)
-                };
-                solver
-                    .set_lbfgs_step(step)
-                    .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        if lbfgs {
+            let step = if wolfe {
+                LbfgsStep::Wolfe
+            } else if eon_cap {
+                LbfgsStep::capped(max_atom)
+            } else {
+                LbfgsStep::scaled(max_atom)
+            };
+            solver.set_lbfgs_step(step).map_err(value_error)?;
+            if h0.is_some() {
+                solver.set_lbfgs_fixed_h0(h0).map_err(value_error)?;
             }
-            "fire" | "fire2" => {
-                let mut cfg = FireConfig::ase();
-                cfg.dt = dt;
-                cfg.dt_max = dt_max;
-                cfg.n_min = n_min;
-                cfg.f_inc = f_inc;
-                cfg.f_dec = f_dec;
-                cfg.alpha = alpha;
-                cfg.f_alpha = f_alpha;
-                solver
-                    .set_fire_config(cfg)
-                    .map_err(|err| PyValueError::new_err(err.to_string()))?;
-                if downhill {
-                    solver.set_accept(Accept::Energy);
+        } else if h0.is_some() {
+            return Err(PyValueError::new_err(
+                "h0 applies to an L-BFGS session only",
+            ));
+        }
+        if fire {
+            match preset {
+                None | Some("default") => {}
+                Some("guenole2020") if fire2 => {
+                    solver
+                        .set_fire_preset(FirePreset::Guenole2020)
+                        .map_err(value_error)?;
+                }
+                Some(other) => {
+                    return Err(PyValueError::new_err(format!(
+                        "FIRE preset {other} is not default or guenole2020 on FIRE 2.0"
+                    )));
                 }
             }
-            "cg" => solver.set_linesearch(LineSearch::wolfe(1e-4, 0.1, 20)),
-            _ => {}
+            let mut cfg = FireConfig::ase();
+            cfg.dt = dt;
+            cfg.dt_max = dt_max;
+            cfg.n_min = n_min;
+            cfg.f_inc = f_inc;
+            cfg.f_dec = f_dec;
+            cfg.alpha = alpha;
+            cfg.f_alpha = f_alpha;
+            solver.set_fire_config(cfg).map_err(value_error)?;
+            if abc {
+                solver.set_fire_abc(true).map_err(value_error)?;
+            }
+        } else if preset.is_some() || abc {
+            return Err(PyValueError::new_err(
+                "preset and abc apply to a FIRE session only",
+            ));
+        }
+        if nlcg {
+            solver.set_linesearch(LineSearch::wolfe(1e-4, 0.1, 20));
+        }
+        if accept != Accept::None {
+            solver.set_accept(accept);
         }
         if max_atom.is_finite() && max_atom > 0.0 {
             solver.set_atom_maxmove(max_atom);
         }
+        if let Some(cap) = maxmove.filter(|cap| cap.is_finite() && *cap > 0.0) {
+            solver.set_maxmove(cap);
+        }
         Ok(Self { solver })
+    }
+
+    /// Store `s = x+ - x`, `y = g+ - g` in the L-BFGS memory without an
+    /// evaluation. Returns false when the session is not L-BFGS or the
+    /// curvature gate declines the pair.
+    fn push_pair(&mut self, s: Vec<f64>, y: Vec<f64>) -> bool {
+        self.solver.push_pair(
+            ndarray::ArrayView1::from(s.as_slice()),
+            ndarray::ArrayView1::from(y.as_slice()),
+        )
+    }
+
+    /// Accepted L-BFGS pairs held by the session.
+    fn pair_count(&self) -> usize {
+        self.solver.pair_count()
+    }
+
+    /// Outer steps the session has completed.
+    #[getter]
+    fn steps(&self) -> usize {
+        self.solver.steps()
+    }
+
+    /// Drop the method memory. The next step is a cold start.
+    fn forget(&mut self) {
+        self.solver.forget();
     }
 
     /// One outer iteration.
