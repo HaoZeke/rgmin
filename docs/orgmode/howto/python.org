@@ -4,6 +4,7 @@
 * Python
 
 The package under ~python/~ is the maturin binding. ASE is optional and imported when an optimizer is constructed.
+[[file:ase-migration.org][Moving an ASE script]] is the one-line import change and the differences from ASE.
 
 #+begin_src bash
 pip install python/[ase]

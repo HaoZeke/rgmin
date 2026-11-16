@@ -3,6 +3,7 @@ Python
 
 The package is ``python/``. Install it with maturin. ASE is optional and
 imported when an optimizer is constructed.
+:doc:`ase-migration` is the one-line import change and the differences from ASE.
 
 .. code:: bash
 

@@ -82,7 +82,10 @@ cluster whose elements are in the Lindh tables, the bonded metric
 when that caller has a force field, and the identity otherwise.
 The Python package `rgmin` is a free-threaded nanobind module
 (`rgmin._core`) plus `rgmin.ase.Optimizer`, and `python/` is the maturin
-ASE drop-in (`BFGS`, `LBFGS`, `FIRE`, `lowest_eigenpairs`). ASE is an extra.
+ASE drop-in (`rgmin.optimize`: `BFGS`, `LBFGS`, `FIRE`, and the other
+gradient methods, plus `lowest_eigenpairs`). ASE is an extra.
+[`docs/orgmode/howto/ase-migration.org`](docs/orgmode/howto/ase-migration.org)
+is the import change.
 
 Narrative docs live in [`docs/orgmode/`](docs/orgmode/index.org)
 (Diataxis); the explanation quadrant derives the math behind each
