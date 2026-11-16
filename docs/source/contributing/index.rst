@@ -47,12 +47,17 @@ Run them before you open a pull request.
     cargo +1.88.0 test --locked
     cargo +1.88.0 test --locked --features capi
     cargo +1.88.0 test --locked --features highs
-    cargo +1.88.0 test --locked --all-features
+    cargo +1.88.0 test --locked --features capi,highs
+    cargo +1.88.0 test --locked --features capi,par,highs,slepc,primme,chase,libkrylov
+    cargo +1.88.0 test --locked --features readcon
 
 ..
    #skip_lint_end
 
-CI also runs clippy with warnings denied, on Rust 1.88.0 and on the latest stable, for the same four feature sets:
+CI calls the fifth row all-features.
+It names the features instead of passing ``--all-features``, so the static library does not link ``readcon-core``, which gets the last row.
+
+CI also runs clippy with warnings denied, on Rust 1.88.0 and on the latest stable, for the first five feature sets:
 
 ..
    #skip_lint_start
@@ -63,12 +68,13 @@ CI also runs clippy with warnings denied, on Rust 1.88.0 and on the latest stabl
     cargo +1.88.0 clippy --locked --all-targets -- -D warnings
     cargo +1.88.0 clippy --locked --all-targets --features capi -- -D warnings
     cargo +1.88.0 clippy --locked --all-targets --features highs -- -D warnings
-    cargo +1.88.0 clippy --locked --all-targets --all-features -- -D warnings
+    cargo +1.88.0 clippy --locked --all-targets --features capi,highs -- -D warnings
+    cargo +1.88.0 clippy --locked --all-targets --features capi,par,highs,slepc,primme,chase,libkrylov -- -D warnings
 
 ..
    #skip_lint_end
 
-Run the same four commands with ``+stable`` for the second toolchain.
+Run the same five commands with ``+stable`` for the second toolchain.
 
 CI also builds and tests in release with Rust 1.93.0 and 1.94.1, which ship LLVM 21.
 Its loop vectorizer once crashed on rgmin, and the debug builds above never run it:
@@ -165,6 +171,7 @@ The docs workflow runs these steps, and you can run them from the top of the che
 
     python3 -m pip install "sphinx>=8,<8.1" shibuya sphinxcontrib-bibtex myst-parser
     (cd docs && emacs --batch -l export.el)
+    python3 docs/render_performance.py
     sphinx-build -b html -n docs/source docs/build
 
 ..
