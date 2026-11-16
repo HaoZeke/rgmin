@@ -226,7 +226,7 @@ pub use multinomial_sym::{
 pub use mw_rigid::MwRigid;
 pub use oblique::Oblique;
 pub use positive::{Positive, inner as inner_pos, is_positive, typical_dist as typical_dist_pos};
-pub use product::{ProductFactor, ProductManifold};
+pub use product::{ProductFactor, ProductManifold, TangentMetric};
 pub use rigid_quotient::RigidQuotient;
 pub use se3::Se3;
 pub use skewsymmetric::{
