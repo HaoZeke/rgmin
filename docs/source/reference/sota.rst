@@ -224,7 +224,7 @@ the direction is a Newton step, not a two-loop pair history.
 - Nocedal and Wright, chapter 3 / 6, record the Levenberg-shifted
   Newton step ``(H + μ I)^{-1} g``.
 
-``Method::Newton { kind: NewtonKind::Shifted | NewtonKind::Rfo }`` and
+``Method::newton(NewtonKind::Shifted | NewtonKind::Rfo)`` and
 ``minimize_newton`` are that solver. The C waist is
 ``rgmin_minimize_hess``. It is not an L-BFGS option.
 
@@ -475,7 +475,7 @@ reject a 3N cluster.
 Defaults in this crate
 ~~~~~~~~~~~~~~~~~~~~~~
 
-- Method: ``Lbfgs`` / ``Method::Lbfgs { memory: 8 }``, the eOn cap at 0.2
+- Method: ``Lbfgs`` / ``Method::lbfgs_with_memory(8)``, the eOn cap at 0.2
 
 - Opt-in line search: ``LbfgsStep::Wolfe``, constants ``c1 = 1e-4``, ``c2 = 0.9``
 

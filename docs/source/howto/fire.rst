@@ -22,14 +22,12 @@ Rust
     use ndarray::{Array1, ArrayView1, array};
     use rgmin::{Control, FireKind, FirePreset, Method, Oracle, Solver};
 
-    let control = Control {
-        maxiter: 5000,
-        gtol: 1e-5,
-        istep: 1e-3,
-        maxmove: Some(0.2),
-        ..Default::default()
-    };
-    let mut solver = Solver::new(Method::Fire { kind: FireKind::V2 }, control, 2);
+    let control = Control::default()
+        .with_maxiter(5000)
+        .with_gtol(1e-5)
+        .with_istep(1e-3)
+        .with_maxmove(0.2);
+    let mut solver = Solver::new(Method::fire(FireKind::V2), control, 2);
     solver.set_fire_preset(FirePreset::Guenole2020).unwrap();
     solver.set_fire_abc(true).unwrap();
     let obj = Oracle::unbounded(2, |x: ArrayView1<f64>| {

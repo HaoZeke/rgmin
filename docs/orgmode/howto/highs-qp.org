@@ -38,15 +38,15 @@ cargo test --features highs
 use rgmin::{HighsStep, Lbfgs};
 
 let mut opt = Lbfgs::default();
-opt.highs = Some(HighsStep {
-    trust: Some(0.5),
-    lo: Some(vec![-1.0]),
-    hi: Some(vec![1.0]),
-    ..Default::default()
-});
+opt.highs = Some(
+    HighsStep::default()
+        .with_trust(0.5)
+        .with_lo(-1.0)
+        .with_hi(1.0),
+);
 #+end_src
 
-On ~develop~, ~lo~ and ~hi~ give one bound per coordinate.
-The 0.5.2 release takes one ~f64~ for all coordinates (@@rst::doc:`install`@@).
+~lo~ and ~hi~ are one bound for every coordinate.
+~Solver::set_box~ takes one bound per coordinate.
 
 landfold =--highs= is this step on chi, not sequential LP.

@@ -28,11 +28,7 @@ The sample keeps a three-site water rigid, with real masses, while a harmonic pu
         let d = &p - &target;
         (0.5 * d.dot(&d), d)
     });
-    let control = Control {
-        maxiter: 200,
-        gtol: 1e-8,
-        ..Control::default()
-    };
+    let control = Control::default().with_maxiter(200).with_gtol(1e-8);
     let mut solver = Solver::new(Method::lbfgs(), control, 9);
     solver.set_accept(Accept::Energy);
     solver.set_distance_constraints(set)?;
