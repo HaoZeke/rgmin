@@ -230,6 +230,13 @@ pub enum Error {
         /// What was refused.
         what: &'static str,
     },
+    /// A setting reads raw coordinates, which the metric chart of a
+    /// weighted product rescales.
+    #[error("weighted product: {what} reads unscaled coordinates")]
+    ProductChart {
+        /// The refused setting.
+        what: &'static str,
+    },
 }
 
 /// Result alias for this crate.
