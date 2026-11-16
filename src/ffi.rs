@@ -76,7 +76,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 40;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 41;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 4;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -2840,6 +2840,58 @@ pub unsafe extern "C" fn rgmin_solver_set_centered_matrix(
         return;
     }
     unsafe { (*solver).solver.set_centered_matrix(m, n, center_rows != 0) };
+}
+
+/// Cartesian power: `count` unit-weight copies of the shape-free
+/// manifold `factor`, a [`rgmin_manifold_t`] integer, each of packed
+/// length `block`. manopt `powermanifold`. MW_RIGID copies read
+/// [`rgmin_solver_set_masses`] as one molecule reused on every copy or
+/// as every copy's masses in order. Returns 0, or 1 on a null session, a
+/// token whose shape needs its own setter, or a block the factor cannot
+/// hold; the manifold is then unchanged. ABI minor 41.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_power(
+    solver: *mut rgmin_solver_t,
+    factor: i32,
+    block: usize,
+    count: usize,
+) -> i32 {
+    use rgmin_manifold_t as T;
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_power: null solver");
+        return 1;
+    }
+    let shape_free = [
+        (T::RGMIN_MANIFOLD_EUCLIDEAN, ManifoldKind::Euclidean),
+        (T::RGMIN_MANIFOLD_SPHERE, ManifoldKind::Sphere),
+        (T::RGMIN_MANIFOLD_SO3, ManifoldKind::So3),
+        (T::RGMIN_MANIFOLD_STIEFEL, ManifoldKind::Stiefel),
+        (T::RGMIN_MANIFOLD_SE3, ManifoldKind::Se3),
+        (
+            T::RGMIN_MANIFOLD_RIGID_QUOTIENT,
+            ManifoldKind::RigidQuotient,
+        ),
+        (T::RGMIN_MANIFOLD_MW_RIGID, ManifoldKind::MwRigid),
+        (T::RGMIN_MANIFOLD_MULTINOMIAL, ManifoldKind::Multinomial),
+        (T::RGMIN_MANIFOLD_SYMMETRIC, ManifoldKind::Symmetric),
+        (T::RGMIN_MANIFOLD_SKEWSYMMETRIC, ManifoldKind::SkewSymmetric),
+    ];
+    let Some((_, kind)) = shape_free
+        .into_iter()
+        .find(|(token, _)| *token as i32 == factor)
+    else {
+        set_last_error("rgmin_solver_set_power: the factor token needs a shape");
+        return 1;
+    };
+    if unsafe { (*solver).solver.set_power(kind, block, count) } {
+        0
+    } else {
+        set_last_error("rgmin_solver_set_power: the block does not fit the factor");
+        1
+    }
 }
 
 /// Per-atom masses for `RGMIN_MANIFOLD_MW_RIGID`. `n_atoms == 0` or a

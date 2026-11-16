@@ -1128,12 +1128,12 @@ fn lowest_eigenpairs_recovers_a_diagonal_and_rejects_bad_blocks() {
     assert_eq!(status, rgmin_status_t::RGMIN_UNAVAILABLE);
 }
 
-/// ABI minor 40 adds the Burdakov trust radius. Minor 39 is `rgmin_lowest_eigenpairs`.
+/// ABI minor 41 adds `rgmin_solver_set_power`. Minor 40 is the Burdakov trust radius.
 #[test]
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 40);
+    assert_eq!(stamp.abi_minor, 41);
     assert_eq!(stamp.layout_revision, 4);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
 }
@@ -1504,8 +1504,9 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_extra_updates, rgmin_solver_set_highs, rgmin_solver_set_manifold,
         rgmin_solver_set_masses, rgmin_solver_set_maxmove, rgmin_solver_set_multinomial_ds,
         rgmin_solver_set_multinomial_sym, rgmin_solver_set_oblique, rgmin_solver_set_periodic,
-        rgmin_solver_set_positive, rgmin_solver_set_project_rigid, rgmin_solver_set_qn_step,
-        rgmin_solver_set_sphere_complex, rgmin_solver_set_stiefel, rgmin_solver_set_trust,
+        rgmin_solver_set_positive, rgmin_solver_set_power, rgmin_solver_set_project_rigid,
+        rgmin_solver_set_qn_step, rgmin_solver_set_sphere_complex, rgmin_solver_set_stiefel,
+        rgmin_solver_set_trust,
     };
     let ctrl = rgmin_control_t {
         maxiter: 20,
@@ -1548,6 +1549,8 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_oblique(session, 3, 2);
         rgmin_solver_set_stiefel(session, 4, 2);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_SYMMETRIC);
+        let euclidean = rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN as i32;
+        assert_eq!(rgmin_solver_set_power(session, euclidean, 1, 2), 0);
         rgmin_solver_set_manifold(session, rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN);
         let lo = [-1.0_f64, -2.0];
         let hi = [1.0_f64, 2.0];
@@ -1611,6 +1614,8 @@ fn c_abi_every_setter_survives_live_and_null_sessions() {
         rgmin_solver_set_positive(null, 2);
         rgmin_solver_set_manifold(null, rgmin_manifold_t::RGMIN_MANIFOLD_CENTERED_MATRIX);
         rgmin_solver_set_centered_matrix(null, 2, 2, 0);
+        let sphere = rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE as i32;
+        assert_eq!(rgmin_solver_set_power(null, sphere, 3, 2), 1);
         rgmin_solver_set_oblique(null, 3, 2);
         rgmin_solver_set_stiefel(null, 4, 2);
         rgmin_solver_set_masses(null, masses.as_ptr(), masses.len());
@@ -2008,6 +2013,93 @@ fn c_abi_sphere_complex_stays_on_the_set() {
     );
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE_COMPLEX as i32, 20);
     assert_eq!(rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE as i32, 1);
+    unsafe { rgmin_solver_free(session) };
+}
+
+unsafe extern "C" fn sphere_pair_eval(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    value_out: *mut f64,
+) -> rgmin_status_t {
+    let (p, n) = unsafe { cpu_f64(x) };
+    assert_eq!(n, 6);
+    unsafe { *value_out = *p.add(2) + *p.add(3) };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn sphere_pair_grad(
+    _user: *mut c_void,
+    x: *const DLManagedTensorVersioned,
+    g: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let (_p, n) = unsafe { cpu_f64(x) };
+    assert_eq!(n, 6);
+    let (gp, gn) = unsafe { cpu_f64(g as *const _) };
+    assert_eq!(gn, 6);
+    for i in 0..6 {
+        let gi = if i == 2 || i == 3 { 1.0 } else { 0.0 };
+        unsafe { *(gp as *mut f64).add(i) = gi };
+    }
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+/// `rgmin_solver_set_power` keeps each copy on its own unit sphere. A
+/// shaped token, a block the factor cannot hold, an unknown integer and
+/// a null session are refused, and the refusals keep the power.
+#[test]
+fn c_abi_power_keeps_each_copy_on_its_sphere() {
+    use rgmin::ffi::{rgmin_manifold_t, rgmin_solver_set_power};
+    let ctrl = rgmin_control_t {
+        maxiter: 20,
+        gtol: 1e-8,
+        istep: 0.1,
+        memory: 0,
+        maxmove: 0.0,
+    };
+    let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_STEEPEST, &ctrl, 6) };
+    assert!(!session.is_null());
+    let sphere = rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE as i32;
+    let oblique = rgmin_manifold_t::RGMIN_MANIFOLD_OBLIQUE as i32;
+    let so3 = rgmin_manifold_t::RGMIN_MANIFOLD_SO3 as i32;
+    unsafe {
+        assert_eq!(rgmin_solver_set_power(session, sphere, 3, 2), 0);
+        assert_eq!(rgmin_solver_set_power(session, oblique, 3, 2), 1);
+        assert!(last_error_text().contains("needs a shape"));
+        assert_eq!(rgmin_solver_set_power(session, so3, 8, 2), 1);
+        assert!(last_error_text().contains("does not fit"));
+        assert_eq!(rgmin_solver_set_power(session, 99, 3, 2), 1);
+        assert_eq!(
+            rgmin_solver_set_power(std::ptr::null_mut(), sphere, 3, 2),
+            1
+        );
+    }
+    let mut x = [1.0_f64, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let mut out = rgmin_report_t {
+        value: 0.0,
+        steps: 0,
+        grad_norm: 0.0,
+    };
+    let xt = unsafe { rgmin_tensor_borrow_cpu_f64(x.as_mut_ptr(), 6) };
+    let st = unsafe {
+        rgmin_solver_step(
+            session,
+            Some(sphere_pair_eval),
+            Some(sphere_pair_grad),
+            std::ptr::null_mut(),
+            xt,
+            &mut out,
+        )
+    };
+    unsafe { rgmin_tensor_free(xt) };
+    assert_eq!(st, rgmin_status_t::RGMIN_SUCCESS);
+    for copy in x.chunks(3) {
+        let norm = copy.iter().map(|a| a * a).sum::<f64>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-12, "a copy left its sphere {x:?}");
+    }
+    assert!(
+        x[2] < -1e-8 && x[3] < -1e-8,
+        "expected both copies to move {x:?}"
+    );
     unsafe { rgmin_solver_free(session) };
 }
 

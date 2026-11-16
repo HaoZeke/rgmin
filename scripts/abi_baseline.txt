@@ -69,6 +69,7 @@ rgmin_solver_set_multinomial_sym
 rgmin_solver_set_oblique
 rgmin_solver_set_periodic
 rgmin_solver_set_positive
+rgmin_solver_set_power
 rgmin_solver_set_project_rigid
 rgmin_solver_set_qn_step
 rgmin_solver_set_sphere_complex

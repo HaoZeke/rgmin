@@ -61,7 +61,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 40
+#define RGMIN_ABI_VERSION_MINOR 41
 #define RGMIN_ABI_LAYOUT_REVISION 4
 
 /** Solver selector. \c RGMIN_LBFGS is the production unconstrained method. */
@@ -483,6 +483,16 @@ void rgmin_solver_set_positive(rgmin_solver_t *solver, size_t n);
  *  centers rows. Reserved 7-10 unused. */
 void rgmin_solver_set_centered_matrix(rgmin_solver_t *solver, size_t m, size_t n,
                                     int32_t center_rows);
+/** Cartesian power: count unit-weight copies of the shape-free manifold
+ *  token factor (EUCLIDEAN, SPHERE, SO3, STIEFEL, SE3, RIGID_QUOTIENT,
+ *  MW_RIGID, MULTINOMIAL, SYMMETRIC, SKEWSYMMETRIC), each of packed
+ *  length block. manopt powermanifold. MW_RIGID copies read
+ *  rgmin_solver_set_masses as one molecule reused on every copy or as
+ *  every copy's masses in order. Returns 0, or 1 on a null session, a
+ *  token whose shape needs its own setter, or a block the factor cannot
+ *  hold; the manifold is then unchanged. ABI minor 41. */
+int32_t rgmin_solver_set_power(rgmin_solver_t *solver, int32_t factor, size_t block,
+                               size_t count);
 /** Per-atom masses for MW_RIGID. n_atoms == 0 or masses == NULL
  *  restores unit mass. */
 void rgmin_solver_set_masses(rgmin_solver_t *solver, const double *masses,

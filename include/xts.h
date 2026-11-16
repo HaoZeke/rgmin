@@ -165,6 +165,7 @@ typedef rgmin_constraints_t xts_constraints_t;
 #define xts_solver_set_sphere_complex rgmin_solver_set_sphere_complex
 #define xts_solver_set_positive rgmin_solver_set_positive
 #define xts_solver_set_centered_matrix rgmin_solver_set_centered_matrix
+#define xts_solver_set_power rgmin_solver_set_power
 #define xts_solver_set_masses rgmin_solver_set_masses
 #define xts_solver_set_periodic rgmin_solver_set_periodic
 #define xts_solver_step rgmin_solver_step
