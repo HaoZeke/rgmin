@@ -1,11 +1,13 @@
-//! Symmetric positive definite matrices, affine-invariant metric.
+//! Symmetric positive definite matrices in the Frobenius metric.
 //!
-//! manopt `sympositivedefinitefactory`: an `n x n` point packed
-//! row-major as length `n^2`. Tangent vectors are symmetric. Projection
-//! is symmetrization. The second-order retraction is
-//! `Y = symm(X + U + (1/2) U X^{-1} U)` (Boumal second-order). Transport
-//! is projection at the arrival point; on a tangent that is the
-//! identity used by the MATLAB factory.
+//! The set of manopt `sympositivedefinitefactory` with the dot product
+//! of the packed coordinates: an `n x n` point packed row-major as length
+//! `n^2`. Tangent vectors are symmetric. Projection is symmetrization,
+//! and so is the gradient. The retraction is the factory's
+//! `Y = symm(X + U + (1/2) U X^{-1} U)`, which stays positive definite and
+//! is second order for the factory's affine-invariant metric (Boumal),
+//! not for this one. Transport is projection at the arrival point; on a
+//! tangent that is the identity used by the MATLAB factory.
 //!
 //! A 3N cluster is not this packing. Length must be a square.
 
@@ -15,7 +17,7 @@ use crate::vecops;
 
 use super::Manifold;
 
-/// Affine-invariant SPD cone. Packed row-major, length `n^2`.
+/// SPD cone in the Frobenius metric. Packed row-major, length `n^2`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Spd;
 

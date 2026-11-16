@@ -286,8 +286,9 @@ pub enum ManifoldKind {
         /// Orthonormal columns. Must be `> 1`.
         p: usize,
     },
-    /// Symmetric positive definite n-by-n, row-major n².
-    /// manopt `sympositivedefinitefactory` (affine-invariant).
+    /// Symmetric positive definite n-by-n, row-major n², in the Frobenius
+    /// metric. The set and retraction of manopt
+    /// `sympositivedefinitefactory`, whose metric is affine-invariant.
     Spd,
     /// Real symmetric n-by-n, row-major n².
     /// manopt `symmetricfactory` (Frobenius / Euclidean subspace).
