@@ -42,7 +42,8 @@ LJ38_PROBE_CUBE = 317.4791692719938
 # Machines where glibc gives LJ38. The pin on both ISAs also sees a
 # rounding change that only one of them takes, such as a fused
 # multiply-add on aarch64.
-LJ38_MACHINES = frozenset({"x86_64", "aarch64"})
+GLIBC_MACHINES = frozenset({"x86_64", "aarch64"})
+_ON_GLIBC = platform.libc_ver()[0] == "glibc" and platform.machine() in GLIBC_MACHINES
 # Frames and energies of the LJ38 run, recorded on Linux x86_64 under
 # the pin. The SHA-256 of the frames is LJ38.
 _LJ38_GOLDEN = os.path.join(os.path.dirname(__file__), "data", "lj38_golden.json")
@@ -100,9 +101,9 @@ print(trajectory_sha256("lj38"))
 _LJ38_RUN = """
 import json
 import numpy as np
-from test_invariance import LJ38_PROBE, assert_numpy_dispatch_disabled, lj38_frames
+from test_invariance import LJ38_PROBE, assert_numpy_dispatch_disabled, trajectory_frames
 assert_numpy_dispatch_disabled()
-record = lj38_frames()
+record = trajectory_frames("lj38")
 record["cube"] = float((np.array([LJ38_PROBE]) ** 3)[0])
 print(json.dumps(record))
 """
@@ -206,10 +207,10 @@ def trajectory_sha256(kind: str) -> str:
     return _frames_sha256(_trajectory(kind))
 
 
-def lj38_frames() -> dict[str, object]:
-    """LJ38 energies and positions at every frame, as lists for JSON."""
+def trajectory_frames(kind: str) -> dict[str, object]:
+    """Energies and positions at every frame, as lists for JSON."""
     energies: list[float] = []
-    frames = _trajectory("lj38", energies)
+    frames = _trajectory(kind, energies)
     return {"energies": energies, "positions": [frame.tolist() for frame in frames]}
 
 
@@ -290,6 +291,30 @@ def lj38_run() -> dict[str, Any]:
     return run
 
 
+def _assert_golden_trajectory(
+    run: dict[str, Any], path: str, digest: str, position_atol: float, energy_rtol: float
+) -> None:
+    """Compare a pinned run with the golden frames and energies at ``path``, which hash to ``digest``."""
+    with open(path, encoding="utf-8") as handle:
+        golden = json.load(handle)
+    assert _frames_sha256(golden["positions"]) == digest
+    where = f"{sys.platform} {platform.machine()}, NumPy {np.__version__}"
+    np.testing.assert_allclose(
+        np.asarray(run["positions"], dtype=np.float64),
+        np.asarray(golden["positions"], dtype=np.float64),
+        rtol=0.0,
+        atol=position_atol,
+        err_msg=where,
+    )
+    np.testing.assert_allclose(
+        np.asarray(run["energies"], dtype=np.float64),
+        np.asarray(golden["energies"], dtype=np.float64),
+        rtol=energy_rtol,
+        atol=0.0,
+        err_msg=where,
+    )
+
+
 # The child spawns a ThreadPoolExecutor of up to 8 workers. The marker
 # keeps pytest-run-parallel from multiplying those pools.
 @pytest.mark.thread_unsafe
@@ -314,7 +339,7 @@ def test_lj38_rayon_env_invariance(lj38_run: dict[str, Any]) -> None:
 
 
 @pytest.mark.skipif(
-    platform.libc_ver()[0] != "glibc" or platform.machine() not in LJ38_MACHINES,
+    not _ON_GLIBC,
     reason="the LJ38 digest pins glibc's pow; test_lj38_golden_trajectory covers this platform",
 )
 def test_lj38_golden_digest(lj38_run: dict[str, Any]) -> None:
@@ -335,24 +360,7 @@ def test_lj38_golden_trajectory(lj38_run: dict[str, Any]) -> None:
     A tolerance and not a digest, because another libm may round a cube
     on the path the other way. The stored frames hash to LJ38.
     """
-    with open(_LJ38_GOLDEN, encoding="utf-8") as handle:
-        golden = json.load(handle)
-    assert _frames_sha256(golden["positions"]) == LJ38
-    where = f"{sys.platform} {platform.machine()}, NumPy {np.__version__}"
-    np.testing.assert_allclose(
-        np.asarray(lj38_run["positions"], dtype=np.float64),
-        np.asarray(golden["positions"], dtype=np.float64),
-        rtol=0.0,
-        atol=_LJ38_POSITION_ATOL,
-        err_msg=where,
-    )
-    np.testing.assert_allclose(
-        np.asarray(lj38_run["energies"], dtype=np.float64),
-        np.asarray(golden["energies"], dtype=np.float64),
-        rtol=_LJ38_ENERGY_RTOL,
-        atol=0.0,
-        err_msg=where,
-    )
+    _assert_golden_trajectory(lj38_run, _LJ38_GOLDEN, LJ38, _LJ38_POSITION_ATOL, _LJ38_ENERGY_RTOL)
 
 
 def test_pt7_emt_golden_pins_numpy_not_rgmin() -> None:
