@@ -171,10 +171,19 @@ Use cargo-c for a full install.
 
 ** Python
 
-Neither Python package is on PyPI.
-Both build from a checkout and install a package named ~rgmin~, so an environment holds one of them.
+PyPI has the nanobind package: the free-threaded module ~rgmin._core~ and the ASE optimizers in ~rgmin.ase~.
+The ~ase~ extra adds ASE, which ~rgmin.ase~ needs and ~import rgmin~ does not load:
 
-The repository root builds the free-threaded nanobind module ~rgmin._core~ with scikit-build-core.
+#+begin_src bash
+python -m pip install rgmin
+python -m pip install 'rgmin[ase]'
+#+end_src
+
+There are wheels for Linux with glibc 2.28 or newer (~manylinux_2_28~) on ~x86_64~ and ~aarch64~, macOS 14 or newer on ~arm64~ and ~x86_64~, and Windows on ~x86_64~.
+CPython 3.10 and 3.11 each have a wheel, one abi3 wheel serves 3.12 and newer, and the free-threaded 3.14t and 3.15t each have a wheel.
+On any other platform or interpreter, pip builds the sdist, which has the requirements of a checkout below, the Corrosion download included.
+
+The repository root builds the same package with scikit-build-core.
 It needs a C++17 compiler, CMake 3.15 or newer, and Rust 1.88 or newer.
 CMake downloads Corrosion from GitHub while it configures.
 From the checkout:
@@ -184,12 +193,14 @@ python -m pip install '.[ase]'
 #+end_src
 
 ~python/~ builds the PyO3 module with maturin.
+It is not on PyPI.
 It adds ~rgmin.optimize~, the ASE drop-in of @@rst::doc:`ase-migration`@@, and needs Rust 1.88 or newer:
 
 #+begin_src bash
 python -m pip install './python[ase]'
 #+end_src
 
+Both install the import package ~rgmin~, so an environment holds one of them.
 @@rst::doc:`python`@@ shows both.
 
 ** LAMMPS plugin

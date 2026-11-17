@@ -5,7 +5,7 @@
 
 The package under ~python/~ is the maturin binding. ASE is optional and imported when an optimizer is constructed.
 [[file:ase-migration.org][Moving an ASE script]] is the one-line import change and the differences from ASE.
-Neither Python package is on PyPI. Build this one from the repository root; it needs Rust 1.88 or newer:
+This package is not on PyPI. Build it from the repository root; it needs Rust 1.88 or newer:
 
 #+begin_src bash
 python -m pip install './python[ase]'
@@ -31,7 +31,9 @@ This binding's L-BFGS follows ASE's length control and keeps the pairs. ~LBFGS(e
 
 * Nanobind wheel
 
-The repository root builds a second wheel with scikit-build-core. CMake fetches Corrosion 0.6.1 from GitHub and compiles the =capi= static library. It needs a C++17 compiler, CMake 3.15 or newer, Ninja, and Rust 1.88 or newer.
+PyPI has this wheel as =rgmin=: =python -m pip install 'rgmin[ase]'= installs it with ASE. @@rst::doc:`install`@@ lists the platforms and interpreters that have wheels.
+
+The repository root builds the same wheel with scikit-build-core. CMake fetches Corrosion 0.6.1 from GitHub and compiles the =capi= static library. It needs a C++17 compiler, CMake 3.15 or newer, Ninja, and Rust 1.88 or newer.
 
 From the repository root, =python -m pip install '.[ase,test]'= builds it with ASE and the test extras. Both wheels install a package named =rgmin=, so an environment holds one of them.
 

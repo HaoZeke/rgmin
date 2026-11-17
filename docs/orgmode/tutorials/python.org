@@ -4,13 +4,15 @@
 
 * A quadratic in Python
 
-Install the package from a checkout that can build the Rust static
-library, then minimize \(f(x) = \tfrac12 x \cdot x\).
+Install the package from PyPI, then minimize
+\(f(x) = \tfrac12 x \cdot x\).
 
 #+begin_src bash
-python -m pip install nanobind scikit-build-core
-python -m pip install .
+python -m pip install rgmin
 #+end_src
+
+A checkout that can build the Rust static library installs the same
+package with =python -m pip install .= from the repository root.
 
 #+begin_src python
 import numpy as np

@@ -1,7 +1,7 @@
 # rgmin
 
 <p align="center">
-  <img src="branding/logo/rgmin-logo-light.svg" width="420" alt="rgmin">
+  <img src="https://raw.githubusercontent.com/OmniPotentRPC/rgmin/main/branding/logo/rgmin-logo-light.svg" width="420" alt="rgmin">
 </p>
 
 rgmin finds a local minimum of a smooth function from its value and gradient.
@@ -12,7 +12,7 @@ The step can stay on a manifold, such as the unit sphere or Cartesians with the 
 Algorithms live only in Rust, over [`eindir`](https://github.com/HaoZeke/eindir) `DifferentiableObjective`s.
 Saddle, band, and intrinsic reaction coordinate (IRC) sessions live in [`rgsaddle`](https://github.com/OmniPotentRPC/rgsaddle).
 
-Releases are tagged `vX.Y.Z` on `main` and published to crates.io.
+Releases are tagged `vX.Y.Z` on `main` and published to crates.io and PyPI.
 This is the Rust rewrite; the C++ xtensor history is `0.0.1` on the previous `main`.
 
 C and C++ reach the Rust solvers through the C application binary interface (ABI) in `include/rgmin.h` (`rgmin_solver_t` / `rgmin_minimize`).
@@ -50,7 +50,7 @@ The C ABI pins the engine (`rgmin_highs_solver_t`).
 A session can retract onto an embedded manifold (`set_manifold`), such
 as the sphere, SO(3), SE(3), Stiefel `St(n,1)`, SPD, or a cluster with
 the rigid-body motions removed. Euclidean is the default.
-[`docs/orgmode/howto/manifolds.org`](docs/orgmode/howto/manifolds.org)
+[`docs/orgmode/howto/manifolds.org`](https://github.com/OmniPotentRPC/rgmin/blob/main/docs/orgmode/howto/manifolds.org)
 lists every `ManifoldKind`.
 
 Conjugacy: Fletcher-Reeves, Polak-Ribiere, Polak-Ribiere-plus,
@@ -88,21 +88,21 @@ The Python package `rgmin` is a free-threaded nanobind module
 (`rgmin._core`) plus `rgmin.ase.Optimizer`, and `python/` is the maturin
 ASE drop-in (`rgmin.optimize`: `BFGS`, `LBFGS`, `FIRE`, and the other
 gradient methods, plus `lowest_eigenpairs`). ASE is an extra.
-[`docs/orgmode/howto/ase-migration.org`](docs/orgmode/howto/ase-migration.org)
+[`docs/orgmode/howto/ase-migration.org`](https://github.com/OmniPotentRPC/rgmin/blob/main/docs/orgmode/howto/ase-migration.org)
 is the import change.
 
-Narrative docs live in [`docs/orgmode/`](docs/orgmode/index.org)
+Narrative docs live in [`docs/orgmode/`](https://github.com/OmniPotentRPC/rgmin/blob/main/docs/orgmode/index.org)
 (Diataxis); the explanation quadrant derives the math behind each
 solver, and every derivation's exact algebra is pinned by the Lean
-(Mathlib) development under [`proofs/lean/`](proofs/lean/), indexed in
-[`docs/orgmode/reference/proofs.org`](docs/orgmode/reference/proofs.org).
+(Mathlib) development under [`proofs/lean/`](https://github.com/OmniPotentRPC/rgmin/tree/main/proofs/lean), indexed in
+[`docs/orgmode/reference/proofs.org`](https://github.com/OmniPotentRPC/rgmin/blob/main/docs/orgmode/reference/proofs.org).
 C ABI HTML is Doxygen plus
 [doxyYoda](https://github.com/HaoZeke/doxyYoda):
 `scripts/get_doxyyoda.sh` then `doxygen docs/source/Doxyfile_doxyyoda.cfg`.
 The Sphinx bibliography is the `rgmin-docs` ookcite collection
 exported to `docs/source/references.bib` and cited from orgmode
 with `sphinxcontrib-bibtex` (`docs/orgmode/reference/bibliography.org`).
-The mark is documented in [`branding/logo/`](branding/logo/README.md).
+The mark is documented in [`branding/logo/`](https://github.com/OmniPotentRPC/rgmin/blob/main/branding/logo/README.md).
 
 ```rust
 use ndarray::array;
@@ -117,18 +117,32 @@ let (_f, x, _) = opt.minimize(array![-1.2, 1.0].view(), 200, |x| {
 ```
 
 Install the 0.6 release from crates.io with `cargo add rgmin@0.6 ndarray@0.17` on Rust 1.88 or newer.
-[`docs/orgmode/howto/install.org`](docs/orgmode/howto/install.org) covers the features, the `develop` branch, the C library from cargo-c or Meson, the Python packages and the LAMMPS plugin.
+[`docs/orgmode/howto/install.org`](https://github.com/OmniPotentRPC/rgmin/blob/main/docs/orgmode/howto/install.org) covers the features, the `develop` branch, the C library from cargo-c or Meson, the Python packages and the LAMMPS plugin.
+
+## Python
+
+Install the nanobind package from PyPI, with ASE for `rgmin.ase` or without it:
+
+```bash
+python -m pip install rgmin
+python -m pip install "rgmin[ase]"
+```
+
+There are wheels for Linux (`manylinux_2_28`) on x86_64 and aarch64, macOS 14 or newer on arm64 and x86_64, and Windows on x86_64.
+CPython 3.10 and 3.11 each have a wheel, one abi3 wheel serves 3.12 and newer, and the free-threaded 3.14t and 3.15t each have a wheel.
+Anywhere else pip builds the sdist, which needs Rust 1.88 or newer, CMake 3.15 or newer and a C++17 compiler.
+The maturin ASE drop-in under `python/` (`rgmin.optimize`) is not on PyPI and builds from a checkout, as the install guide above shows.
 
 ## LAMMPS
 
 `lammps/` builds `min_style rgmin`, a LAMMPS plugin that runs rgmin's L-BFGS, FIRE, FIRE 2.0, steepest descent and Barzilai-Borwein sessions through the C ABI.
 After `plugin load rgminplugin.so`, change `min_style cg` to `min_style rgmin` and keep the rest of the input; it needs LAMMPS 22Jul2025 or later and runs under MPI.
-[`docs/orgmode/howto/lammps-migration.org`](docs/orgmode/howto/lammps-migration.org) covers the build, the stopping rules and the differences from LAMMPS's minimizers, and the benchmark from `benches/lammps_minstyle.py` ([`benches/lammps_minstyle/results.md`](benches/lammps_minstyle/results.md)).
+[`docs/orgmode/howto/lammps-migration.org`](https://github.com/OmniPotentRPC/rgmin/blob/main/docs/orgmode/howto/lammps-migration.org) covers the build, the stopping rules and the differences from LAMMPS's minimizers, and the benchmark from `benches/lammps_minstyle.py` ([`benches/lammps_minstyle/results.md`](https://github.com/OmniPotentRPC/rgmin/blob/main/benches/lammps_minstyle/results.md)).
 
 ## Citation
 
-If you use rgmin in published work, cite it with [`CITATION.cff`](CITATION.cff) and add the version or commit you ran.
-[`docs/orgmode/howto/cite.org`](docs/orgmode/howto/cite.org) gives a BibTeX entry and shows where to find the version.
+If you use rgmin in published work, cite it with [`CITATION.cff`](https://github.com/OmniPotentRPC/rgmin/blob/main/CITATION.cff) and add the version or commit you ran.
+[`docs/orgmode/howto/cite.org`](https://github.com/OmniPotentRPC/rgmin/blob/main/docs/orgmode/howto/cite.org) gives a BibTeX entry and shows where to find the version.
 
 ## License
 
