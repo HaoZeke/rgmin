@@ -136,6 +136,47 @@ fn eckart(
     );
 }
 
+/// What a first-order step removes from its force, the metric image of
+/// the force and its velocity: the rigid motion at the stored anchor.
+struct RigidRemoval<'a> {
+    mode: RigidMode,
+    masses: Option<&'a [f64]>,
+    frozen: Option<&'a [u8]>,
+    weighted: bool,
+    force_metric: bool,
+    velocity_metric: bool,
+    pbc: [bool; 3],
+    broken_translation: [bool; 3],
+    broken_rotation: [bool; 3],
+}
+
+impl RigidRemoval<'_> {
+    fn project(&self, ws: &mut RigidWorkspace, metric: bool, v: &mut Array1<f64>) {
+        eckart(
+            ws,
+            self.mode,
+            self.masses,
+            self.frozen,
+            self.weighted,
+            metric,
+            self.pbc,
+            self.broken_translation,
+            self.broken_rotation,
+            v,
+        );
+    }
+
+    /// `v` is a force, or its image under the preconditioner.
+    fn force(&self, ws: &mut RigidWorkspace, v: &mut Array1<f64>) {
+        self.project(ws, self.force_metric, v);
+    }
+
+    /// `v` is a velocity.
+    fn velocity(&self, ws: &mut RigidWorkspace, v: &mut Array1<f64>) {
+        self.project(ws, self.velocity_metric, v);
+    }
+}
+
 /// Puts a taken [`RigidWorkspace`] back if a stepper returns early.
 struct WsHold<'a> {
     slot: &'a mut RigidWorkspace,
@@ -3716,15 +3757,19 @@ impl Solver {
         } else {
             let mut fire2_local = self.fire2.clone();
             let mut stalled = false;
-            let rigid_mode = self.removal_mode();
-            let rigid_metric = self.force_metric();
-            let rigid_vmetric = self.velocity_metric();
-            let rigid_weighted = self.chart_weighted();
-            let rigid_pbc = self.pbc;
-            let rigid_broken_t = self.broken_translation;
-            let rigid_broken_r = self.broken_rotation;
+            let rigid = RigidRemoval {
+                mode: self.removal_mode(),
+                masses: self.masses.as_ref().and_then(|m| m.as_slice()),
+                frozen: self.frozen.as_deref(),
+                weighted: self.chart_weighted(),
+                force_metric: self.force_metric(),
+                velocity_metric: self.velocity_metric(),
+                pbc: self.pbc,
+                broken_translation: self.broken_translation,
+                broken_rotation: self.broken_rotation,
+            };
             let mut hold = WsHold::take(&mut self.rigid_ws);
-            if rigid_mode != RigidMode::Off
+            if rigid.mode != RigidMode::Off
                 && let Some(xs) = x.as_slice()
             {
                 hold.ws.set_anchor(xs);
@@ -3732,21 +3777,8 @@ impl Solver {
             match &mut self.inner {
                 Inner::Lbfgs(_) if !lbfgs_line_searched => {}
                 Inner::Lbfgs(solver) => {
-                    let masses = self.masses.as_ref().and_then(|m| m.as_slice());
-                    let frozen = self.frozen.as_deref();
                     let mut project = |d: &mut Array1<f64>| {
-                        eckart(
-                            &mut hold.ws,
-                            rigid_mode,
-                            masses,
-                            frozen,
-                            rigid_weighted,
-                            rigid_metric,
-                            rigid_pbc,
-                            rigid_broken_t,
-                            rigid_broken_r,
-                            d,
-                        );
+                        rigid.force(&mut hold.ws, d);
                     };
                     energy_stall = solver.step_objective_with_direction(
                         obj,
@@ -3987,47 +4019,12 @@ impl Solver {
                     // The force, its metric image and the velocity leave the
                     // rigid subspace at the start geometry; the velocity in the
                     // momentum metric, the force in the force metric.
-                    let masses = self.masses.as_ref().and_then(|m| m.as_slice());
-                    let frozen = self.frozen.as_deref();
                     let mut raw = grad.mapv(|g| -g);
-                    eckart(
-                        &mut hold.ws,
-                        rigid_mode,
-                        masses,
-                        frozen,
-                        rigid_weighted,
-                        rigid_metric,
-                        rigid_pbc,
-                        rigid_broken_t,
-                        rigid_broken_r,
-                        &mut raw,
-                    );
+                    rigid.force(&mut hold.ws, &mut raw);
                     #[allow(unused_mut)]
                     let mut steepest = metric_vector(&self.precon, &raw)?;
-                    eckart(
-                        &mut hold.ws,
-                        rigid_mode,
-                        masses,
-                        frozen,
-                        rigid_weighted,
-                        rigid_metric,
-                        rigid_pbc,
-                        rigid_broken_t,
-                        rigid_broken_r,
-                        &mut steepest,
-                    );
-                    eckart(
-                        &mut hold.ws,
-                        rigid_mode,
-                        masses,
-                        frozen,
-                        rigid_weighted,
-                        rigid_vmetric,
-                        rigid_pbc,
-                        rigid_broken_t,
-                        rigid_broken_r,
-                        &mut state.vel,
-                    );
+                    rigid.force(&mut hold.ws, &mut steepest);
+                    rigid.velocity(&mut hold.ws, &mut state.vel);
                     #[cfg(feature = "highs")]
                     if boxed {
                         crate::box_objective::project_tangent(obj.bounds(), x, &mut raw);
@@ -4099,18 +4096,7 @@ impl Solver {
                         dx = fire_clip_components(state, cap);
                     }
                     if !stalled {
-                        eckart(
-                            &mut hold.ws,
-                            rigid_mode,
-                            masses,
-                            frozen,
-                            rigid_weighted,
-                            rigid_metric,
-                            rigid_pbc,
-                            rigid_broken_t,
-                            rigid_broken_r,
-                            &mut dx,
-                        );
+                        rigid.force(&mut hold.ws, &mut dx);
                         let trial = if curved {
                             // The chord leaves the set; the trial is the
                             // retraction of the tangent step, inside the cap.
@@ -4191,7 +4177,7 @@ impl Solver {
                             return Err(crate::step::non_finite());
                         }
                         *x = trial;
-                        if rigid_mode != RigidMode::Off
+                        if rigid.mode != RigidMode::Off
                             && let Some(xs) = x.as_slice()
                         {
                             hold.ws.set_anchor(xs);
@@ -4199,44 +4185,11 @@ impl Solver {
                         value = ev.0;
                         grad = ev.1;
                         let mut raw_new = grad.mapv(|g| -g);
-                        eckart(
-                            &mut hold.ws,
-                            rigid_mode,
-                            masses,
-                            frozen,
-                            rigid_weighted,
-                            rigid_metric,
-                            rigid_pbc,
-                            rigid_broken_t,
-                            rigid_broken_r,
-                            &mut raw_new,
-                        );
+                        rigid.force(&mut hold.ws, &mut raw_new);
                         #[allow(unused_mut)]
                         let mut steep_new = metric_vector(&self.precon, &raw_new)?;
-                        eckart(
-                            &mut hold.ws,
-                            rigid_mode,
-                            masses,
-                            frozen,
-                            rigid_weighted,
-                            rigid_metric,
-                            rigid_pbc,
-                            rigid_broken_t,
-                            rigid_broken_r,
-                            &mut steep_new,
-                        );
-                        eckart(
-                            &mut hold.ws,
-                            rigid_mode,
-                            masses,
-                            frozen,
-                            rigid_weighted,
-                            rigid_vmetric,
-                            rigid_pbc,
-                            rigid_broken_t,
-                            rigid_broken_r,
-                            &mut state.vel,
-                        );
+                        rigid.force(&mut hold.ws, &mut steep_new);
+                        rigid.velocity(&mut hold.ws, &mut state.vel);
                         #[cfg(feature = "highs")]
                         if boxed {
                             crate::box_objective::project_tangent(obj.bounds(), x, &mut raw_new);
