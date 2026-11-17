@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: MIT
 """SHA-256 of trajectories at several thread counts.
 
-LJ38 thread and Rayon invariance compare every run with one reference
-run on the same machine. The LJ38 and Pt7 goldens pin ASE's
+LJ38 and Pt7 thread and Rayon invariance compare every run with one
+reference run on the same machine. The LJ38 and Pt7 goldens pin ASE's
 LennardJones and EMT, which are NumPy-dispatched and call the platform
-libm. They are not pins of rgmin. The LJ38 digest is pinned on glibc
-only. Every platform compares the LJ38 frames and energies with the
-golden run within a tolerance. rgmin's own results must be
-bit-identical across ISAs with no environment variable. That check is
-the diagonal quadratic.
+libm. They are not pins of rgmin. Both digests are pinned on glibc
+only. Every platform compares the frames and energies with the golden
+run within a tolerance. rgmin's own results must be bit-identical
+across ISAs with no environment variable. That check is the diagonal
+quadratic.
 """
 
 from __future__ import annotations
@@ -39,9 +39,9 @@ import pytest
 LJ38 = "9ff5ac4e272b58e733c2336e8b2580a566cfd0eefd77c3c1797359fb024cf24a"
 LJ38_PROBE = float.fromhex("0x1.b499f0a26aea2p+2")
 LJ38_PROBE_CUBE = 317.4791692719938
-# Machines where glibc gives LJ38. The pin on both ISAs also sees a
-# rounding change that only one of them takes, such as a fused
-# multiply-add on aarch64.
+# Machines where glibc gives LJ38 and PT7_EMT. The pin on both ISAs
+# also sees a rounding change that only one of them takes, such as a
+# fused multiply-add on aarch64.
 GLIBC_MACHINES = frozenset({"x86_64", "aarch64"})
 _ON_GLIBC = platform.libc_ver()[0] == "glibc" and platform.machine() in GLIBC_MACHINES
 # Frames and energies of the LJ38 run, recorded on Linux x86_64 under
@@ -53,10 +53,28 @@ _LJ38_GOLDEN = os.path.join(os.path.dirname(__file__), "data", "lj38_golden.json
 # The bounds sit about three decades above that and ten below a step.
 _LJ38_POSITION_ATOL = 1e-12
 _LJ38_ENERGY_RTOL = 1e-12
-# ASE EMT. Compared only in a process that was started with the pin below.
-# Linux, macOS, and arm agree. Windows NumPy does not, on this trajectory.
+# ASE EMT on glibc, in a process started with the pin below. Without
+# AVX-512, NumPy's float64 exp calls libm ``exp`` for each element. In
+# the sixth force call atoms 0 and 1 are 2.348 apart, and
+# ``exp(-eta2 * (r - beta * s0))`` in sigma1 has the argument PT7_PROBE.
+# Its exponential lies 0.0004 ulp above the midpoint between two
+# doubles. glibc returns the upper one on x86_64 and aarch64. Apple's
+# x86_64 libm returns the lower one, and macOS x86_64 gives the digest
+# of exactly that rounding, 61fdafb0... The last frame moves by at most
+# 4.4e-16. The digest pins glibc's exp and not rgmin.
 PT7_EMT = "299f8164ab0df6f3b59731098b3d83e12c13c0b4117426437bf9af9df0a17ce8"
-PT7_EMT_WINDOWS = "498757428117987ca8d99e3a209e83459f5b90b6196dba32ca695a534de0f64e"
+PT7_PROBE = float.fromhex("0x1.7742e155039b9p+0")
+PT7_PROBE_EXP = 4.331284983478651
+# Frames and energies of the Pt7 run, recorded on Linux x86_64 under
+# the pin. The SHA-256 of the frames is PT7_EMT.
+_PT7_GOLDEN = os.path.join(os.path.dirname(__file__), "data", "pt7_golden.json")
+# Rounding exp(PT7_PROBE) the other way moves Pt7 positions by at most
+# 4.4e-16 and energies by 7e-16 relative. Moving every exp and log one
+# ulp up, one down, or not at all at random moves them by at most
+# 2.1e-14 and 9.8e-15 over 200 seeds. The bounds sit fifty times above
+# that and eleven decades below a step.
+_PT7_POSITION_ATOL = 1e-12
+_PT7_ENERGY_RTOL = 1e-12
 # rgmin Solver, pure-Python diagonal quadratic, no NumPy pin.
 # The solver uses the default per-atom cap of 0.2.
 RGMIN_QUADRATIC = "b2ef984a0c4b84ba6c176428a2a0b3370b34d1fbb65ebe1126a6732a0cb62d7a"
@@ -83,6 +101,16 @@ _PT7_ONCE = """
 from test_invariance import assert_numpy_dispatch_disabled, trajectory_sha256
 assert_numpy_dispatch_disabled()
 print(trajectory_sha256("pt7"))
+"""
+
+_PT7_RUN = """
+import json
+import numpy as np
+from test_invariance import PT7_PROBE, assert_numpy_dispatch_disabled, trajectory_frames
+assert_numpy_dispatch_disabled()
+record = trajectory_frames("pt7")
+record["exp"] = float(np.exp(np.array([PT7_PROBE]))[0])
+print(json.dumps(record))
 """
 
 _LJ38_THREADS = """
@@ -263,12 +291,6 @@ def _run_child(code: str, *, pin: str | None, **extra: str) -> list[str]:
     return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
 
 
-def _pt7_expect() -> str:
-    if sys.platform == "win32":
-        return PT7_EMT_WINDOWS
-    return PT7_EMT
-
-
 def _numpy_pin() -> str | None:
     """Dispatch names for the AVX-512 and X86_V3/V4 paths, if this build has them."""
     names = json.loads(_run_child(_DISPATCH_PROBE, pin=None)[-1])
@@ -287,6 +309,19 @@ def lj38_run() -> dict[str, Any]:
     """
     pytest.importorskip("ase")
     run: dict[str, Any] = json.loads(_run_child(_LJ38_RUN, pin=_numpy_pin())[-1])
+    run["digest"] = _frames_sha256(run["positions"])
+    return run
+
+
+@pytest.fixture(scope="module")
+def pt7_run() -> dict[str, Any]:
+    """One pinned EMT run on this machine, the reference for the Pt7 tests.
+
+    Frames, energies, their digest, and how this libm rounds the
+    exponential of PT7_PROBE.
+    """
+    pytest.importorskip("ase")
+    run: dict[str, Any] = json.loads(_run_child(_PT7_RUN, pin=_numpy_pin())[-1])
     run["digest"] = _frames_sha256(run["positions"])
     return run
 
@@ -363,21 +398,19 @@ def test_lj38_golden_trajectory(lj38_run: dict[str, Any]) -> None:
     _assert_golden_trajectory(lj38_run, _LJ38_GOLDEN, LJ38, _LJ38_POSITION_ATOL, _LJ38_ENERGY_RTOL)
 
 
-def test_pt7_emt_golden_pins_numpy_not_rgmin() -> None:
-    """Hash Pt7 EMT with the AVX-512 and X86_V3/V4 paths disabled.
+def test_pt7_emt_thread_invariance(pt7_run: dict[str, Any]) -> None:
+    """EMT matches this machine's run at 1, 2 and 8 Python threads and every Rayon thread count.
 
-    The variable is set on the child process, before NumPy is imported.
-    A conftest assignment is too late once a plugin has imported NumPy.
-    Only names from this build's ``__cpu_dispatch__`` are listed, and
-    the child asserts ``show_runtime`` and ``__cpu_features__``. This
-    pins ASE's EMT, which is NumPy-dispatched, and not rgmin.
-    Windows NumPy takes a different value. The thread counts still agree.
-    A mismatch reports the observed digest with the platform and the
-    NumPy version. ``RGMIN_PT7_DIGEST_OUT`` names a file for that record.
+    Every run hashes Pt7 EMT with the AVX-512 and X86_V3/V4 paths
+    disabled. ``NPY_DISABLE_CPU_FEATURES`` is set on the child process,
+    before NumPy is imported. A conftest assignment is too late once a
+    plugin has imported NumPy. Only names from this build's
+    ``__cpu_dispatch__`` are listed, and the child asserts
+    ``show_runtime`` and ``__cpu_features__``. A mismatch reports every
+    digest with the platform and the NumPy version.
+    ``RGMIN_PT7_DIGEST_OUT`` names a file for that record.
     """
-    pytest.importorskip("ase")
     pin = _numpy_pin()
-    expect = _pt7_expect()
     observed = {f"python_threads_{w}": h for w, h in zip((1, 2, 8), _run_child(_PT7_THREADS, pin=pin))}
     for threads in ("1", "2", "3", "8"):
         for digest in _run_child(
@@ -387,7 +420,7 @@ def test_pt7_emt_golden_pins_numpy_not_rgmin() -> None:
             OMP_NUM_THREADS=threads,
         ):
             observed[f"rayon_{threads}"] = digest
-    record = _pt7_record(observed, expect, pin)
+    record = _pt7_record(observed, pt7_run, pin)
     out = os.environ.get("RGMIN_PT7_DIGEST_OUT")
     if out:
         with open(out, "w", encoding="utf-8") as handle:
@@ -395,26 +428,54 @@ def test_pt7_emt_golden_pins_numpy_not_rgmin() -> None:
             handle.write("\n")
     report = json.dumps(record, indent=2)
     assert len(observed) == 7, report
-    assert set(observed.values()) == {expect}, report
+    assert set(observed.values()) == {pt7_run["digest"]}, report
 
 
-def _pt7_record(observed: dict[str, str], expect: str, pin: str | None) -> dict[str, object]:
-    """Everything needed to pin the Pt7 golden from one failing run."""
+def _pt7_record(observed: dict[str, str], run: dict[str, Any], pin: str | None) -> dict[str, object]:
+    """The seven Pt7 digests beside this machine's reference run and the glibc golden."""
     import ase
 
     digests = sorted(set(observed.values()))
     return {
         "observed": digests[0] if len(digests) == 1 else digests,
-        "expected": expect,
-        "constant": "PT7_EMT_WINDOWS" if sys.platform == "win32" else "PT7_EMT",
+        "reference": run["digest"],
+        "golden": PT7_EMT,
+        "exp": run["exp"],
         "platform": sys.platform,
         "machine": platform.machine(),
+        "libc": list(platform.libc_ver()),
         "python": sys.version,
         "numpy": np.__version__,
         "ase": ase.__version__,
         "pin": pin,
         "runs": observed,
     }
+
+
+@pytest.mark.skipif(
+    not _ON_GLIBC,
+    reason="the Pt7 digest pins glibc's exp; test_pt7_emt_golden_trajectory covers this platform",
+)
+def test_pt7_emt_golden_digest(pt7_run: dict[str, Any]) -> None:
+    """This machine's EMT run matches the golden digest on glibc.
+
+    A mismatch with the exponential still at PT7_PROBE_EXP did not come
+    from that rounding.
+    """
+    assert pt7_run["digest"] == PT7_EMT, (
+        f"{pt7_run['digest']} on {sys.platform} {platform.machine()} with NumPy {np.__version__}: "
+        f"exp(PT7_PROBE) = {pt7_run['exp']!r}, glibc gives {PT7_PROBE_EXP!r}"
+    )
+
+
+def test_pt7_emt_golden_trajectory(pt7_run: dict[str, Any]) -> None:
+    """This machine's EMT frames and energies match the golden run.
+
+    A tolerance and not a digest, because another libm may round an
+    exponential on the path the other way. The stored frames hash to
+    PT7_EMT.
+    """
+    _assert_golden_trajectory(pt7_run, _PT7_GOLDEN, PT7_EMT, _PT7_POSITION_ATOL, _PT7_ENERGY_RTOL)
 
 
 def test_rgmin_quadratic_golden() -> None:
