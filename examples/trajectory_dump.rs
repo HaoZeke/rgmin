@@ -1,10 +1,11 @@
-//! Bitwise trajectory dump of every optimiser on the oracle functions.
+//! Bitwise trajectory dump of the optimiser paths below.
 //!
 //! Prints one line per accepted iterate: the case name, the step, then
 //! the IEEE-754 bits of the value, the gradient norm and every
-//! coordinate. Diff the output of two builds. An empty diff means the
-//! two builds took the same iterates bit for bit, which is what a
-//! refactor that only drops a copy has to show.
+//! coordinate. Reports append their own step count, stop norm, status
+//! and retained-gradient state. Diff the output of two builds. An empty
+//! diff means these recorded results are equal bit for bit; Python
+//! bindings and test-only fixtures have their own suites.
 //!
 //! The oracles are the ones the test suite already uses: the Morse chain
 //! of `tests/optimizer_trajectory.rs`, the Rosenbrock valley with its
@@ -20,6 +21,7 @@ use std::fmt::Write as _;
 
 use ndarray::{Array1, Array2, ArrayView1, array};
 use rgmin::nlcg::{Conjugacy, Restart};
+use rgmin::rtr::{RtrOptions, minimize_rtr};
 use rgmin::{
     Accept, Control, DistanceConstraints, FireKind, HessianOracle, HvpOracle, LbfgsStep,
     LineSearch, ManifoldKind, Method, Oracle, Report, RigidMode, Solver, minimize_eon_cg,
@@ -109,6 +111,10 @@ fn rayleigh(x: ArrayView1<f64>) -> (f64, Array1<f64>) {
     (f, g)
 }
 
+fn rayleigh_hvp(v: ArrayView1<f64>) -> Array1<f64> {
+    rayleigh(v).1
+}
+
 fn rayleigh_start(n: usize) -> Array1<f64> {
     Array1::from_shape_fn(n, |i| 0.3 + 0.17 * ((i * 5 % 7) as f64))
 }
@@ -118,7 +124,15 @@ struct Dump {
 }
 
 impl Dump {
-    fn point(&mut self, case: &str, step: usize, value: f64, grad_norm: f64, x: &Array1<f64>) {
+    fn point_with_meta(
+        &mut self,
+        case: &str,
+        step: usize,
+        value: f64,
+        grad_norm: f64,
+        x: &Array1<f64>,
+        meta: Option<&str>,
+    ) {
         let mut line = format!(
             "{case} {step} {:016x} {:016x}",
             value.to_bits(),
@@ -127,12 +141,27 @@ impl Dump {
         for c in x.iter() {
             let _ = write!(line, " {:016x}", c.to_bits());
         }
+        if let Some(meta) = meta {
+            let _ = write!(line, " {meta}");
+        }
         self.out.push_str(&line);
         self.out.push('\n');
     }
 
+    fn point(&mut self, case: &str, step: usize, value: f64, grad_norm: f64, x: &Array1<f64>) {
+        self.point_with_meta(case, step, value, grad_norm, x, None);
+    }
+
     fn report(&mut self, case: &str, step: usize, r: &Report) {
-        self.point(case, step, r.value, r.grad_norm, &r.coords);
+        let grad = r
+            .grad
+            .as_ref()
+            .map_or_else(|| "none".to_string(), |g| format!("some:{}", g.len()));
+        let meta = format!(
+            "report_steps={} stop={:?} status={:?} grad={}",
+            r.steps, r.stop_norm, r.status, grad
+        );
+        self.point_with_meta(case, step, r.value, r.grad_norm, &r.coords, Some(&meta));
     }
 
     fn note(&mut self, case: &str, text: &str) {
@@ -443,6 +472,64 @@ fn manifold_cases(d: &mut Dump) {
     }
 }
 
+fn rtr_cases(d: &mut Dump) {
+    const N: usize = 6;
+    let manifold = ManifoldKind::Sphere;
+    let mut start = rayleigh_start(N);
+    start /= start.dot(&start).sqrt();
+    let cases = [
+        (
+            "default",
+            RtrOptions::default().with_grad_tol(0.0).with_max_iter(8),
+        ),
+        (
+            "setters",
+            RtrOptions::default()
+                .with_radius_max(0.8)
+                .with_grad_tol(1e9)
+                .with_max_iter(3)
+                .with_cg_max(4)
+                .with_theta(0.7)
+                .with_kappa(0.2)
+                .with_rho_regularization(50.0),
+        ),
+    ];
+    for (tag, opts) in cases {
+        let configured = format!(
+            "radius_max={:?} grad_tol={:016x} max_iter={} cg_max={:?} theta={:016x} \
+             kappa={:016x} rho_regularization={:016x}",
+            opts.radius_max.map(f64::to_bits),
+            opts.grad_tol.to_bits(),
+            opts.max_iter,
+            opts.cg_max,
+            opts.theta.to_bits(),
+            opts.kappa.to_bits(),
+            opts.rho_regularization.to_bits(),
+        );
+        let report = minimize_rtr(
+            &manifold,
+            start.clone(),
+            |x| rayleigh(x.view()).0,
+            |x| rayleigh(x.view()).1,
+            |_x, v| rayleigh_hvp(v.view()),
+            opts,
+        );
+        let case = format!("rtr/{tag}");
+        let meta = format!(
+            "{configured} accepted={} inner={}",
+            report.accepted, report.inner_iterations,
+        );
+        d.point_with_meta(
+            &case,
+            report.iterations,
+            report.value,
+            report.grad_norm,
+            &report.x,
+            Some(&meta),
+        );
+    }
+}
+
 fn rigid_cases(d: &mut Dump) {
     const N: usize = 8;
     let obj = Oracle::unbounded(N * 3, morse_chain);
@@ -718,6 +805,37 @@ mod c_waist {
             rgmin_solver_clear_exp(s);
             0
         });
+        s!("exp-invalid", |s| {
+            let mut p = rgmin_exp_default();
+            p.c_stab = 0.0;
+            rgmin_solver_set_exp(
+                s,
+                &p,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+            ) as i32
+        });
+        s!("exp-valid", |s| {
+            let p = rgmin_exp_default();
+            let code = rgmin_solver_set_exp(
+                s,
+                &p,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+            ) as i32;
+            rgmin_solver_clear_exp(s);
+            code
+        });
         s!("clear-precon", |s| {
             rgmin_solver_clear_precon(s);
             0
@@ -829,6 +947,7 @@ fn main() {
     newton_cases(&mut d);
     scg_and_eon_cases(&mut d);
     manifold_cases(&mut d);
+    rtr_cases(&mut d);
     rigid_cases(&mut d);
     constrained_cases(&mut d);
     #[cfg(feature = "capi")]
