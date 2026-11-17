@@ -70,13 +70,14 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 46
+#define RGMIN_ABI_VERSION_MINOR 47
 /* 37 linesearch, 38 lbfgs_direction, 39 rgmin_lowest_eigenpairs.
  * 40 is the 0.6.0 union with the 0.5.2 C surface.
  * 41 rgmin_manifold_handle_t, 42 rgmin_lowest_eigenpairs_ex,
  * 43 rgmin_lbfgs_pairs_push_rho, 44 rgmin_solver_set_power,
  * 45 rgmin_solver_set_lbfgs_trust (Burdakov ray, not set_lbfgs_trust),
- * 46 rgmin_control_default and the other struct initializers. */
+ * 46 rgmin_control_default and the other struct initializers,
+ * 47 level-set constraint setters. */
 #define RGMIN_ABI_LAYOUT_REVISION 5
 /* Layout revision 5. rgmin_control_t is maxiter, gtol, istep, memory,
  * maxmove, noise_eps, noise_c. maxmove > 0 is the Euclidean cap; 0 keeps
@@ -845,6 +846,10 @@ rgmin_status_t rgmin_solver_set_distance_constraints(rgmin_solver_t *solver,
                                                      const rgmin_constraints_t *set);
 /** Drop the session's set and its method memory. ABI minor 31. */
 void rgmin_solver_clear_distance_constraints(rgmin_solver_t *solver);
+/** Keep points on the level set `value(x) = target`. ABI minor 47. */
+rgmin_status_t rgmin_solver_set_level_set(rgmin_solver_t *solver, double target);
+/** Drop the session's level-set constraint. ABI minor 47. */
+void rgmin_solver_clear_level_set(rgmin_solver_t *solver);
 /**
  * One outer iteration: direction, line search, curvature update.
  * \a eval and \a grad are valid for this call only. \a x is in/out.

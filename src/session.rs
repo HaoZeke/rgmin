@@ -29,6 +29,7 @@ use crate::hvp::{
     sym_eig_jacobi,
 };
 use crate::lbfgs::{GradNorm, Lbfgs, LbfgsStep};
+use crate::level_set::{LevelSetConstraint, project_tangent, retract_to_level_set};
 use crate::lindh::LindhSpec;
 use crate::linesearch::{LineSearch, LineSearchOptions};
 use crate::lowest_mode::ApplyHessian;
@@ -331,6 +332,8 @@ pub struct Solver {
     stop_norm: StopNorm,
     /// Holonomic distance constraints. `None` is the unconstrained step.
     constraints: Option<Arc<DistanceConstraints>>,
+    /// Optional level-set constraint \(g(x) = c\).
+    level_set: Option<LevelSetConstraint>,
     /// [`Self::run`] skips the coordinate copy on intermediate reports.
     brief: bool,
     /// Optional trace of the eOn fill step.
@@ -521,6 +524,7 @@ impl Solver {
             tangent: TangentModel::default(),
             stop_norm,
             constraints: None,
+            level_set: None,
             brief: false,
             eon_log: None,
             trust: false,
@@ -1760,6 +1764,68 @@ impl Solver {
         }
     }
 
+    fn project_level_set_vec(&self, grad: &Array1<f64>, v: &Array1<f64>) -> Result<Array1<f64>> {
+        if self.level_set.is_none() {
+            return Ok(v.clone());
+        }
+        project_tangent(grad.view(), v)
+    }
+
+    fn project_level_set_pair(
+        &self,
+        grad: &Array1<f64>,
+        s: &mut Array1<f64>,
+        y: &mut Array1<f64>,
+    ) -> Result<()> {
+        if self.level_set.is_none() {
+            return Ok(());
+        }
+        *s = project_tangent(grad.view(), s)?;
+        *y = project_tangent(grad.view(), y)?;
+        Ok(())
+    }
+
+    fn retract_level_set_here<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        value: &mut f64,
+        grad: &mut Array1<f64>,
+    ) -> Result<()>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let Some(cfg) = self.level_set else {
+            return Ok(());
+        };
+        let retracted = retract_to_level_set(obj, cfg, x)?;
+        *x = retracted.point;
+        *value = retracted.value;
+        *grad = retracted.gradient;
+        Ok(())
+    }
+
+    fn retract_level_set_start<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<()>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        if self.level_set.is_none() {
+            return Ok(());
+        }
+        let had = x.clone();
+        let mut value = 0.0;
+        let mut grad = Array1::zeros(x.len());
+        self.retract_level_set_here(obj, x, &mut value, &mut grad)?;
+        if x.iter()
+            .zip(had.iter())
+            .any(|(a, b)| a.to_bits() != b.to_bits())
+        {
+            self.last_pos = None;
+            self.remember(x, value, &grad);
+        }
+        Ok(())
+    }
+
     /// Riemannian L-BFGS pair at `x`: `s = T(x - old)`, `y = g - T(g_old)`.
     fn lbfgs_sy(
         &mut self,
@@ -2216,6 +2282,7 @@ impl Solver {
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
+        self.retract_level_set_start(obj, x)?;
         let before = x.clone();
         let mut report = self.step_once(obj, x)?;
         self.note_repeated_lbfgs_step(&before, x, &mut report);
@@ -2274,6 +2341,7 @@ impl Solver {
     where
         O: HessianObjective + ?Sized,
     {
+        self.retract_level_set_start(obj, x)?;
         if self.constraints.is_some() {
             return self.constrained_step(x, |s, x| s.step_constrained_hess(obj, x));
         }
@@ -2328,6 +2396,7 @@ impl Solver {
         if !matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. }) {
             return Err(Error::NeedHvp);
         }
+        self.retract_level_set_start(obj, x)?;
         let action = |xv: ArrayView1<f64>, v: ArrayView1<f64>| obj.hessian_vector(xv, v);
         if self.constraints.is_some() {
             return self.constrained_step(x, |s, x| s.step_constrained_newton_cg(obj, x, &action));
@@ -3680,10 +3749,11 @@ impl Solver {
             lbfgs_direct.is_none() && !lbfgs_single && matches!(self.inner, Inner::Lbfgs(_));
         let on_set = lbfgs_single;
         if lbfgs_single {
-            let dir = match &self.inner {
+            let mut dir = match &self.inner {
                 Inner::Lbfgs(solver) => solver.search_direction(x.view(), grad.view())?,
                 _ => unreachable!(),
             };
+            dir = self.project_level_set_vec(&grad, &dir)?;
             match single_trial(
                 obj,
                 x,
@@ -3708,6 +3778,7 @@ impl Solver {
         }
         if let Some(mut dir) = lbfgs_direct {
             dir = self.project_vec(x, &dir);
+            dir = self.project_level_set_vec(&grad, &dir)?;
             let (npos, nval, ngrad, moved) = accept_step(
                 obj,
                 x,
@@ -3768,6 +3839,7 @@ impl Solver {
                 broken_translation: self.broken_translation,
                 broken_rotation: self.broken_rotation,
             };
+            let level_set_on = self.level_set.is_some();
             let mut hold = WsHold::take(&mut self.rigid_ws);
             if rigid.mode != RigidMode::Off
                 && let Some(xs) = x.as_slice()
@@ -3810,9 +3882,10 @@ impl Solver {
                         self.accept,
                         &mut self.e_hist,
                         &self.manifold,
+                        self.level_set,
                         self.istep,
                         line_options,
-                    );
+                    )?;
                     energy_stall = t.energy_noise;
                     *x = t.x;
                     value = t.f;
@@ -3874,9 +3947,10 @@ impl Solver {
                         self.accept,
                         &mut self.e_hist,
                         &self.manifold,
+                        self.level_set,
                         1.0,
                         line_options,
-                    );
+                    )?;
                     energy_stall = t.energy_noise;
                     *x = t.x;
                     value = t.f;
@@ -3946,9 +4020,10 @@ impl Solver {
                         self.accept,
                         &mut self.e_hist,
                         &self.manifold,
+                        self.level_set,
                         1.0,
                         line_options,
-                    );
+                    )?;
                     energy_stall = t.energy_noise;
                     let moved = t.moved;
                     *x = t.x;
@@ -3988,9 +4063,10 @@ impl Solver {
                         self.accept,
                         &mut self.e_hist,
                         &self.manifold,
+                        self.level_set,
                         self.istep,
                         line_options,
-                    );
+                    )?;
                     energy_stall = t.energy_noise;
                     if t.moved {
                         *x = t.x;
@@ -4021,10 +4097,19 @@ impl Solver {
                     // momentum metric, the force in the force metric.
                     let mut raw = grad.mapv(|g| -g);
                     rigid.force(&mut hold.ws, &mut raw);
+                    if level_set_on {
+                        raw = project_tangent(grad.view(), &raw)?;
+                    }
                     #[allow(unused_mut)]
                     let mut steepest = metric_vector(&self.precon, &raw)?;
                     rigid.force(&mut hold.ws, &mut steepest);
+                    if level_set_on {
+                        steepest = project_tangent(grad.view(), &steepest)?;
+                    }
                     rigid.velocity(&mut hold.ws, &mut state.vel);
+                    if level_set_on {
+                        state.vel = project_tangent(grad.view(), &state.vel)?;
+                    }
                     #[cfg(feature = "highs")]
                     if boxed {
                         crate::box_objective::project_tangent(obj.bounds(), x, &mut raw);
@@ -4201,7 +4286,10 @@ impl Solver {
                     }
                 }
                 Inner::Bb { prev_s, prev_y } => {
-                    let dir = bb_direction(prev_s.as_ref(), prev_y.as_ref(), &grad, self.istep);
+                    let mut dir = bb_direction(prev_s.as_ref(), prev_y.as_ref(), &grad, self.istep);
+                    if level_set_on {
+                        dir = project_tangent(grad.view(), &dir)?;
+                    }
                     let old = x.clone();
                     let gold = grad.clone();
                     let (npos, nval, ngrad, moved) = accept_step(
@@ -4287,7 +4375,14 @@ impl Solver {
             value = ev.0;
             grad = ev.1;
         }
+        self.retract_level_set_here(obj, x, &mut value, &mut grad)?;
+        let level_grad = grad.clone();
         grad = self.horizontal_grad(x, &grad);
+        if self.level_set.is_some()
+            && let Inner::Fire(state) = &mut self.inner
+        {
+            state.vel = project_tangent(level_grad.view(), &state.vel)?;
+        }
         if let Some((old_x, old_g)) = sr_secant
             && x.iter().zip(old_x.iter()).any(|(a, b)| a != b)
         {
@@ -4303,7 +4398,8 @@ impl Solver {
         let pair = if matches!(self.inner, Inner::Lbfgs(_))
             && x.iter().zip(start.iter()).any(|(a, b)| a != b)
         {
-            let (s, y) = self.lbfgs_sy(&start, x, &gold, &grad);
+            let (mut s, mut y) = self.lbfgs_sy(&start, x, &gold, &grad);
+            self.project_level_set_pair(&level_grad, &mut s, &mut y)?;
             Some((s, y, l2(&grad)))
         } else {
             None
@@ -4311,7 +4407,10 @@ impl Solver {
         if let (Inner::Lbfgs(solver), Some((s, y, gn))) = (&mut self.inner, pair) {
             // Only the final transported pair can enter the history. A
             // refused pair leaves every retained pair in place.
-            solver.push_pair(s, y, Some(gn));
+            let kept = solver.push_pair(s, y, Some(gn));
+            if !kept && self.level_set.is_some() && self.accept == Accept::Step {
+                solver.forget();
+            }
         }
 
         self.remember(x, value, &grad);
@@ -4857,6 +4956,26 @@ impl Solver {
         self.constraints.as_deref()
     }
 
+    /// Keep the objective on the level set `value(x) = target`.
+    ///
+    /// The step direction and FIRE velocity are projected onto the tangent
+    /// of that set, and each accepted point is retracted back to the level
+    /// set by Newton along the objective gradient.
+    pub fn set_level_set(&mut self, level_set: LevelSetConstraint) -> Result<()> {
+        self.level_set = Some(level_set.validate()?);
+        Ok(())
+    }
+
+    /// Drop the level-set constraint.
+    pub fn clear_level_set(&mut self) {
+        self.level_set = None;
+    }
+
+    /// Active level-set constraint, if any.
+    pub fn level_set(&self) -> Option<LevelSetConstraint> {
+        self.level_set
+    }
+
     /// Open the first raw-gradient step at `min(istep, 1 / |g|)`. The C API
     /// sets this when the caller leaves `istep` at zero.
     #[cfg(feature = "capi")]
@@ -5297,9 +5416,10 @@ impl Solver {
                     self.accept,
                     &mut self.e_hist,
                     &self.manifold,
+                    self.level_set,
                     direct,
                     line_options,
-                );
+                )?;
                 energy_stall = t.energy_noise;
                 let force_fell = l2(&t.g) < gnorm_now;
                 if tried_gdiis && !(t.moved && force_fell) {
@@ -5341,14 +5461,15 @@ fn take_session_step<O>(
     accept: Accept,
     e_hist: &mut VecDeque<f64>,
     manifold: &ManifoldKind,
+    level_set: Option<LevelSetConstraint>,
     direct_scale: f64,
     options: LineSearchOptions,
-) -> Taken
+) -> Result<Taken>
 where
     O: DifferentiableObjective<f64> + ?Sized,
 {
-    if accept != Accept::Step && manifold.is_flat() {
-        return take_step_with_options(
+    if accept != Accept::Step && manifold.is_flat() && level_set.is_none() {
+        return Ok(take_step_with_options(
             obj,
             pos,
             value,
@@ -5359,13 +5480,31 @@ where
             control,
             atom_maxmove,
             options,
-        );
+        ));
     }
-    let direction = if direct_scale == 1.0 {
+    if accept != Accept::Step && manifold.is_flat() {
+        let direction = project_tangent(grad.view(), &dir.to_owned())?;
+        return Ok(take_step_with_options(
+            obj,
+            pos,
+            value,
+            grad,
+            direction.view(),
+            istep,
+            linesearch,
+            control,
+            atom_maxmove,
+            options,
+        ));
+    }
+    let mut direction = if direct_scale == 1.0 {
         dir.to_owned()
     } else {
         &dir * direct_scale
     };
+    if level_set.is_some() {
+        direction = project_tangent(grad.view(), &direction)?;
+    }
     let (x, f, g, moved) = accept_step(
         obj,
         pos,
@@ -5380,14 +5519,14 @@ where
             manifold,
         },
     );
-    Taken {
+    Ok(Taken {
         x,
         f,
         g,
         alpha: if moved { direct_scale } else { 0.0 },
         moved,
         energy_noise: false,
-    }
+    })
 }
 
 impl Inner {

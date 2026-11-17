@@ -215,6 +215,8 @@ typedef rgmin_h0_fn xts_h0_fn;
 #define xts_constraints_constrain rgmin_constraints_constrain
 #define xts_solver_set_distance_constraints rgmin_solver_set_distance_constraints
 #define xts_solver_clear_distance_constraints rgmin_solver_clear_distance_constraints
+#define xts_solver_set_level_set rgmin_solver_set_level_set
+#define xts_solver_clear_level_set rgmin_solver_clear_level_set
 
 #define XTS_CONSTRAINT_NONE RGMIN_CONSTRAINT_NONE
 #define XTS_CONSTRAINT_MALFORMED RGMIN_CONSTRAINT_MALFORMED

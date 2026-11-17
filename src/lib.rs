@@ -65,6 +65,7 @@ mod lbfgs_plateau;
 /// L-BFGS quadratic model solved by HiGHS.
 #[cfg(feature = "highs")]
 pub mod lbfgs_qp;
+mod level_set;
 /// Sparse Lindh model Hessian (`H0^{-1}` apply). The session preconditioner
 /// is [`precon::Lindh`].
 pub mod lindh;
@@ -159,6 +160,7 @@ pub use lbfgs::{
 };
 #[cfg(feature = "highs")]
 pub use lbfgs_qp::HighsStep;
+pub use level_set::LevelSetConstraint;
 pub use lindh::{LindhSpec, apply_inverse};
 pub use linesearch::{LineSearch, LineSearchOptions, SearchStep, SuppliedSearch};
 pub use lowest_mode::{

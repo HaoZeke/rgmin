@@ -77,7 +77,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 46;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 47;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 5;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -2928,6 +2928,40 @@ pub unsafe extern "C" fn rgmin_solver_set_distance_constraints(
 pub unsafe extern "C" fn rgmin_solver_clear_distance_constraints(solver: *mut rgmin_solver_t) {
     if !solver.is_null() {
         unsafe { (*solver).solver.clear_distance_constraints() };
+    }
+}
+
+/// Keep points on the level set `value(x) = target`.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_level_set(
+    solver: *mut rgmin_solver_t,
+    target: f64,
+) -> rgmin_status_t {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_level_set: null solver");
+        return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+    }
+    match unsafe {
+        (*solver)
+            .solver
+            .set_level_set(crate::LevelSetConstraint::new(target))
+    } {
+        Ok(()) => rgmin_status_t::RGMIN_SUCCESS,
+        Err(err) => status_from_error(&err),
+    }
+}
+
+/// Drop the session's level-set constraint.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_clear_level_set(solver: *mut rgmin_solver_t) {
+    if !solver.is_null() {
+        unsafe { (*solver).solver.clear_level_set() };
     }
 }
 

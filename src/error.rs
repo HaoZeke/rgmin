@@ -262,6 +262,28 @@ pub enum Error {
         /// What was refused.
         what: &'static str,
     },
+    /// A level-set constraint \(g(x)=c\) was configured or applied with
+    /// invalid data.
+    #[error("level set: {what}")]
+    LevelSet {
+        /// What was refused.
+        what: &'static str,
+    },
+    /// Newton retraction to a level set stopped when the residual no
+    /// longer contracted relative to the derived tolerance.
+    #[error(
+        "level set: retraction stalled after {iterations} iterations (residual {residual}, previous {previous_residual}, tolerance {tolerance})"
+    )]
+    LevelSetStalled {
+        /// Newton steps completed.
+        iterations: usize,
+        /// Final residual `g(x) - c`.
+        residual: f64,
+        /// Previous absolute residual.
+        previous_residual: f64,
+        /// Derived convergence tolerance at that point.
+        tolerance: f64,
+    },
 }
 
 /// Result alias for this crate.

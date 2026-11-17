@@ -14,7 +14,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rgmin::{
     Accept, ApplyBlockPreconditioner, ApplyHessian, Control, Error, FireConfig, FireKind,
-    FirePreset, LbfgsH0, LbfgsPairs, LbfgsStep, LineSearch, ManifoldFactor, Method, Oracle,
+    FirePreset, LbfgsH0, LbfgsPairs, LbfgsStep, LevelSetConstraint, LineSearch, ManifoldFactor, Method, Oracle,
     RiemannianManifold, SearchStep, Solver, SpdMetric, StiefelRetraction, StopNorm, SuppliedSearch,
     lowest_eigenpairs as solve_lowest_eigenpairs, lowest_eigenpairs_precond,
 };
@@ -103,6 +103,7 @@ impl Session {
         abc=false,
         accept=None,
         istep=None,
+        level_set=None,
     ))]
     fn new(
         kind: &str,
@@ -125,6 +126,7 @@ impl Session {
         abc: bool,
         accept: Option<&str>,
         istep: Option<f64>,
+        level_set: Option<f64>,
     ) -> PyResult<Self> {
         if n == 0 {
             return Err(PyValueError::new_err("dimension must be positive"));
@@ -217,6 +219,11 @@ impl Session {
         if let Some(cap) = maxmove.filter(|cap| cap.is_finite() && *cap > 0.0) {
             solver.set_maxmove(cap);
         }
+        if let Some(target) = level_set {
+            solver
+                .set_level_set(LevelSetConstraint::new(target))
+                .map_err(value_error)?;
+        }
         Ok(Self { solver })
     }
 
@@ -244,6 +251,21 @@ impl Session {
     /// Drop the method memory. The next step is a cold start.
     fn forget(&mut self) {
         self.solver.forget();
+    }
+
+    /// Keep points on the level set `value(x) = target`. `None` clears it.
+    #[pyo3(signature = (target=None))]
+    fn set_level_set(&mut self, target: Option<f64>) -> PyResult<()> {
+        match target {
+            Some(target) => self
+                .solver
+                .set_level_set(LevelSetConstraint::new(target))
+                .map_err(value_error),
+            None => {
+                self.solver.clear_level_set();
+                Ok(())
+            }
+        }
     }
 
     /// One outer iteration.
