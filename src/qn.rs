@@ -3,12 +3,13 @@
 use eindir_core::{DifferentiableObjective, Objective};
 use ndarray::{Array1, Array2};
 
-use crate::control::{Control, StopNorm};
+use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
-use crate::report::{Report, Status};
+use crate::report::Report;
 use crate::step::{
-    implicit_atom_cap, l2, next_istep, qn_istep, scale_step, scale_step_atom, take_step,
+    energy_noise_report, implicit_atom_cap, l2, next_istep, one_shot_report, qn_istep, scale_step,
+    scale_step_atom, take_step,
 };
 use crate::trust::{
     accept_ratio, cauchy_point, dogleg_direction, predicted_reduction, reduction_ratio,
@@ -68,7 +69,7 @@ where
             None,
         );
         if t.energy_noise {
-            return Ok(noise_stopped(value, pos, step + 1, gnorm));
+            return Ok(energy_noise_report(value, pos, step + 1, gnorm));
         }
         let moved = t.moved;
         pos = t.x;
@@ -264,7 +265,7 @@ where
             implicit_atom_cap(control),
         );
         if t.energy_noise {
-            return Ok(noise_stopped(value, pos, step + 1, gnorm));
+            return Ok(energy_noise_report(value, pos, step + 1, gnorm));
         }
         let lsstep = t.alpha;
         pos = t.x;
@@ -306,27 +307,13 @@ fn done(
     control: &Control,
     exhausted: bool,
 ) -> Report {
-    Report {
+    one_shot_report(
         value,
         coords,
         steps,
         grad_norm,
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: control.finish_status(grad_norm, n_free, exhausted),
-    }
-}
-
-fn noise_stopped(value: f64, coords: Array1<f64>, steps: usize, grad_norm: f64) -> Report {
-    Report {
-        value,
-        coords,
-        steps,
-        grad_norm,
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: Status::NoiseFloor,
-    }
+        control.finish_status(grad_norm, n_free, exhausted),
+    )
 }
 
 /// Nocedal-Wright 6.20: `s·y / y·y`, the inverse-Hessian scale of a

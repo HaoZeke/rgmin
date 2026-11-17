@@ -4,7 +4,7 @@ use eindir_core::{DifferentiableObjective, Objective};
 use ndarray::Array1;
 
 use crate::adam::minimize_adam;
-use crate::control::{Control, StopNorm};
+use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::hvp::HessianVector;
 use crate::linesearch::LineSearch;
@@ -15,7 +15,7 @@ use crate::pso::minimize_pso;
 use crate::qn::{minimize_bfgs, minimize_lbfgs, minimize_sd, minimize_sr1, minimize_sr2};
 use crate::report::{Report, Status};
 use crate::session::Solver;
-use crate::step::{implicit_atom_cap, l2, next_istep, take_step};
+use crate::step::{implicit_atom_cap, l2, next_istep, one_shot_report, take_step};
 
 /// Minimize `obj` from `init` with the chosen conjugacy, restart, and line search.
 pub fn minimize<O>(
@@ -229,15 +229,7 @@ where
     for step in 0..control.maxiter {
         let gnorm = l2(&grad);
         if let Some(status) = control.halt(gnorm, grad.len()) {
-            return Ok(Report {
-                value,
-                coords: pos,
-                steps: step,
-                grad_norm: gnorm,
-                stop_norm: StopNorm::Two,
-                grad: None,
-                status,
-            });
+            return Ok(one_shot_report(value, pos, step, gnorm, status));
         }
         let t = take_step(
             obj,
@@ -251,15 +243,13 @@ where
             implicit_atom_cap(control),
         );
         if t.energy_noise {
-            return Ok(Report {
+            return Ok(one_shot_report(
                 value,
-                coords: pos,
-                steps: step + 1,
-                grad_norm: gnorm,
-                stop_norm: StopNorm::Two,
-                grad: None,
-                status: Status::NoiseFloor,
-            });
+                pos,
+                step + 1,
+                gnorm,
+                Status::NoiseFloor,
+            ));
         }
         let lsstep = t.alpha;
         pos = t.x;
@@ -280,13 +270,11 @@ where
         istep = next_istep(lsstep, control);
     }
     let gnorm = l2(&grad);
-    Ok(Report {
+    Ok(one_shot_report(
         value,
-        coords: pos,
-        steps: control.maxiter,
-        grad_norm: gnorm,
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: control.finish_status(gnorm, grad.len(), true),
-    })
+        pos,
+        control.maxiter,
+        gnorm,
+        control.finish_status(gnorm, grad.len(), true),
+    ))
 }

@@ -18,13 +18,13 @@ use eindir_core::DifferentiableObjective;
 use ndarray::{Array1, Array2, ArrayView1, Zip};
 
 use crate::accept::retract_within_cap;
-use crate::control::{Control, StopNorm};
+use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::manifold::ManifoldKind;
 use crate::report::Report;
 use crate::rigid::project_out_rot_trans;
 use crate::scg::DirectionalCurvature;
-use crate::step::{scale_step, scale_step_atom};
+use crate::step::{one_shot_report, scale_step, scale_step_atom};
 use crate::trust::{reduction_ratio, update_radius};
 use crate::vecops::{axpy, dot, nrm2};
 
@@ -913,15 +913,7 @@ where
             return Err(Error::TrustCollapsed { steps: step });
         }
         if let Some(status) = control.halt(gnorm, grad.len()) {
-            return Ok(Report {
-                value,
-                coords: pos,
-                steps: step,
-                grad_norm: gnorm,
-                stop_norm: StopNorm::Two,
-                grad: None,
-                status,
-            });
+            return Ok(one_shot_report(value, pos, step, gnorm, status));
         }
         // Inexact-Newton forcing keeps early CG cheap and the tail
         // superlinear (Nocedal-Wright eq 7.3). The shared step also
@@ -956,15 +948,13 @@ where
         }
     }
     let gnorm = nrm2(grad.view());
-    Ok(Report {
+    Ok(one_shot_report(
         value,
-        coords: pos,
-        steps: control.maxiter,
-        grad_norm: gnorm,
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: control.finish_status(gnorm, grad.len(), true),
-    })
+        pos,
+        control.maxiter,
+        gnorm,
+        control.finish_status(gnorm, grad.len(), true),
+    ))
 }
 
 #[cfg(test)]

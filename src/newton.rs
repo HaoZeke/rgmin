@@ -15,10 +15,10 @@
 use eindir_core::DifferentiableObjective;
 use ndarray::{Array1, Array2, ArrayView1};
 
-use crate::control::{Control, StopNorm};
+use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::report::Report;
-use crate::step::{implicit_atom_cap, l2, scale_step, scale_step_atom};
+use crate::step::{implicit_atom_cap, l2, one_shot_report, scale_step, scale_step_atom};
 
 const ENERGY_RISE: f64 = 1.0e-8;
 const EIG_FLOOR: f64 = 1.0e-8;
@@ -147,15 +147,7 @@ where
     for step in 0..control.maxiter {
         let gnorm = l2(&grad);
         if let Some(status) = control.halt(gnorm, grad.len()) {
-            return Ok(Report {
-                value,
-                coords: pos,
-                steps: step,
-                grad_norm: gnorm,
-                stop_norm: StopNorm::Two,
-                grad: None,
-                status,
-            });
+            return Ok(one_shot_report(value, pos, step, gnorm, status));
         }
         let hess = obj.hessian(pos.view());
         let dir = match kind {
@@ -177,15 +169,13 @@ where
             grad = ngrad;
         }
     }
-    Ok(Report {
+    Ok(one_shot_report(
         value,
-        coords: pos,
-        steps: control.maxiter,
-        grad_norm: l2(&grad),
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: control.finish_status(l2(&grad), grad.len(), true),
-    })
+        pos,
+        control.maxiter,
+        l2(&grad),
+        control.finish_status(l2(&grad), grad.len(), true),
+    ))
 }
 
 pub(crate) fn energy_backtrack<O>(

@@ -31,14 +31,14 @@
 
 use ndarray::{Array1, ArrayView1};
 
-use crate::control::{Control, StopNorm};
+use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::linesearch::{LineSearch, LineSearchOptions};
 use crate::qn::solve_spd;
 use crate::report::Report;
 use crate::step::{
-    cap_displacement_atom, finite, l2, max_atom_displacement, max_atom_norm, qn_istep,
-    scale_displacement_to_atom_cap, take_step_with_options,
+    cap_displacement_atom, finite, l2, max_atom_displacement, max_atom_norm, one_shot_report,
+    qn_istep, scale_displacement_to_atom_cap, take_step_with_options,
 };
 use eindir_core::{DifferentiableObjective, Objective};
 
@@ -2447,15 +2447,7 @@ impl Lbfgs {
         for step in 0..control.maxiter {
             let gnorm = l2(&grad);
             if let Some(status) = control.halt(gnorm, grad.len()) {
-                return Ok(Report {
-                    value,
-                    coords: pos,
-                    steps: step,
-                    grad_norm: gnorm,
-                    stop_norm: StopNorm::Two,
-                    grad: None,
-                    status,
-                });
+                return Ok(one_shot_report(value, pos, step, gnorm, status));
             }
             let stall = self.step_objective(
                 obj,
@@ -2468,27 +2460,23 @@ impl Lbfgs {
                 crate::step::implicit_atom_cap(control),
             );
             if stall {
-                return Ok(Report {
+                return Ok(one_shot_report(
                     value,
-                    coords: pos,
-                    steps: step + 1,
-                    grad_norm: gnorm,
-                    stop_norm: StopNorm::Two,
-                    grad: None,
-                    status: crate::report::Status::NoiseFloor,
-                });
+                    pos,
+                    step + 1,
+                    gnorm,
+                    crate::report::Status::NoiseFloor,
+                ));
             }
         }
         let gnorm = l2(&grad);
-        Ok(Report {
+        Ok(one_shot_report(
             value,
-            coords: pos,
-            steps: control.maxiter,
-            grad_norm: gnorm,
-            stop_norm: StopNorm::Two,
-            grad: None,
-            status: control.finish_status(gnorm, grad.len(), true),
-        })
+            pos,
+            control.maxiter,
+            gnorm,
+            control.finish_status(gnorm, grad.len(), true),
+        ))
     }
 
     /// One outer L-BFGS iteration: two-loop direction, line search, pair.

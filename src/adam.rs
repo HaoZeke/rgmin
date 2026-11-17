@@ -3,11 +3,13 @@
 use eindir_core::{DifferentiableObjective, Objective};
 use ndarray::Array1;
 
-use crate::control::{Control, StopNorm};
+use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
 use crate::report::Report;
-use crate::step::{energy_noise_report, implicit_atom_cap, l2, max_atom_norm, take_step};
+use crate::step::{
+    energy_noise_report, implicit_atom_cap, l2, max_atom_norm, one_shot_report, take_step,
+};
 
 /// Adam plus a line search along the Kingma-Ba preconditioned step.
 ///
@@ -54,15 +56,7 @@ where
     for step in 0..control.maxiter {
         let gnorm = l2(&grad);
         if let Some(status) = control.halt(gnorm, grad.len()) {
-            return Ok(Report {
-                value,
-                coords: pos,
-                steps: step,
-                grad_norm: gnorm,
-                stop_norm: StopNorm::Two,
-                grad: None,
-                status,
-            });
+            return Ok(one_shot_report(value, pos, step, gnorm, status));
         }
         let m_old = m.clone();
         let v_old = v.clone();
@@ -96,15 +90,13 @@ where
             v = v_old;
         }
     }
-    Ok(Report {
+    Ok(one_shot_report(
         value,
-        coords: pos,
-        steps: control.maxiter,
-        grad_norm: l2(&grad),
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: control.finish_status(l2(&grad), grad.len(), true),
-    })
+        pos,
+        control.maxiter,
+        l2(&grad),
+        control.finish_status(l2(&grad), grad.len(), true),
+    ))
 }
 
 /// Kingma-Ba moment update and bias-corrected direction (Algorithm 1).
@@ -148,6 +140,7 @@ pub(crate) fn scale_to_unit_atom(dir: &Array1<f64>) -> Array1<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::StopNorm;
     use crate::linesearch::LineSearch;
     use crate::oracle::Oracle;
     use ndarray::{ArrayView1, array};

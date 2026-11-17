@@ -12,10 +12,11 @@
 use eindir_core::{DifferentiableObjective, Objective};
 use ndarray::Array1;
 
-use crate::control::{Control, StopNorm};
+use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::nlcg::{Conjugacy, ConjugacyContext, Restart};
 use crate::report::Report;
+use crate::step::one_shot_report;
 use crate::vecops::dot_ordered;
 use ndarray::ArrayView1;
 
@@ -322,15 +323,7 @@ where
     while control.maxiter == 0 || step < control.maxiter {
         let gnorm = l2_ordered(&grad);
         if let Some(status) = control.halt(gnorm, grad.len()) {
-            return Ok(Report {
-                value: f_old,
-                coords: w,
-                steps: step,
-                grad_norm: gnorm,
-                stop_norm: StopNorm::Two,
-                grad: None,
-                status,
-            });
+            return Ok(one_shot_report(f_old, w, step, gnorm, status));
         }
 
         if success {
@@ -344,15 +337,13 @@ where
             kappa = crate::vecops::dot_ordered(dir.view(), dir.view());
             if kappa < f64::EPSILON {
                 if crate::vecops::dot_ordered(grad.view(), grad.view()) < f64::EPSILON {
-                    return Ok(Report {
-                        value: f_old,
-                        coords: w,
-                        steps: step,
-                        grad_norm: gnorm,
-                        stop_norm: StopNorm::Two,
-                        grad: None,
-                        status: scg_stop(control, gnorm, grad.len()),
-                    });
+                    return Ok(one_shot_report(
+                        f_old,
+                        w,
+                        step,
+                        gnorm,
+                        scg_stop(control, gnorm, grad.len()),
+                    ));
                 }
                 // Conjugacy can cancel the direction while the gradient
                 // remains nonstationary. Price a steepest-descent step.
@@ -440,15 +431,13 @@ where
             w = trial;
             if solution_converged && objective_converged {
                 let grad_norm = l2_ordered(&grad_new);
-                return Ok(Report {
-                    value: f_new,
-                    coords: w,
-                    steps: step + 1,
+                return Ok(one_shot_report(
+                    f_new,
+                    w,
+                    step + 1,
                     grad_norm,
-                    stop_norm: StopNorm::Two,
-                    grad: None,
-                    status: scg_stop(control, grad_norm, grad.len()),
-                });
+                    scg_stop(control, grad_norm, grad.len()),
+                ));
             }
             // With no iteration budget a plateau otherwise ends only on the
             // damping limit, as a gradient error, and never when
@@ -467,15 +456,13 @@ where
                 if grad_norm + flat_grad * f64::EPSILON.sqrt() >= flat_grad {
                     flat_steps += 1;
                     if flat_steps >= nparams.max(2) {
-                        return Ok(Report {
-                            value: f_new,
-                            coords: w,
-                            steps: step + 1,
+                        return Ok(one_shot_report(
+                            f_new,
+                            w,
+                            step + 1,
                             grad_norm,
-                            stop_norm: StopNorm::Two,
-                            grad: None,
-                            status: scg_stop(control, grad_norm, grad_new.len()),
-                        });
+                            scg_stop(control, grad_norm, grad_new.len()),
+                        ));
                     }
                 } else {
                     flat_steps = 0;
@@ -487,15 +474,13 @@ where
             grad_old = std::mem::replace(&mut grad, grad_new);
             if crate::vecops::dot_ordered(grad.view(), grad.view()) < f64::EPSILON {
                 let grad_norm = l2_ordered(&grad);
-                return Ok(Report {
-                    value: f_old,
-                    coords: w,
-                    steps: step + 1,
+                return Ok(one_shot_report(
+                    f_old,
+                    w,
+                    step + 1,
                     grad_norm,
-                    stop_norm: StopNorm::Two,
-                    grad: None,
-                    status: scg_stop(control, grad_norm, grad.len()),
-                });
+                    scg_stop(control, grad_norm, grad.len()),
+                ));
             }
         }
 
@@ -531,15 +516,13 @@ where
     }
 
     let grad_norm = l2_ordered(&grad);
-    Ok(Report {
-        value: f_old,
+    Ok(one_shot_report(
+        f_old,
+        w,
+        control.maxiter,
         grad_norm,
-        stop_norm: StopNorm::Two,
-        coords: w,
-        steps: control.maxiter,
-        grad: None,
-        status: control.finish_status(grad_norm, grad.len(), true),
-    })
+        control.finish_status(grad_norm, grad.len(), true),
+    ))
 }
 
 /// SCG's step and objective tests are [`crate::Status::StepTolerance`]

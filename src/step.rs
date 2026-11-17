@@ -306,11 +306,13 @@ pub(crate) struct Taken {
     pub energy_noise: bool,
 }
 
-pub(crate) fn energy_noise_report(
+/// The report of a driver that runs no session: `||g||_2`, no gradient.
+pub(crate) fn one_shot_report(
     value: f64,
     coords: Array1<f64>,
     steps: usize,
     grad_norm: f64,
+    status: crate::report::Status,
 ) -> Report {
     Report {
         value,
@@ -319,8 +321,23 @@ pub(crate) fn energy_noise_report(
         grad_norm,
         stop_norm: StopNorm::Two,
         grad: None,
-        status: crate::report::Status::NoiseFloor,
+        status,
     }
+}
+
+pub(crate) fn energy_noise_report(
+    value: f64,
+    coords: Array1<f64>,
+    steps: usize,
+    grad_norm: f64,
+) -> Report {
+    one_shot_report(
+        value,
+        coords,
+        steps,
+        grad_norm,
+        crate::report::Status::NoiseFloor,
+    )
 }
 
 /// Line search from the known `(value, grad)` at `pos`, inside the cap,

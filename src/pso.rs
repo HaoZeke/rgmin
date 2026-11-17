@@ -6,10 +6,10 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
-use crate::control::{Control, StopNorm};
+use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::report::Report;
-use crate::step::l2;
+use crate::step::{l2, one_shot_report};
 
 /// Swarm RNG seed. Tests and the public API share this value.
 pub(crate) const RNG_SEED: u64 = 1;
@@ -111,15 +111,13 @@ where
 
     let (value, grad) = obj.value_and_gradient(gbest_position.view());
     let grad_norm = l2(&grad);
-    Ok(Report {
+    Ok(one_shot_report(
         value,
-        coords: gbest_position,
-        steps: iteration,
+        gbest_position,
+        iteration,
         grad_norm,
-        stop_norm: StopNorm::Two,
-        grad: None,
-        status: control.finish_status(grad_norm, grad.len(), true),
-    })
+        control.finish_status(grad_norm, grad.len(), true),
+    ))
 }
 
 pub(crate) fn update_swarm<O>(
