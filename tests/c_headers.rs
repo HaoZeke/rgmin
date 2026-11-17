@@ -2,10 +2,9 @@
 
 #![cfg(feature = "capi")]
 
-use std::env;
+mod consumer;
+
 use std::mem::{offset_of, size_of, size_of_val};
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::ptr::null;
 
 use rgmin::ffi::{
@@ -15,101 +14,20 @@ use rgmin::ffi::{
 };
 use rgmin::{Control, EigenParams, ExpParams, NoiseFloor, ScgOptions, ScgParams, ScgStepTolerance};
 
-fn library_dir(root: &Path) -> PathBuf {
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("target"))
-        .join(profile)
-}
-
-/// `bin`, behind the whitespace-separated `RGMIN_C_TEST_RUNNER` when that
-/// is set, such as `valgrind --error-exitcode=99`.
-fn consumer(bin: &Path) -> Command {
-    let runner = env::var("RGMIN_C_TEST_RUNNER").unwrap_or_default();
-    let mut words = runner.split_whitespace();
-    let Some(program) = words.next() else {
-        return Command::new(bin);
-    };
-    let mut command = Command::new(program);
-    command.args(words).arg(bin);
-    command
-}
-
-fn compile_and_run(source: &str, bin_name: &str, args: &[String]) {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let lib = library_dir(&root);
-    let so = lib.join("librgmin.so");
-    let archive = lib.join("librgmin.a");
-    assert!(
-        so.is_file() || archive.is_file(),
-        "missing library under {}",
-        lib.display()
-    );
-    let output = env::var_os("CARGO_TARGET_TMPDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir)
-        .join(bin_name);
-    let mut command = Command::new("cc");
-    command
-        .arg("-std=c11")
-        .arg(root.join(source))
-        .arg("-I")
-        .arg(root.join("include"))
-        .arg("-o")
-        .arg(&output)
-        .env_remove("CPATH")
-        .env_remove("C_INCLUDE_PATH");
-    if so.is_file() {
-        command
-            .arg("-L")
-            .arg(&lib)
-            .arg("-lrgmin")
-            .arg(format!("-Wl,-rpath,{}", lib.display()));
-    } else {
-        command
-            .arg(&archive)
-            .arg("-lpthread")
-            .arg("-ldl")
-            .arg("-lm");
-    }
-    let compiled = command.output().expect("spawn C compiler");
-    assert!(
-        compiled.status.success(),
-        "C compiler failed:\n{}",
-        String::from_utf8_lossy(&compiled.stderr)
-    );
-    let ran = consumer(&output)
-        .args(args)
-        .output()
-        .expect("run public C consumer");
-    assert!(
-        ran.status.success(),
-        "C consumer exit {}:\n{}\n{}",
-        ran.status,
-        String::from_utf8_lossy(&ran.stdout),
-        String::from_utf8_lossy(&ran.stderr)
-    );
-}
-
 #[test]
 fn public_c_header_compiles_and_checks_the_abi() {
-    compile_and_run("tests/ffi_smoke.c", "rgmin_public_c_header", &[]);
+    consumer::compile_and_run("tests/ffi_smoke.c", "rgmin_public_c_header", &[]);
 }
 
 #[test]
 fn c_header_reads_the_noise_floor_stop() {
-    compile_and_run("tests/c_noise_floor.c", "rgmin_c_noise_floor", &[]);
+    consumer::compile_and_run("tests/c_noise_floor.c", "rgmin_c_noise_floor", &[]);
 }
 
 #[cfg(feature = "highs")]
 #[test]
 fn c_header_routes_and_clears_the_highs_callback() {
-    compile_and_run("tests/c_highs_callback.c", "rgmin_c_highs_callback", &[]);
+    consumer::compile_and_run("tests/c_highs_callback.c", "rgmin_c_highs_callback", &[]);
 }
 
 /// Bit patterns of a field's elements, as the C side reads them.
@@ -262,5 +180,5 @@ fn c_initializers_hold_the_rust_defaults() {
         dihedrals: 0,
         geometry_kind: 0,
     }));
-    compile_and_run("tests/c_defaults.c", "rgmin_c_defaults", &args);
+    consumer::compile_and_run("tests/c_defaults.c", "rgmin_c_defaults", &args);
 }
