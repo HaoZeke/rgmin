@@ -11,12 +11,16 @@ requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Rohit Goswami", email = "rgoswami@ieee.org" }]
+keywords = ["optimization", "geometry-optimization", "lbfgs", "fire", "ase", "free-threading"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
-  "Operating System :: OS Independent",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: C++",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -25,15 +29,21 @@ classifiers = [
   "Programming Language :: Python :: 3.15",
   "Programming Language :: Python :: Free Threading",
   "Programming Language :: Python :: Free Threading :: 3 - Stable",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Rust",
   "Topic :: Scientific/Engineering :: Chemistry",
+  "Topic :: Scientific/Engineering :: Mathematics",
   "Topic :: Scientific/Engineering :: Physics",
+  "Typing :: Typed",
 ]
 dependencies = ["numpy>=1.24"]
 
 [project.urls]
 Homepage = "https://github.com/OmniPotentRPC/rgmin"
+Documentation = "https://omnipotentrpc.github.io/rgmin/"
 Repository = "https://github.com/OmniPotentRPC/rgmin"
 Issues = "https://github.com/OmniPotentRPC/rgmin/issues"
+Changelog = "https://github.com/OmniPotentRPC/rgmin/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 ase = ["ase>=3.23"]
