@@ -372,10 +372,6 @@ fn as_f64_vec(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     Err(PyValueError::new_err("expected a sequence of floats"))
 }
 
-fn direction_error(err: Error) -> PyErr {
-    PyValueError::new_err(err.to_string())
-}
-
 #[pymethods]
 impl LbfgsPairsPy {
     /// `capacity` 0 keeps ten pairs.
@@ -384,7 +380,7 @@ impl LbfgsPairsPy {
     fn new(n: usize, capacity: usize) -> PyResult<Self> {
         LbfgsPairs::new(n, capacity)
             .map(|pairs| Self { pairs })
-            .map_err(direction_error)
+            .map_err(value_error)
     }
 
     fn __len__(&self) -> usize {
@@ -407,7 +403,7 @@ impl LbfgsPairsPy {
             Some(rho) => self.pairs.push_rho(s, y, rho),
             None => self.pairs.push(s, y),
         }
-        .map_err(direction_error)
+        .map_err(value_error)
     }
 
     fn clear(&mut self) {
@@ -462,7 +458,7 @@ impl LbfgsPairsPy {
             let diag = Array1::from_vec(as_f64_vec(&h0)?);
             self.pairs.direction(g, LbfgsH0::Diagonal(diag.view()))
         };
-        computed.map(|d| d.to_vec()).map_err(direction_error)
+        computed.map(|d| d.to_vec()).map_err(value_error)
     }
 }
 
@@ -661,10 +657,6 @@ struct ManifoldPy {
     inner: RiemannianManifold,
 }
 
-fn manifold_error(err: Error) -> PyErr {
-    PyValueError::new_err(err.to_string())
-}
-
 impl ManifoldPy {
     fn unary(
         &self,
@@ -673,7 +665,7 @@ impl ManifoldPy {
         op: impl Fn(&RiemannianManifold, &[f64], &[f64], &mut [f64]) -> rgmin::Result<()>,
     ) -> PyResult<Vec<f64>> {
         let mut out = vec![0.0; self.inner.packed_len()];
-        op(&self.inner, a, b, &mut out).map_err(manifold_error)?;
+        op(&self.inner, a, b, &mut out).map_err(value_error)?;
         Ok(out)
     }
 }
@@ -695,7 +687,7 @@ impl ManifoldPy {
         };
         RiemannianManifold::stiefel(n, p, retraction)
             .map(|inner| Self { inner })
-            .map_err(manifold_error)
+            .map_err(value_error)
     }
 
     /// SPD(p). `metric` is `affine_invariant` or `log_euclidean`.
@@ -713,7 +705,7 @@ impl ManifoldPy {
         };
         RiemannianManifold::spd(p, metric)
             .map(|inner| Self { inner })
-            .map_err(manifold_error)
+            .map_err(value_error)
     }
 
     /// Product of the factors in order.
@@ -721,7 +713,7 @@ impl ManifoldPy {
     fn product(factors: Vec<PyRef<'_, Self>>) -> PyResult<Self> {
         RiemannianManifold::product(factors.iter().map(|f| f.inner.clone()))
             .map(|inner| Self { inner })
-            .map_err(manifold_error)
+            .map_err(value_error)
     }
 
     fn __len__(&self) -> usize {
@@ -768,12 +760,12 @@ impl ManifoldPy {
         let mut out = vec![0.0; self.inner.packed_len()];
         self.inner
             .transport(&x_from, &x_to, &v, &mut out)
-            .map_err(manifold_error)?;
+            .map_err(value_error)?;
         Ok(out)
     }
 
     fn inner(&self, x: Vec<f64>, u: Vec<f64>, v: Vec<f64>) -> PyResult<f64> {
-        self.inner.inner(&x, &u, &v).map_err(manifold_error)
+        self.inner.inner(&x, &u, &v).map_err(value_error)
     }
 
     /// `(rgrad, x_next)` for one step of size `t`.
@@ -787,7 +779,7 @@ impl ManifoldPy {
         let (mut rgrad, mut next) = (vec![0.0; len], vec![0.0; len]);
         self.inner
             .gradient_step(&x, &egrad, t, &mut rgrad, &mut next)
-            .map_err(manifold_error)?;
+            .map_err(value_error)?;
         Ok((rgrad, next))
     }
 }
