@@ -1,0 +1,230 @@
+name: PyPI
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sdist:
+    name: sdist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Build and check the sdist
+        run: |
+          set -euo pipefail
+          python -m pip install build==1.6.1 twine==7.0.0
+          python -m build --sdist --outdir dist
+          python -m twine check --strict dist/*
+
+      # The version comes from Cargo.toml through pyproject.toml. A v* tag
+      # that names another version fails here, before any wheel is built.
+      - name: Package version
+        id: version
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          sdists=(dist/*.tar.gz)
+          if [ "${#sdists[@]}" -ne 1 ]; then
+            echo "::error::expected one sdist in dist/, found ${#sdists[@]}"
+            exit 1
+          fi
+          base=$(basename "${sdists[0]}" .tar.gz)
+          version=$(tar -xzOf "${sdists[0]}" "${base}/PKG-INFO" | sed -n '1,/^$/s/^Version: //p')
+          if [ -z "${version}" ]; then
+            echo "::error::${sdists[0]} has no Version in PKG-INFO"
+            exit 1
+          fi
+          case "${GITHUB_REF}" in
+            refs/tags/v*)
+              if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+                echo "::error::tag ${GITHUB_REF_NAME} does not name rgmin ${version}"
+                exit 1
+              fi
+              ;;
+          esac
+          echo "rgmin ${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pypi-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # pip on a platform without a wheel builds this sdist, so it has to
+  # build and pass the tests from its own files.
+  sdist-wheel:
+    name: wheel from the sdist
+    needs: sdist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pypi-sdist
+          path: dist
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Build a wheel from the sdist and test it in a fresh venv
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          sdists=(dist/*.tar.gz)
+          if [ "${#sdists[@]}" -ne 1 ]; then
+            echo "::error::expected one sdist in dist/, found ${#sdists[@]}"
+            exit 1
+          fi
+          sdist="${PWD}/${sdists[0]}"
+          scratch=$(mktemp -d "${RUNNER_TEMP}/sdist-wheel.XXXXXX")
+          python -m pip wheel --no-deps --wheel-dir "${scratch}/wheelhouse" "${sdist}"
+          wheels=("${scratch}"/wheelhouse/rgmin-*.whl)
+          if [ "${#wheels[@]}" -ne 1 ]; then
+            echo "::error::expected one wheel from the sdist, found ${#wheels[@]}"
+            exit 1
+          fi
+          python -m venv "${scratch}/venv"
+          "${scratch}/venv/bin/python" -m pip install "${wheels[0]}[test]"
+          tar -xzf "${sdist}" -C "${scratch}"
+          cd "${scratch}/$(basename "${sdist}" .tar.gz)"
+          "${scratch}/venv/bin/python" -m pytest -q tests/python --timeout=180 -o faulthandler_timeout=120
+
+  wheels:
+    name: wheels (${{ matrix.name }})
+    needs: sdist
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: manylinux x86_64
+            os: ubuntu-24.04
+            arch: x86_64
+          - name: manylinux aarch64
+            os: ubuntu-24.04-arm
+            arch: aarch64
+          - name: macOS arm64
+            os: macos-15
+            arch: arm64
+          - name: macOS x86_64
+            os: macos-15-intel
+            arch: x86_64
+          - name: Windows x86_64
+            os: windows-2022
+            arch: AMD64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # [tool.cibuildwheel] in pyproject.toml selects the interpreters and
+      # the test command, and cibuildwheel runs that command against each
+      # wheel it builds. Its macOS table lists arm64 only, so CIBW_ARCHS
+      # sets the architecture of every row, each on a native runner.
+      - name: Build and test the wheels
+        uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
+        with:
+          output-dir: wheelhouse
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_TEST_EXTRAS: test
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Check the wheels
+        run: |
+          set -euo pipefail
+          python -m pip install abi3audit==0.0.26 twine==7.0.0
+          shopt -s nullglob
+          abi3=(wheelhouse/*-abi3-*.whl)
+          if [ "${#abi3[@]}" -ne 1 ]; then
+            echo "::error::expected one abi3 wheel, found ${#abi3[@]}"
+            exit 1
+          fi
+          python -m abi3audit --strict "${abi3[@]}"
+          python -m twine check --strict wheelhouse/*.whl
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pypi-wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  # The trusted publisher on PyPI names this file and the pypi
+  # environment; renaming either stops the upload. A run on a branch
+  # stops after the tests.
+  publish:
+    name: upload to PyPI
+    needs: [sdist, sdist-wheel, wheels]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: pypi
+      url: https://pypi.org/project/rgmin/${{ needs.sdist.outputs.version }}/
+    permissions:
+      id-token: write # PyPI exchanges this OIDC token for a short-lived upload token.
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: pypi-*
+          merge-multiple: true
+          path: dist
+
+      - name: Check that the tag names the package version
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          sdists=(dist/*.tar.gz)
+          wheels=(dist/*.whl)
+          if [ "${#sdists[@]}" -ne 1 ] || [ "${#wheels[@]}" -eq 0 ]; then
+            ls -l dist
+            echo "::error::expected one sdist and its wheels in dist/"
+            exit 1
+          fi
+          base=$(basename "${sdists[0]}" .tar.gz)
+          version=$(tar -xzOf "${sdists[0]}" "${base}/PKG-INFO" | sed -n '1,/^$/s/^Version: //p')
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not name rgmin ${version}"
+            exit 1
+          fi
+          for dist in dist/*; do
+            case "$(basename "${dist}")" in
+              "rgmin-${version}.tar.gz" | "rgmin-${version}-"*.whl) ;;
+              *)
+                echo "::error::${dist} is not an rgmin ${version} distribution"
+                exit 1
+                ;;
+            esac
+          done
+          echo "rgmin ${version}: ${sdists[0]} and ${#wheels[@]} wheels"
+
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
