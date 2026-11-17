@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "rgmin"
-version = "0.6.0"
+dynamic = ["version"]
 description = "Free-threaded geometry optimizer: a nanobind wheel around the rgmin staticlib."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -54,6 +54,13 @@ cmake.version = ">=3.15"
 # cp314-cp314t or cp315-cp315t instead.
 wheel.py-api = "cp312"
 wheel.packages = ["python/rgmin"]
+
+# The wheel version is the crate's [package] version, the one that
+# rgmin.__version__ reports and that a v* release tag names.
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "Cargo.toml"
+regex = '(?ms)^\[package\]$.*?^version = "(?P<value>[^"]+)"$'
 
 [tool.cibuildwheel]
 build = "cp310-* cp311-* cp312-* cp314t-* cp315t-*"

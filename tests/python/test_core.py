@@ -209,3 +209,15 @@ def test_import_does_not_pull_ase() -> None:
         "assert rgmin.__version__"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_distribution_version_is_the_crate_version() -> None:
+    from importlib import metadata
+
+    from packaging.version import Version
+
+    try:
+        installed = metadata.version("rgmin")
+    except metadata.PackageNotFoundError:
+        pytest.skip("rgmin is not installed as a distribution")
+    assert Version(installed) == Version(rgmin.__version__)
