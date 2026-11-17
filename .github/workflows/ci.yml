@@ -68,7 +68,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Python reference dependencies
         run: python -m pip install -q numpy scipy
-      - name: Build the libraries the C header tests link
+      # Before any `cargo build`, so the C and C++ tests link only the
+      # library they build themselves.
+      - run: cargo test --locked ${{ matrix.args }}
+      - name: C and C++ consumers under valgrind
+        if: matrix.name == 'capi'
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y valgrind
+          RGMIN_C_TEST_RUNNER="valgrind --error-exitcode=99 --track-origins=yes --quiet" \
+            cargo test --locked --features capi --test c_headers --test cxx_headers
+      - name: Build the libraries the readcon and ABI checks read
         run: cargo build --locked ${{ matrix.args }}
       - name: Staticlib readcon link
         run: |
@@ -81,14 +91,6 @@ jobs:
             echo "this row links readcon"
             exit 1
           fi
-      - run: cargo test --locked ${{ matrix.args }}
-      - name: C and C++ consumers under valgrind
-        if: matrix.name == 'capi'
-        run: |
-          set -euo pipefail
-          sudo apt-get update && sudo apt-get install -y valgrind
-          RGMIN_C_TEST_RUNNER="valgrind --error-exitcode=99 --track-origins=yes --quiet" \
-            cargo test --locked --features capi --test c_headers --test cxx_headers
       - name: Public docs and C ABI names
         if: matrix.name == 'default'
         run: |
