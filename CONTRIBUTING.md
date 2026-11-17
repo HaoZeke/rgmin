@@ -63,4 +63,31 @@ The release commit copies those notes into `docs/orgmode/changelog.org` under a 
 `towncrier build --draft --version 0.0.0` prints the notes that the fragments give and changes no file.
 `python3 scripts/check_changelog.py` fails when a fragment is paired with an Unreleased line, or when a file in `docs/newsfragments/` is not a fragment type.
 
+## Releases
+
+A release is a `vX.Y.Z` tag on `main`.
+The tag starts `.github/workflows/publish.yml`, which uploads the crate to crates.io, and `.github/workflows/pypi.yml`, which uploads the Python package to PyPI.
+The Python package takes its version from the `[package]` table of `Cargo.toml`, so the wheels and `rgmin.__version__` always carry the crate version.
+`pypi.yml` builds the sdist and the wheels, tests every wheel, and uploads only when the tag is `v` followed by that version.
+
+PyPI accepts the upload through trusted publishing: it trusts an OpenID Connect token from one workflow in one GitHub environment, so no API token is stored in the repository or its secrets.
+Add the publisher once, as a pending publisher at <https://pypi.org/manage/account/publishing/>, and PyPI creates the `rgmin` project at the first upload:
+
+| Field | Value |
+| --- | --- |
+| PyPI Project Name | `rgmin` |
+| Owner | `OmniPotentRPC` |
+| Repository name | `rgmin` |
+| Workflow name | `pypi.yml` |
+| Environment name | `pypi` |
+
+Create the `pypi` environment under Settings, Environments before the first tag, with a deployment rule that admits only tags matching `v*`.
+GitHub would otherwise create it at the first run with no rule.
+Required reviewers on the environment hold each upload until one of them approves it.
+Renaming `pypi.yml` or the `pypi` environment stops the uploads until the publisher on PyPI names the new ones.
+
+Before tagging, run the PyPI workflow by hand on the release branch from the Actions tab.
+A run that does not start from a tag builds and tests the sdist and every wheel, and skips the upload.
+`publish.yml` has no such guard: run by hand, it publishes the crate from that branch.
+
 The [contributing page](docs/orgmode/contributing/index.org) of the docs covers the rest: the C library check, the docs build, citations and the formula numbers the code follows.
