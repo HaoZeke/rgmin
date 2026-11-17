@@ -78,7 +78,14 @@ skip = ["pp*", "*-musllinux*", "*_i686", "*-win32"]
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
 test-requires = ["pytest", "pytest-timeout", "numpy", "ase>=3.23", "hypothesis>=6"]
-test-command = "python -m pytest -q tests/python --timeout=180 -o faulthandler_timeout=120"
+# The first command is the F1 check of rgpot's wheel workflow: on a
+# free-threaded interpreter, importing rgmin._core must leave the GIL off.
+# The suite's GIL test skips when the pytest process holds the GIL, so it
+# passes over an import that turned the GIL back on.
+test-command = [
+  "python -W error::RuntimeWarning -c \"import sys, sysconfig, rgmin._core; assert not sysconfig.get_config_var('Py_GIL_DISABLED') or not sys._is_gil_enabled()\"",
+  "python -m pytest -q tests/python --timeout=180 -o faulthandler_timeout=120",
+]
 test-sources = ["tests/python"]
 
 [tool.cibuildwheel.linux]
