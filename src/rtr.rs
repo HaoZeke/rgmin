@@ -331,47 +331,27 @@ impl Default for RtrOptions {
 
 impl RtrOptions {
     /// Set [`Self::radius_max`].
+    #[must_use]
     pub fn with_radius_max(mut self, radius_max: f64) -> Self {
         self.radius_max = Some(radius_max);
         self
     }
 
-    /// Set [`Self::grad_tol`].
-    pub fn with_grad_tol(mut self, grad_tol: f64) -> Self {
-        self.grad_tol = grad_tol;
-        self
-    }
-
-    /// Set [`Self::max_iter`].
-    pub fn with_max_iter(mut self, max_iter: usize) -> Self {
-        self.max_iter = max_iter;
-        self
-    }
-
     /// Set [`Self::cg_max`].
+    #[must_use]
     pub fn with_cg_max(mut self, cg_max: usize) -> Self {
         self.cg_max = Some(cg_max);
         self
     }
-
-    /// Set [`Self::theta`].
-    pub fn with_theta(mut self, theta: f64) -> Self {
-        self.theta = theta;
-        self
-    }
-
-    /// Set [`Self::kappa`].
-    pub fn with_kappa(mut self, kappa: f64) -> Self {
-        self.kappa = kappa;
-        self
-    }
-
-    /// Set [`Self::rho_regularization`].
-    pub fn with_rho_regularization(mut self, rho_regularization: f64) -> Self {
-        self.rho_regularization = rho_regularization;
-        self
-    }
 }
+
+with_setters!(RtrOptions {
+    with_grad_tol => grad_tol: val f64,
+    with_max_iter => max_iter: val usize,
+    with_theta => theta: val f64,
+    with_kappa => kappa: val f64,
+    with_rho_regularization => rho_regularization: val f64,
+});
 
 /// Result of [`minimize_rtr`].
 #[derive(Clone, Debug)]
