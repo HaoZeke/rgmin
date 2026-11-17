@@ -1084,17 +1084,19 @@ fn lowest_eigenpair_elpa_is_unavailable() {
     assert_eq!(status, rgmin_status_t::RGMIN_UNAVAILABLE);
 }
 
-/// ABI minor 46 adds `rgmin_control_default` and the other struct
-/// initializers. Minor 45 is `rgmin_solver_set_lbfgs_trust` and minor 44
-/// is `rgmin_solver_set_power`. Minor 43 is `rgmin_lbfgs_pairs_push_rho`,
+/// ABI minor 47 adds `rgmin_solver_set_level_set` and
+/// `rgmin_solver_clear_level_set`. Minor 46 adds `rgmin_control_default`
+/// and the other struct initializers. Minor 45 is
+/// `rgmin_solver_set_lbfgs_trust` and minor 44 is
+/// `rgmin_solver_set_power`. Minor 43 is `rgmin_lbfgs_pairs_push_rho`,
 /// minor 42 is `rgmin_lowest_eigenpairs_ex` and minor 39 is
-/// `rgmin_lowest_eigenpairs`. Minors 40 and 41 are the 0.6.0 release
-/// and the manifold API.
+/// `rgmin_lowest_eigenpairs`. Minors 40 and 41 are the 0.6.0 release and
+/// the manifold API.
 #[test]
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 46);
+    assert_eq!(stamp.abi_minor, 47);
     assert_eq!(stamp.layout_revision, 5);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
 }

@@ -64,6 +64,7 @@ rgmin_solver_add_equality
 rgmin_solver_clear_distance_constraints
 rgmin_solver_clear_equalities
 rgmin_solver_clear_exp
+rgmin_solver_clear_level_set
 rgmin_solver_clear_precon
 rgmin_solver_create
 rgmin_solver_dim
@@ -108,6 +109,7 @@ rgmin_solver_set_lbfgs_neb_guards
 rgmin_solver_set_lbfgs_scaled
 rgmin_solver_set_lbfgs_trust
 rgmin_solver_set_lbfgs_wolfe
+rgmin_solver_set_level_set
 rgmin_solver_set_linesearch
 rgmin_solver_set_manifold
 rgmin_solver_set_masses
