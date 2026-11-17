@@ -77,6 +77,9 @@ enum CappedMiss {
     Retry,
     /// Stop and restore the pairs.
     Stop(Error),
+    /// The level-set tangent of the capped step is zero. Keep the pairs
+    /// and the current point; it is already on the set.
+    LevelStay,
 }
 
 /// Smallest initial trust radius. The constrained stepper reads this.
@@ -1826,6 +1829,81 @@ impl Solver {
         Ok(())
     }
 
+    /// Pull `x` onto the level set after a step that did not, and rebuild
+    /// the report from that point. A no-op when no level set is set, and
+    /// when the step already landed inside the tolerance, so an unset
+    /// session keeps the bytes of the path that produced `report`.
+    fn finish_level_set<O>(
+        &mut self,
+        obj: &O,
+        x: &mut Array1<f64>,
+        report: &mut Report,
+    ) -> Result<()>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        if self.level_set.is_none() {
+            return Ok(());
+        }
+        let before = x.clone();
+        let mut value = 0.0;
+        let mut grad = Array1::zeros(x.len());
+        self.retract_level_set_here(obj, x, &mut value, &mut grad)?;
+        if x.iter()
+            .zip(before.iter())
+            .all(|(a, b)| a.to_bits() == b.to_bits())
+        {
+            return Ok(());
+        }
+        grad = self.horizontal_grad(x, &grad);
+        self.remember(x, value, &grad);
+        let grad_norm = self.stationarity_norm(x, &grad);
+        let status = self.control.classify(grad_norm, self.noted_free_len());
+        report.value = value;
+        if !self.brief {
+            report.coords = x.clone();
+        }
+        report.grad_norm = grad_norm;
+        report.grad = Some(grad);
+        report.status = status;
+        Ok(())
+    }
+
+    /// Report the current point when the tangent step vanished.
+    fn level_set_stay<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let (value, raw) = obj.value_and_gradient(x.view());
+        if !crate::step::finite(value, raw.view()) {
+            return Err(Error::LevelSet {
+                what: "non-finite value or gradient during level-set retraction",
+            });
+        }
+        let grad = self.horizontal_grad(x, &raw);
+        self.remember(x, value, &grad);
+        self.steps += 1;
+        Ok(self.report(value, x, &grad))
+    }
+
+    /// Project `step` onto the level-set tangent. `None` is a zero tangent
+    /// step. The input is returned unchanged when no level set is set.
+    fn tangent_displacement(
+        &self,
+        grad: &Array1<f64>,
+        step: Array1<f64>,
+    ) -> Result<Option<Array1<f64>>> {
+        if self.level_set.is_none() {
+            return Ok(Some(step));
+        }
+        let step = project_tangent(grad.view(), &step)?;
+        let motion = max_atom_displacement(&step);
+        if !(motion.is_finite() && motion > 0.0) {
+            return Ok(None);
+        }
+        Ok(Some(step))
+    }
+
     /// Riemannian L-BFGS pair at `x`: `s = T(x - old)`, `y = g - T(g_old)`.
     fn lbfgs_sy(
         &mut self,
@@ -2285,6 +2363,7 @@ impl Solver {
         self.retract_level_set_start(obj, x)?;
         let before = x.clone();
         let mut report = self.step_once(obj, x)?;
+        self.finish_level_set(obj, x, &mut report)?;
         self.note_repeated_lbfgs_step(&before, x, &mut report);
         Ok(report)
     }
@@ -2342,43 +2421,61 @@ impl Solver {
         O: HessianObjective + ?Sized,
     {
         self.retract_level_set_start(obj, x)?;
-        if self.constraints.is_some() {
-            return self.constrained_step(x, |s, x| s.step_constrained_hess(obj, x));
-        }
-        // Newton-CG never forms `obj.hessian`, even when the caller
-        // handed a dense oracle to this verb. The product is a forward
-        // difference of gradients.
-        if matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. }) {
-            return self.step_newton_cg(obj, x, &FiniteDifference);
-        }
-        #[cfg(feature = "highs")]
+        let mut report = if matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. })
+            && self.level_set.is_some()
         {
-            if let Inner::Lbfgs(solver) = &mut self.inner {
-                solver.coordinate_box = None;
+            // This verb has an analytic dense Hessian. Use it for the
+            // constrained product instead of estimating one from gradients.
+            let hess = obj.hessian(x.view());
+            let action = |_: ArrayView1<f64>, v: ArrayView1<f64>| hess.dot(&v);
+            if self.constraints.is_some() {
+                self.constrained_step(x, |s, x| s.step_constrained_newton_cg(obj, x, &action))?
+            } else {
+                self.step_newton_cg(obj, x, &action)?
             }
-            if self.has_coordinate_box() {
-                let bounded = crate::box_objective::BoxObjective::new(
-                    obj,
-                    self.box_lo.clone(),
-                    self.box_hi.clone(),
-                )?;
-                if bounded.clip_start(x)? {
-                    self.last_pos = None;
-                }
+        } else if self.constraints.is_some() {
+            self.constrained_step(x, |s, x| s.step_constrained_hess(obj, x))?
+        } else if matches!(self.inner, Inner::NewtonCg { .. } | Inner::NewtonPcg { .. }) {
+            // Preserve the unconstrained path when no level set is active.
+            self.step_once(obj, x)?
+        } else {
+            #[cfg(feature = "highs")]
+            {
                 if let Inner::Lbfgs(solver) = &mut self.inner {
-                    solver.coordinate_box = Some(bounded.bounds().clone());
+                    solver.coordinate_box = None;
                 }
-                return self.step_with_equalities(&bounded, x, Self::step_hess_inner);
+                if self.has_coordinate_box() {
+                    let bounded = crate::box_objective::BoxObjective::new(
+                        obj,
+                        self.box_lo.clone(),
+                        self.box_hi.clone(),
+                    )?;
+                    if bounded.clip_start(x)? {
+                        self.last_pos = None;
+                    }
+                    if let Inner::Lbfgs(solver) = &mut self.inner {
+                        solver.coordinate_box = Some(bounded.bounds().clone());
+                    }
+                    self.step_with_equalities(&bounded, x, Self::step_hess_inner)?
+                } else {
+                    self.step_with_equalities(obj, x, Self::step_hess_inner)?
+                }
             }
-        }
-        self.step_with_equalities(obj, x, Self::step_hess_inner)
+            #[cfg(not(feature = "highs"))]
+            {
+                self.step_with_equalities(obj, x, Self::step_hess_inner)?
+            }
+        };
+        self.finish_level_set(obj, x, &mut report)?;
+        Ok(report)
     }
 
     /// One Steihaug-Toint iteration. `obj` supplies analytic products;
     /// this verb does not build a dense Hessian.
     ///
-    /// [`Self::step`] and [`Self::step_hess`] on the same methods use a
-    /// forward difference (one gradient per product) instead.
+    /// [`Self::step`] estimates products from gradient calls.
+    /// [`Self::step_hess`] does the same unless a level set is active, where
+    /// it multiplies the supplied dense Hessian.
     pub fn step_hvp<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
     where
         O: HessianVector + ?Sized,
@@ -2398,10 +2495,13 @@ impl Solver {
         }
         self.retract_level_set_start(obj, x)?;
         let action = |xv: ArrayView1<f64>, v: ArrayView1<f64>| obj.hessian_vector(xv, v);
-        if self.constraints.is_some() {
-            return self.constrained_step(x, |s, x| s.step_constrained_newton_cg(obj, x, &action));
-        }
-        self.step_newton_cg(obj, x, &action)
+        let mut report = if self.constraints.is_some() {
+            self.constrained_step(x, |s, x| s.step_constrained_newton_cg(obj, x, &action))?
+        } else {
+            self.step_newton_cg(obj, x, &action)?
+        };
+        self.finish_level_set(obj, x, &mut report)?;
+        Ok(report)
     }
 
     fn step_newton_cg<O, A>(&mut self, obj: &O, x: &mut Array1<f64>, action: &A) -> Result<Report>
@@ -2841,6 +2941,21 @@ impl Solver {
                 }
                 let force = grad.mapv(|v| -v);
                 let step = self.shape_step(x, cap_displacement_atom(&(h0 * &force), cap));
+                let step = match self.tangent_displacement(&grad, step) {
+                    Ok(Some(step)) => step,
+                    Ok(None) => {
+                        if let Inner::Lbfgs(solver) = &mut self.inner {
+                            solver.rollback_txn(txn);
+                        }
+                        return self.level_set_stay(obj, x);
+                    }
+                    Err(err) => {
+                        if let Inner::Lbfgs(solver) = &mut self.inner {
+                            solver.rollback_txn(txn);
+                        }
+                        return Err(err);
+                    }
+                };
                 match self.capped_trial(obj, x, &step, true) {
                     Ok(point) => point,
                     Err(err) => {
@@ -2851,6 +2966,12 @@ impl Solver {
                     }
                 }
             }
+            Err(CappedMiss::LevelStay) => {
+                if let Inner::Lbfgs(solver) = &mut self.inner {
+                    solver.rollback_txn(txn);
+                }
+                return self.level_set_stay(obj, x);
+            }
             Err(CappedMiss::Stop(err)) => {
                 if let Inner::Lbfgs(solver) = &mut self.inner {
                     solver.rollback_txn(txn);
@@ -2858,11 +2979,32 @@ impl Solver {
                 return Err(err);
             }
         };
-        let (trial, tval, tgrad) = proposed;
+        let (trial, mut tval, mut tgrad) = proposed;
         let old = x.clone();
         let gold = grad;
         *x = trial;
+        if self.level_set.is_some()
+            && let Err(err) = self.retract_level_set_here(obj, x, &mut tval, &mut tgrad)
+        {
+            *x = old;
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.rollback_txn(txn);
+            }
+            return Err(err);
+        }
         let grad = self.horizontal_grad(x, &tgrad);
+        let stayed = self.level_set.is_some()
+            && x.iter()
+                .zip(old.iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits());
+        if stayed {
+            if let Inner::Lbfgs(solver) = &mut self.inner {
+                solver.rollback_txn(txn);
+            }
+            self.remember(x, tval, &grad);
+            self.steps += 1;
+            return Ok(self.report(tval, x, &grad));
+        }
         let y_prev = gold.as_slice().unwrap_or(&[]);
         let y_new = grad.as_slice().unwrap_or(&[]);
         let prev = old.as_slice().unwrap_or(&[]);
@@ -2899,6 +3041,11 @@ impl Solver {
             }));
         };
         let step = self.shape_step(x, take.step);
+        let step = match self.tangent_displacement(grad, step) {
+            Ok(Some(step)) => step,
+            Ok(None) => return Err(CappedMiss::LevelStay),
+            Err(err) => return Err(CappedMiss::Stop(err)),
+        };
         let result = self.capped_trial(obj, x, &step, take.fallback);
         if let Inner::Lbfgs(solver) = &mut self.inner {
             solver.recycle(step);
@@ -4956,11 +5103,13 @@ impl Solver {
         self.constraints.as_deref()
     }
 
-    /// Keep the objective on the level set `value(x) = target`.
+    /// Keep accepted points on the level set `value(x) = target`.
     ///
-    /// The step direction and FIRE velocity are projected onto the tangent
-    /// of that set, and each accepted point is retracted back to the level
-    /// set by Newton along the objective gradient.
+    /// Trial directions, including the capped eOn L-BFGS displacement, and
+    /// the FIRE velocity are projected onto the tangent of that set. Each
+    /// accepted point is retracted by Newton along the objective gradient.
+    /// Retraction stops at a tolerance in the units of the objective, or
+    /// returns [`Error::LevelSetStalled`] when the residual does not contract.
     pub fn set_level_set(&mut self, level_set: LevelSetConstraint) -> Result<()> {
         self.level_set = Some(level_set.validate()?);
         Ok(())

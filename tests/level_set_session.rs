@@ -50,8 +50,7 @@ fn level_tolerance(target: f64, value: f64, grad: &Array1<f64>, x: &Array1<f64>)
     let value_scale = target.abs() + value.abs();
     let grad_scale = rgmin::vecops::nrm2(grad.view());
     let x_scale = rgmin::vecops::nrm2(x.view());
-    let scale = value_scale + grad_scale * x_scale + grad_scale;
-    scale * sqrt_eps + eps * (value_scale + x_scale + grad_scale + 1.0)
+    sqrt_eps * value_scale + grad_scale * eps * (x_scale + 1.0) + eps
 }
 
 fn assert_report_bits_equal(a: &rgmin::Report, b: &rgmin::Report) {
@@ -69,6 +68,48 @@ fn assert_report_bits_equal(a: &rgmin::Report, b: &rgmin::Report) {
         }
         (None, None) => {}
         _ => panic!("gradient presence mismatch"),
+    }
+}
+
+struct Bowl {
+    bounds: Bounds<f64>,
+}
+
+impl Bowl {
+    fn new() -> Self {
+        Self {
+            bounds: Bounds::new(Array1::from_elem(2, -4.0), Array1::from_elem(2, 4.0), 0.0),
+        }
+    }
+}
+
+impl Objective<f64> for Bowl {
+    fn dim(&self) -> usize {
+        2
+    }
+
+    fn bounds(&self) -> &Bounds<f64> {
+        &self.bounds
+    }
+
+    fn eval(&self, x: ArrayView1<f64>) -> f64 {
+        x[0] * x[0] + 2.0 * x[1] * x[1]
+    }
+}
+
+impl Gradient<f64> for Bowl {
+    fn dim(&self) -> usize {
+        2
+    }
+
+    fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+        array![2.0 * x[0], 4.0 * x[1]]
+    }
+}
+
+impl DifferentiableObjective<f64> for Bowl {
+    fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+        (self.eval(x), self.grad(x))
     }
 }
 
@@ -97,6 +138,93 @@ fn unset_level_set_keeps_the_unconstrained_path_bit_exact() {
             assert_eq!(a.to_bits(), b.to_bits());
         }
         assert_report_bits_equal(&report_plain, &report_hooked);
+    }
+}
+
+#[test]
+fn unset_level_set_keeps_the_capped_eon_step_bit_exact() {
+    let objective = Bowl::new();
+    let control = Control::default().with_maxiter(4).with_gtol(0.0);
+    let mut plain = Solver::new(Method::lbfgs(), control.clone(), 2);
+    let mut hooked = Solver::new(Method::lbfgs(), control, 2);
+    hooked.set_level_set(LevelSetConstraint::new(1.0)).unwrap();
+    hooked.clear_level_set();
+    let mut x_plain = array![0.4, -0.3];
+    let mut x_hooked = x_plain.clone();
+    for _ in 0..4 {
+        let report_plain = plain.step(&objective, &mut x_plain).unwrap();
+        let report_hooked = hooked.step(&objective, &mut x_hooked).unwrap();
+        assert_eq!(x_plain.len(), x_hooked.len());
+        for (a, b) in x_plain.iter().zip(x_hooked.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+        assert_report_bits_equal(&report_plain, &report_hooked);
+    }
+}
+
+struct Radius {
+    bounds: Bounds<f64>,
+}
+
+impl Radius {
+    fn new() -> Self {
+        Self {
+            bounds: Bounds::new(Array1::from_elem(2, -4.0), Array1::from_elem(2, 4.0), 0.0),
+        }
+    }
+}
+
+impl Objective<f64> for Radius {
+    fn dim(&self) -> usize {
+        2
+    }
+
+    fn bounds(&self) -> &Bounds<f64> {
+        &self.bounds
+    }
+
+    fn eval(&self, x: ArrayView1<f64>) -> f64 {
+        x.dot(&x)
+    }
+}
+
+impl Gradient<f64> for Radius {
+    fn dim(&self) -> usize {
+        2
+    }
+
+    fn grad(&self, x: ArrayView1<f64>) -> Array1<f64> {
+        array![2.0 * x[0], 2.0 * x[1]]
+    }
+}
+
+impl DifferentiableObjective<f64> for Radius {
+    fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+        (self.eval(x), self.grad(x))
+    }
+}
+
+#[test]
+fn capped_eon_step_stays_on_the_level_set() {
+    let objective = Radius::new();
+    let mut x = array![2.0, 0.0];
+    let target = 1.0;
+    let mut solver = Solver::new(
+        Method::lbfgs(),
+        Control::default().with_maxiter(3).with_gtol(0.0),
+        2,
+    );
+    solver
+        .set_level_set(LevelSetConstraint::new(target))
+        .unwrap();
+    for _ in 0..3 {
+        solver.step(&objective, &mut x).unwrap();
+        let (value, grad) = objective.value_and_gradient(x.view());
+        let tol = level_tolerance(target, value, &grad, &x);
+        assert!(
+            (value - target).abs() <= tol,
+            "capped eOn left the level set: value {value} target {target} tol {tol} x={x:?}"
+        );
     }
 }
 

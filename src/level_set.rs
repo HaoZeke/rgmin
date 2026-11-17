@@ -6,10 +6,13 @@ use ndarray::{Array1, ArrayView1};
 use crate::error::{Error, Result};
 
 /// Configuration of a level-set constraint \(g(x) = c\).
+///
+/// Non-exhaustive: start from [`Self::default`] (the level set at 0) or
+/// [`Self::new`] and chain [`Self::with_target`].
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LevelSetConstraint {
-    /// Target value \(c\) of the level set.
+    /// Target value \(c\). The default is 0.
     pub target: f64,
 }
 
@@ -54,6 +57,13 @@ pub(crate) fn project_tangent(grad: ArrayView1<'_, f64>, v: &Array1<f64>) -> Res
     ))
 }
 
+/// Absolute tolerance on `|g(x) - c|`, in the units of `g`.
+///
+/// `sqrt(eps) * (|c| + |g|)` is the value's rounding, loosened so the
+/// last Newton correction is not required to undercut an ulp the oracle
+/// cannot resolve. `||∇g|| * eps * (||x|| + 1)` is the change in `g`
+/// from a one-ulp move in `x`: relative to `||x||`, plus one absolute
+/// coordinate unit. `eps` is the absolute floor of a unit-scale energy.
 fn correction_tolerance(
     target: f64,
     value: f64,
@@ -65,8 +75,7 @@ fn correction_tolerance(
     let value_scale = target.abs() + value.abs();
     let grad_scale = crate::vecops::nrm2(grad);
     let x_scale = crate::vecops::nrm2(x);
-    let scale = value_scale + grad_scale * x_scale + grad_scale;
-    scale * sqrt_eps + eps * (value_scale + x_scale + grad_scale + 1.0)
+    sqrt_eps * value_scale + grad_scale * eps * (x_scale + 1.0) + eps
 }
 
 #[derive(Debug)]
@@ -105,15 +114,18 @@ where
                 gradient,
             });
         }
-        if let Some(previous) = previous_abs
-            && residual_abs + tol >= previous
-        {
-            return Err(Error::LevelSetStalled {
-                iterations: iter,
-                residual,
-                tolerance: tol,
-                previous_residual: previous,
-            });
+        if let Some(previous) = previous_abs {
+            // A strict contraction is progress even when its drop is
+            // smaller than the current tolerance. Only compare evaluations
+            // once a real previous residual exists.
+            if residual_abs >= previous {
+                return Err(Error::LevelSetStalled {
+                    iterations: iter,
+                    residual,
+                    tolerance: tol,
+                    previous_residual: previous,
+                });
+            }
         }
         let gn2 = crate::vecops::dot(gradient.view(), gradient.view());
         if !(gn2.is_finite() && gn2 > 0.0) {
@@ -125,6 +137,10 @@ where
         for (xi, gi) in x.iter_mut().zip(gradient.iter()) {
             *xi -= step * gi;
         }
+        // If no coordinate bits changed, reevaluate the same point. That
+        // gives the stall predicate a real previous residual; it also avoids
+        // calling a strict contraction a stall merely because its next
+        // correction rounded away.
         previous_abs = Some(residual_abs);
         iter += 1;
     }
@@ -137,7 +153,7 @@ mod tests {
     use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
     use ndarray::{Array1, ArrayView1, array};
 
-    use super::{LevelSetConstraint, retract_to_level_set};
+    use super::{LevelSetConstraint, correction_tolerance, retract_to_level_set};
     use crate::Error;
 
     struct Circle {
@@ -204,7 +220,7 @@ mod tests {
             if prev > 0.0 && curr > 0.0 {
                 let factor = next * prev / (curr * curr);
                 assert!(
-                    factor.is_finite() && factor <= 1.0,
+                    factor.is_finite() && factor < 0.5,
                     "not quadratic: {window:?}"
                 );
             }
@@ -247,5 +263,117 @@ mod tests {
         let err =
             retract_to_level_set(&Stuck, LevelSetConstraint::new(0.0), &array![0.0]).unwrap_err();
         assert!(matches!(err, Error::LevelSetStalled { .. }), "{err:?}");
+    }
+
+    struct ScaledLinear {
+        slope: f64,
+    }
+
+    impl Objective<f64> for ScaledLinear {
+        fn dim(&self) -> usize {
+            1
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static BOUNDS: OnceLock<Bounds<f64>> = OnceLock::new();
+            BOUNDS.get_or_init(|| Bounds::new(array![-f64::INFINITY], array![f64::INFINITY], 0.0))
+        }
+        fn eval(&self, x: ArrayView1<f64>) -> f64 {
+            self.slope * x[0]
+        }
+    }
+
+    impl Gradient<f64> for ScaledLinear {
+        fn dim(&self) -> usize {
+            1
+        }
+        fn grad(&self, _x: ArrayView1<f64>) -> Array1<f64> {
+            array![self.slope]
+        }
+    }
+
+    impl DifferentiableObjective<f64> for ScaledLinear {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    #[test]
+    fn large_gradient_does_not_count_as_convergence() {
+        // `2^40 * 2^{-30} = 2^10`. A tolerance that adds `||∇g||` in
+        // energy units is about `10^7` here and would accept residual 1024.
+        let slope = 2.0_f64.powi(40);
+        let start = array![2.0_f64.powi(-30)];
+        let out = retract_to_level_set(
+            &ScaledLinear { slope },
+            LevelSetConstraint::default(),
+            &start,
+        )
+        .unwrap();
+        // Retraction accepts an objective residual up to its derived
+        // objective-unit tolerance. For g(x) = slope*x, dividing that
+        // tolerance by |slope| gives the matching coordinate tolerance.
+        let residual_tolerance =
+            correction_tolerance(0.0, out.value, out.gradient.view(), out.point.view());
+        let coordinate_tolerance = residual_tolerance / slope.abs();
+        assert!(
+            out.value.abs() <= residual_tolerance,
+            "residual {} at {:?}",
+            out.value,
+            out.point
+        );
+        assert!(
+            out.point[0].abs() <= coordinate_tolerance,
+            "point {:?}",
+            out.point
+        );
+    }
+
+    struct Scripted {
+        values: Mutex<Vec<f64>>,
+    }
+
+    impl Objective<f64> for Scripted {
+        fn dim(&self) -> usize {
+            1
+        }
+        fn bounds(&self) -> &Bounds<f64> {
+            use std::sync::OnceLock;
+            static BOUNDS: OnceLock<Bounds<f64>> = OnceLock::new();
+            BOUNDS.get_or_init(|| Bounds::new(array![-f64::INFINITY], array![f64::INFINITY], 0.0))
+        }
+        fn eval(&self, _x: ArrayView1<f64>) -> f64 {
+            let mut values = self.values.lock().expect("values");
+            values.remove(0)
+        }
+    }
+
+    impl Gradient<f64> for Scripted {
+        fn dim(&self) -> usize {
+            1
+        }
+        fn grad(&self, _x: ArrayView1<f64>) -> Array1<f64> {
+            array![1.0]
+        }
+    }
+
+    impl DifferentiableObjective<f64> for Scripted {
+        fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+            (self.eval(x), self.grad(x))
+        }
+    }
+
+    #[test]
+    fn near_set_contraction_is_not_a_stall() {
+        // The second residual is still above the derived tolerance but
+        // contracts by less than one tolerance. That strict decrease is
+        // real Newton progress and must not be reported as a stall.
+        let eps = f64::EPSILON;
+        let objective = Scripted {
+            values: Mutex::new(vec![8.0 * eps, 7.0 * eps, 0.0]),
+        };
+        let out =
+            retract_to_level_set(&objective, LevelSetConstraint::new(0.0), &array![0.0]).unwrap();
+        assert_eq!(out.value, 0.0);
     }
 }
