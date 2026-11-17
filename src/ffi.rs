@@ -375,6 +375,39 @@ fn set_last_error(msg: &str) {
     LAST_CONSTRAINT.with(|kind| kind.set(rgmin_constraint_error_t::RGMIN_CONSTRAINT_NONE));
 }
 
+/// Run `f` on the session behind `solver`. A null handle does nothing.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+unsafe fn with_solver(solver: *mut rgmin_solver_t, f: impl FnOnce(&mut Solver)) {
+    if let Some(handle) = unsafe { solver.as_mut() } {
+        f(&mut handle.solver);
+    }
+}
+
+/// `0`, or `1` with the message left for [`rgmin_last_error`].
+fn flag(result: crate::Result<()>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            1
+        }
+    }
+}
+
+/// `RGMIN_SUCCESS`, or `RGMIN_INVALID_PARAMETER` with the message left for
+/// [`rgmin_last_error`].
+fn invalid_on_error(result: crate::Result<()>) -> rgmin_status_t {
+    match result {
+        Ok(()) => rgmin_status_t::RGMIN_SUCCESS,
+        Err(e) => {
+            set_last_error(&e.to_string());
+            rgmin_status_t::RGMIN_INVALID_PARAMETER
+        }
+    }
+}
+
 /// Last error on this thread. Valid until the next rgmin C call.
 #[unsafe(no_mangle)]
 pub extern "C" fn rgmin_last_error() -> *const c_char {
@@ -1441,10 +1474,7 @@ pub unsafe extern "C" fn rgmin_solver_free(solver: *mut rgmin_solver_t) {
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_forget(solver: *mut rgmin_solver_t) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.forget() };
+    unsafe { with_solver(solver, |s| s.forget()) };
 }
 
 /// Keep the method memory, drop the point: the next step evaluates the
@@ -1456,10 +1486,7 @@ pub unsafe extern "C" fn rgmin_solver_forget(solver: *mut rgmin_solver_t) {
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_rebase(solver: *mut rgmin_solver_t) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.rebase() };
+    unsafe { with_solver(solver, |s| s.rebase()) };
 }
 
 /// Set the Euclidean step cap used by the next [`rgmin_solver_step`].
@@ -1470,10 +1497,7 @@ pub unsafe extern "C" fn rgmin_solver_rebase(solver: *mut rgmin_solver_t) {
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_maxmove(solver: *mut rgmin_solver_t, maxmove: f64) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_maxmove(maxmove) };
+    unsafe { with_solver(solver, |s| s.set_maxmove(maxmove)) };
 }
 
 /// How an L-BFGS session uses a caller Hessian (eOn `lbfgs_step`).
@@ -1613,31 +1637,19 @@ pub unsafe extern "C" fn rgmin_solver_set_exp(
     // Supplied distances do not need the geometry. A Cartesian
     // list is placed on the next step, when the session holds `x`.
     if neighbours.r.is_empty() {
-        match ExpState::deferred(neighbours, exp_params) {
-            Ok(state) => {
-                unsafe { (*solver).solver.set_exp_deferred(state) };
-                rgmin_status_t::RGMIN_SUCCESS
-            }
-            Err(e) => {
-                set_last_error(&e.to_string());
-                rgmin_status_t::RGMIN_INVALID_PARAMETER
-            }
-        }
+        invalid_on_error(
+            ExpState::deferred(neighbours, exp_params)
+                .map(|state| unsafe { (*solver).solver.set_exp_deferred(state) }),
+        )
     } else {
         let positions = vec![0.0; dim];
-        match unsafe {
+        invalid_on_error(unsafe {
             (*solver).solver.set_exp(
                 ndarray::ArrayView1::from(positions.as_slice()),
                 &neighbours,
                 &exp_params,
             )
-        } {
-            Ok(()) => rgmin_status_t::RGMIN_SUCCESS,
-            Err(e) => {
-                set_last_error(&e.to_string());
-                rgmin_status_t::RGMIN_INVALID_PARAMETER
-            }
-        }
+        })
     }
 }
 
@@ -1681,10 +1693,7 @@ fn exp_params_from_c(p: &rgmin_exp_t) -> ExpParams {
 /// [`rgmin_solver_create`] and not yet be freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_clear_exp(solver: *mut rgmin_solver_t) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.clear_exp() };
+    unsafe { with_solver(solver, |s| s.clear_exp()) };
 }
 
 /// Energy scale of the installed exponential preconditioner, or NaN.
@@ -1810,13 +1819,7 @@ pub unsafe extern "C" fn rgmin_solver_set_fire_preset(
             return 1;
         }
     };
-    match unsafe { (*solver).solver.set_fire_preset(preset) } {
-        Ok(()) => 0,
-        Err(e) => {
-            set_last_error(&e.to_string());
-            1
-        }
-    }
+    flag(unsafe { (*solver).solver.set_fire_preset(preset) })
 }
 
 /// ABC-FIRE on (`on != 0`) or off for a FIRE 2.0 session. ABI minor 30.
@@ -1831,13 +1834,7 @@ pub unsafe extern "C" fn rgmin_solver_set_fire_abc(solver: *mut rgmin_solver_t, 
         set_last_error("rgmin_solver_set_fire_abc: null solver");
         return 1;
     }
-    match unsafe { (*solver).solver.set_fire_abc(on != 0) } {
-        Ok(()) => 0,
-        Err(e) => {
-            set_last_error(&e.to_string());
-            1
-        }
-    }
+    flag(unsafe { (*solver).solver.set_fire_abc(on != 0) })
 }
 
 /// Per-atom cap of the default eOn L-BFGS step.
@@ -1863,13 +1860,7 @@ pub unsafe extern "C" fn rgmin_solver_set_lbfgs_capped(
             crate::EON_MAX_MOVE
         },
     };
-    match unsafe { (*solver).solver.set_lbfgs_step(step) } {
-        Ok(()) => 0,
-        Err(e) => {
-            set_last_error(&e.to_string());
-            1
-        }
-    }
+    flag(unsafe { (*solver).solver.set_lbfgs_step(step) })
 }
 
 /// ASE length control on an L-BFGS session: shorten the two-loop step
@@ -1895,13 +1886,7 @@ pub unsafe extern "C" fn rgmin_solver_set_lbfgs_scaled(
             crate::EON_MAX_MOVE
         },
     };
-    match unsafe { (*solver).solver.set_lbfgs_step(step) } {
-        Ok(()) => 0,
-        Err(e) => {
-            set_last_error(&e.to_string());
-            1
-        }
-    }
+    flag(unsafe { (*solver).solver.set_lbfgs_step(step) })
 }
 
 /// Opt into the strong Wolfe line search on an L-BFGS session.
@@ -1916,13 +1901,7 @@ pub unsafe extern "C" fn rgmin_solver_set_lbfgs_wolfe(solver: *mut rgmin_solver_
         set_last_error("rgmin_solver_set_lbfgs_wolfe: null solver");
         return 1;
     }
-    match unsafe { (*solver).solver.set_lbfgs_step(crate::LbfgsStep::Wolfe) } {
-        Ok(()) => 0,
-        Err(e) => {
-            set_last_error(&e.to_string());
-            1
-        }
-    }
+    flag(unsafe { (*solver).solver.set_lbfgs_step(crate::LbfgsStep::Wolfe) })
 }
 
 /// Burdakov ray-truncation radius for session L-BFGS. A non-positive,
@@ -1974,10 +1953,7 @@ pub unsafe extern "C" fn rgmin_solver_lbfgs_trust_radius(solver: *const rgmin_so
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_atom_maxmove(solver: *mut rgmin_solver_t, maxmove: f64) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_atom_maxmove(maxmove) };
+    unsafe { with_solver(solver, |s| s.set_atom_maxmove(maxmove)) };
 }
 
 /// eOn `lbfgs_project_rigid`.
@@ -1986,10 +1962,7 @@ pub unsafe extern "C" fn rgmin_solver_set_atom_maxmove(solver: *mut rgmin_solver
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_project_rigid(solver: *mut rgmin_solver_t, enabled: i32) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_project_rigid(enabled != 0) };
+    unsafe { with_solver(solver, |s| s.set_project_rigid(enabled != 0)) };
 }
 
 /// Al-Baali extra-updates on the newest L-BFGS pair.
@@ -1998,10 +1971,7 @@ pub unsafe extern "C" fn rgmin_solver_set_project_rigid(solver: *mut rgmin_solve
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_extra_updates(solver: *mut rgmin_solver_t, extra: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_extra_updates(extra) };
+    unsafe { with_solver(solver, |s| s.set_extra_updates(extra)) };
 }
 
 /// Li-Fukushima cautious pair filter. `eps <= 0` disables it.
@@ -2014,10 +1984,7 @@ pub unsafe extern "C" fn rgmin_solver_set_cautious(
     eps: f64,
     alpha: f64,
 ) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_cautious(eps, alpha) };
+    unsafe { with_solver(solver, |s| s.set_cautious(eps, alpha)) };
 }
 
 /// HiGHS feasible-set step. Returns 1 when this build has no `highs` feature.
@@ -2397,10 +2364,7 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_oblique(solver: *mut rgmin_solver_t, n: usize, m: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_oblique(n, m) };
+    unsafe { with_solver(solver, |s| s.set_oblique(n, m)) };
 }
 
 /// Stiefel \(\mathrm{St}(n,p)\). `p = 1` is the sphere packing.
@@ -2410,10 +2374,7 @@ pub unsafe extern "C" fn rgmin_solver_set_oblique(solver: *mut rgmin_solver_t, n
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_stiefel(solver: *mut rgmin_solver_t, n: usize, p: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_stiefel(n, p) };
+    unsafe { with_solver(solver, |s| s.set_stiefel(n, p)) };
 }
 
 /// `n` unit-modulus complex numbers. Packed interleaved, length `2 n`.
@@ -2422,10 +2383,7 @@ pub unsafe extern "C" fn rgmin_solver_set_stiefel(solver: *mut rgmin_solver_t, n
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_complex_circle(solver: *mut rgmin_solver_t, n: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_complex_circle(n) };
+    unsafe { with_solver(solver, |s| s.set_complex_circle(n)) };
 }
 
 /// Complex Euclidean \(\mathbb{C}^n\). Packed interleaved, length `2 n`.
@@ -2434,10 +2392,7 @@ pub unsafe extern "C" fn rgmin_solver_set_complex_circle(solver: *mut rgmin_solv
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_euclidean_complex(solver: *mut rgmin_solver_t, n: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_euclidean_complex(n) };
+    unsafe { with_solver(solver, |s| s.set_euclidean_complex(n)) };
 }
 
 /// Singleton of packed length `n`. manopt `constantfactory`.
@@ -2446,10 +2401,7 @@ pub unsafe extern "C" fn rgmin_solver_set_euclidean_complex(solver: *mut rgmin_s
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_constant(solver: *mut rgmin_solver_t, n: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_constant(n) };
+    unsafe { with_solver(solver, |s| s.set_constant(n)) };
 }
 
 /// Doubly-stochastic n-by-n, packed `n^2`. manopt
@@ -2459,10 +2411,7 @@ pub unsafe extern "C" fn rgmin_solver_set_constant(solver: *mut rgmin_solver_t, 
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_multinomial_ds(solver: *mut rgmin_solver_t, n: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_multinomial_ds(n) };
+    unsafe { with_solver(solver, |s| s.set_multinomial_ds(n)) };
 }
 
 /// Symmetric doubly-stochastic n-by-n, packed `n^2`. manopt
@@ -2472,10 +2421,7 @@ pub unsafe extern "C" fn rgmin_solver_set_multinomial_ds(solver: *mut rgmin_solv
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_multinomial_sym(solver: *mut rgmin_solver_t, n: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_multinomial_sym(n) };
+    unsafe { with_solver(solver, |s| s.set_multinomial_sym(n)) };
 }
 
 /// Complex unit sphere in \(\mathbb{C}^n\). Packed interleaved, length `2 n`.
@@ -2485,10 +2431,7 @@ pub unsafe extern "C" fn rgmin_solver_set_multinomial_sym(solver: *mut rgmin_sol
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_sphere_complex(solver: *mut rgmin_solver_t, n: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_sphere_complex(n) };
+    unsafe { with_solver(solver, |s| s.set_sphere_complex(n)) };
 }
 
 /// Positive orthant of packed length `n`. manopt `positivefactory`.
@@ -2498,10 +2441,7 @@ pub unsafe extern "C" fn rgmin_solver_set_sphere_complex(solver: *mut rgmin_solv
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_positive(solver: *mut rgmin_solver_t, n: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_positive(n) };
+    unsafe { with_solver(solver, |s| s.set_positive(n)) };
 }
 
 /// Centered `m x n` matrices, packed row-major `m n`.
@@ -2518,10 +2458,7 @@ pub unsafe extern "C" fn rgmin_solver_set_centered_matrix(
     n: usize,
     center_rows: i32,
 ) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_centered_matrix(m, n, center_rows != 0) };
+    unsafe { with_solver(solver, |s| s.set_centered_matrix(m, n, center_rows != 0)) };
 }
 
 /// Cartesian power: `count` unit-weight copies of the shape-free
@@ -2605,10 +2542,7 @@ pub unsafe extern "C" fn rgmin_solver_set_masses(
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_periodic(solver: *mut rgmin_solver_t, enabled: i32) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_periodic(enabled != 0) };
+    unsafe { with_solver(solver, |s| s.set_periodic(enabled != 0)) };
 }
 
 /// Why a distance constraint set was refused or could not be met.
@@ -5142,29 +5076,17 @@ fn install_exp(solver: *mut rgmin_solver_t, p: &rgmin_precon_t, atoms: usize) ->
     let neighbours = crate::Neighbours { i, j, r, anchor };
     let params = exp_params_from_precon(p);
     if neighbours.r.is_empty() {
-        match crate::precon::ExpState::deferred(neighbours, params) {
-            Ok(state) => {
-                unsafe { (*solver).solver.set_exp_deferred(state) };
-                rgmin_status_t::RGMIN_SUCCESS
-            }
-            Err(e) => {
-                set_last_error(&e.to_string());
-                rgmin_status_t::RGMIN_INVALID_PARAMETER
-            }
-        }
+        invalid_on_error(
+            crate::precon::ExpState::deferred(neighbours, params)
+                .map(|state| unsafe { (*solver).solver.set_exp_deferred(state) }),
+        )
     } else {
         let positions = vec![0.0; atoms * 3];
-        match unsafe {
+        invalid_on_error(unsafe {
             (*solver)
                 .solver
                 .set_exp(ndarray::ArrayView1::from(&positions), &neighbours, &params)
-        } {
-            Ok(()) => rgmin_status_t::RGMIN_SUCCESS,
-            Err(e) => {
-                set_last_error(&e.to_string());
-                rgmin_status_t::RGMIN_INVALID_PARAMETER
-            }
-        }
+        })
     }
 }
 
@@ -5194,16 +5116,10 @@ fn install_lindh(solver: *mut rgmin_solver_t, p: &rgmin_precon_t, atoms: usize) 
         }
     }
     let params = lindh_params_from_precon(p);
-    match crate::precon::LindhState::deferred(z, ghosts, params) {
-        Ok(state) => {
-            unsafe { (*solver).solver.set_lindh_deferred(state) };
-            rgmin_status_t::RGMIN_SUCCESS
-        }
-        Err(e) => {
-            set_last_error(&e.to_string());
-            rgmin_status_t::RGMIN_INVALID_PARAMETER
-        }
-    }
+    invalid_on_error(
+        crate::precon::LindhState::deferred(z, ghosts, params)
+            .map(|state| unsafe { (*solver).solver.set_lindh_deferred(state) }),
+    )
 }
 
 fn install_ff(solver: *mut rgmin_solver_t, p: &rgmin_precon_t, atoms: usize) -> rgmin_status_t {
@@ -5250,16 +5166,10 @@ fn install_ff(solver: *mut rgmin_solver_t, p: &rgmin_precon_t, atoms: usize) -> 
         }
     }
     let params = ff_params_from_precon(p);
-    match crate::precon::FfState::deferred(bonds, angles, params) {
-        Ok(state) => {
-            unsafe { (*solver).solver.set_ff_deferred(state) };
-            rgmin_status_t::RGMIN_SUCCESS
-        }
-        Err(e) => {
-            set_last_error(&e.to_string());
-            rgmin_status_t::RGMIN_INVALID_PARAMETER
-        }
-    }
+    invalid_on_error(
+        crate::precon::FfState::deferred(bonds, angles, params)
+            .map(|state| unsafe { (*solver).solver.set_ff_deferred(state) }),
+    )
 }
 
 fn exp_params_from_precon(p: &rgmin_precon_t) -> ExpParams {
@@ -5363,10 +5273,7 @@ pub unsafe extern "C" fn rgmin_solver_set_precon(
 /// `solver` is null or a live session.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_clear_precon(solver: *mut rgmin_solver_t) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.clear_precon() };
+    unsafe { with_solver(solver, |s| s.clear_precon()) };
 }
 
 /// Energy scale of the installed geometry preconditioner, or NaN.
@@ -5559,10 +5466,7 @@ pub unsafe extern "C" fn rgmin_solver_set_objective_roundoff(
 /// A non-null `solver` must be a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_geometry_step(solver: *mut rgmin_solver_t, enabled: i32) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_geometry_step(enabled != 0) };
+    unsafe { with_solver(solver, |s| s.set_geometry_step(enabled != 0)) };
 }
 
 /// `0` off, `1` auto, `2` translation, `3` translation and rotation.
@@ -5592,10 +5496,7 @@ pub unsafe extern "C" fn rgmin_solver_set_rigid_mass_metric(
     solver: *mut rgmin_solver_t,
     enabled: i32,
 ) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_rigid_mass_metric(enabled != 0) };
+    unsafe { with_solver(solver, |s| s.set_rigid_mass_metric(enabled != 0)) };
 }
 
 /// Coordinates store `q_i = sqrt(m_i) x_i`. Not both this and the mass metric.
@@ -5608,10 +5509,7 @@ pub unsafe extern "C" fn rgmin_solver_set_rigid_mass_weighted(
     solver: *mut rgmin_solver_t,
     enabled: i32,
 ) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_rigid_mass_weighted(enabled != 0) };
+    unsafe { with_solver(solver, |s| s.set_rigid_mass_weighted(enabled != 0)) };
 }
 
 /// Periodic axes. A slab is `(1, 1, 0)`.
@@ -5626,10 +5524,7 @@ pub unsafe extern "C" fn rgmin_solver_set_pbc_axes(
     y: i32,
     z: i32,
 ) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_pbc_axes(x != 0, y != 0, z != 0) };
+    unsafe { with_solver(solver, |s| s.set_pbc_axes(x != 0, y != 0, z != 0)) };
 }
 
 /// Length `3N`. A nonzero byte freezes that coordinate. Null or `len == 0` clears it.
@@ -5701,10 +5596,7 @@ pub unsafe extern "C" fn rgmin_solver_set_factor_shape(
     n: usize,
     p: usize,
 ) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_factor_shape(n, p) };
+    unsafe { with_solver(solver, |s| s.set_factor_shape(n, p)) };
 }
 
 /// Configure the unitary geometry.
@@ -5713,10 +5605,7 @@ pub unsafe extern "C" fn rgmin_solver_set_factor_shape(
 /// `solver` must be null or a live handle from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_set_unitary(solver: *mut rgmin_solver_t, n: usize) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_unitary(n) };
+    unsafe { with_solver(solver, |s| s.set_unitary(n)) };
 }
 
 /// Caller-owned Eckart buffers. One per image. Not thread-local.
@@ -5931,10 +5820,7 @@ pub unsafe extern "C" fn rgmin_rigid_align(
 /// `solver` is null or a live session from [`rgmin_solver_create`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rgmin_solver_forget_evaluation(solver: *mut rgmin_solver_t) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.forget_evaluation() };
+    unsafe { with_solver(solver, |s| s.forget_evaluation()) };
 }
 
 /// Opt-in L-BFGS NEB guards (`Solver::set_lbfgs_neb_guards`): distance,
@@ -5950,10 +5836,7 @@ pub unsafe extern "C" fn rgmin_solver_set_lbfgs_neb_guards(
     solver: *mut rgmin_solver_t,
     enabled: i32,
 ) {
-    if solver.is_null() {
-        return;
-    }
-    unsafe { (*solver).solver.set_lbfgs_neb_guards(enabled != 0) };
+    unsafe { with_solver(solver, |s| s.set_lbfgs_neb_guards(enabled != 0)) };
 }
 
 fn optional_positive(v: f64) -> Option<f64> {
