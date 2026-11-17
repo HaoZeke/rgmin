@@ -8,9 +8,7 @@ use ndarray::Array1;
 
 use crate::control::Control;
 use crate::manifold::{Manifold, ManifoldKind};
-use crate::step::{
-    cap_displacement_atom, clip_owned, finite, l2, max_atom_motion, scale_step, scale_step_atom,
-};
+use crate::step::{apply_caps, cap_displacement_atom, clip_owned, finite, l2, max_atom_motion};
 
 pub(crate) const ENERGY_RISE: f64 = 1.0e-8;
 const WINDOW: usize = 5;
@@ -137,11 +135,7 @@ where
     }
     let mut trial = manifold.retract(pos, &step);
     let atom_cap = atom_maxmove.filter(|cap| *cap > 0.0 && cap.is_finite());
-    if let Some(cap) = atom_cap {
-        scale_step_atom(pos, &mut trial, cap);
-    } else if let Some(cap) = control.maxmove_cap() {
-        scale_step(pos, &mut trial, cap);
-    }
+    apply_caps(pos, &mut trial, atom_cap, control.maxmove_cap());
     Some(clip_owned(obj.bounds(), trial))
 }
 
@@ -592,11 +586,7 @@ mod tests {
                     let control = Control { maxmove, ..ctrl() };
                     let step = &dir * 0.5;
                     let mut expect = kind.retract(&pos, &step);
-                    if let Some(cap) = atom {
-                        scale_step_atom(&pos, &mut expect, cap);
-                    } else if let Some(cap) = maxmove {
-                        scale_step(&pos, &mut expect, cap);
-                    }
+                    apply_caps(&pos, &mut expect, atom, maxmove);
                     let expect = obj.bounds().clip(expect.view());
                     let got = trial_point(&obj, &pos, &dir, 0.5, &control, atom, &kind).unwrap();
                     assert_eq!(got, expect, "{kind:?} k={k} atom={atom:?} cap={maxmove:?}");

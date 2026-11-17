@@ -24,7 +24,7 @@ use crate::manifold::ManifoldKind;
 use crate::report::Report;
 use crate::rigid::project_out_rot_trans;
 use crate::scg::DirectionalCurvature;
-use crate::step::{one_shot_report, scale_step, scale_step_atom};
+use crate::step::{apply_caps, one_shot_report};
 use crate::trust::{reduction_ratio, update_radius};
 use crate::vecops::{axpy, dot, nrm2};
 
@@ -817,11 +817,7 @@ where
     } else {
         let mut trial = x.clone();
         axpy(1.0, p.view(), &mut trial);
-        if let Some(cap) = req.atom_cap {
-            scale_step_atom(x, &mut trial, cap);
-        } else if let Some(cap) = req.euclid_cap {
-            scale_step(x, &mut trial, cap);
-        }
+        apply_caps(x, &mut trial, req.atom_cap, req.euclid_cap);
         trial = obj.bounds().clip(trial.view());
         let step = &trial - x;
         (trial, step)

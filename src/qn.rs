@@ -8,8 +8,8 @@ use crate::error::{Error, Result};
 use crate::linesearch::LineSearch;
 use crate::report::Report;
 use crate::step::{
-    energy_noise_report, implicit_atom_cap, l2, next_istep, one_shot_report, qn_istep, scale_step,
-    scale_step_atom, take_step,
+    apply_caps, energy_noise_report, implicit_atom_cap, l2, next_istep, one_shot_report, qn_istep,
+    take_step,
 };
 use crate::trust::{
     accept_ratio, cauchy_point, dogleg_direction, predicted_reduction, reduction_ratio,
@@ -190,11 +190,7 @@ where
         }
         let dir = sr_trust_direction(&b, &grad, radius);
         let mut trial = &pos + &dir;
-        if let Some(cap) = atom_cap {
-            scale_step_atom(&pos, &mut trial, cap);
-        } else if let Some(cap) = control.maxmove_cap() {
-            scale_step(&pos, &mut trial, cap);
-        }
+        apply_caps(&pos, &mut trial, atom_cap, control.maxmove_cap());
         trial = obj.bounds().clip(trial.view());
         let p = &trial - &pos;
         let pnorm = l2(&p);

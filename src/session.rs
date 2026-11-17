@@ -52,8 +52,8 @@ use crate::quickmin::{
 use crate::report::{Report, Status};
 use crate::rigid::{RigidMode, RigidWorkspace, project_out_rot_trans};
 use crate::step::{
-    Taken, cap_alpha, cap_displacement_atom, l2, max_atom_displacement, nlcg_opening_alpha,
-    qn_istep, scale_displacement_to_atom_cap, scale_step, scale_step_atom, take_step_with_options,
+    Taken, apply_caps, cap_alpha, cap_displacement_atom, l2, max_atom_displacement,
+    nlcg_opening_alpha, qn_istep, scale_displacement_to_atom_cap, take_step_with_options,
 };
 use crate::trust::{
     accept_ratio, burdakov_radius, dogleg_direction, predicted_reduction, reduction_ratio,
@@ -3397,11 +3397,7 @@ impl Solver {
             pair
         } else {
             let mut trial = &*x + &dir;
-            if let Some(cap) = self.atom_maxmove {
-                scale_step_atom(x, &mut trial, cap);
-            } else if let Some(cap) = self.control.maxmove_cap() {
-                scale_step(x, &mut trial, cap);
-            }
+            apply_caps(x, &mut trial, self.atom_maxmove, self.control.maxmove_cap());
             trial = obj.bounds().clip(trial.view());
             let p = &trial - &*x;
             (trial, p)
@@ -4143,11 +4139,12 @@ impl Solver {
                             let mut trial = x.clone();
                             trial += &dx;
                             if !state.abc {
-                                if let Some(cap) = self.atom_maxmove {
-                                    scale_step_atom(x, &mut trial, cap);
-                                } else if let Some(cap) = self.control.maxmove_cap() {
-                                    scale_step(x, &mut trial, cap);
-                                }
+                                apply_caps(
+                                    x,
+                                    &mut trial,
+                                    self.atom_maxmove,
+                                    self.control.maxmove_cap(),
+                                );
                             }
                             let bounds = obj.bounds();
                             if bounds.low.iter().any(|v| v.is_finite())
@@ -4481,11 +4478,7 @@ impl Solver {
     }
 
     fn clip_trial(&self, origin: &Array1<f64>, trial: &mut Array1<f64>) {
-        if let Some(cap) = self.atom_maxmove {
-            scale_step_atom(origin, trial, cap);
-        } else if let Some(cap) = self.control.maxmove_cap() {
-            scale_step(origin, trial, cap);
-        }
+        apply_caps(origin, trial, self.atom_maxmove, self.control.maxmove_cap());
     }
 
     /// One SR1/SR2 trust-region trial. The Hessian update waits until the
@@ -5253,11 +5246,7 @@ impl Solver {
                 }
                 let dx = quickmin_session_step(state, session, x, &force);
                 let mut trial = &*x + &dx;
-                if let Some(cap) = self.atom_maxmove {
-                    scale_step_atom(x, &mut trial, cap);
-                } else if let Some(cap) = self.control.maxmove_cap() {
-                    scale_step(x, &mut trial, cap);
-                }
+                apply_caps(x, &mut trial, self.atom_maxmove, self.control.maxmove_cap());
                 trial = obj.bounds().clip(trial.view());
                 if session.options.rescale_on_clamp {
                     quickmin_rescale_velocity(&mut state.vel, &dx, &(&trial - &*x));
@@ -5288,11 +5277,7 @@ impl Solver {
                 let dx = steepest.mapv(|v| h * v);
                 let proposed = &*x + &dx;
                 let mut trial = proposed.clone();
-                if let Some(cap) = self.atom_maxmove {
-                    scale_step_atom(x, &mut trial, cap);
-                } else if let Some(cap) = self.control.maxmove_cap() {
-                    scale_step(x, &mut trial, cap);
-                }
+                apply_caps(x, &mut trial, self.atom_maxmove, self.control.maxmove_cap());
                 trial = obj.bounds().clip(trial.view());
                 // Only a move the cap or the box changed is shorter than h.
                 // The length ratio of an unchanged move rounds, and one ulp

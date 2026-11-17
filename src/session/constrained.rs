@@ -45,8 +45,7 @@ use crate::qn_step::QnStep;
 use crate::report::Report;
 use crate::rigid::project_horizontal;
 use crate::step::{
-    finite, l2, max_atom_motion, next_istep, non_finite, scale_displacement_to_atom_cap,
-    scale_step, scale_step_atom,
+    apply_caps, finite, l2, max_atom_motion, next_istep, non_finite, scale_displacement_to_atom_cap,
 };
 use crate::trust::{
     accept_ratio, dogleg_direction, predicted_reduction, reduction_ratio, update_radius,
@@ -70,11 +69,7 @@ struct Caps {
 
 impl Caps {
     fn apply(self, origin: &Array1<f64>, trial: &mut Array1<f64>) {
-        if let Some(cap) = self.atom {
-            scale_step_atom(origin, trial, cap);
-        } else if let Some(cap) = self.euclid {
-            scale_step(origin, trial, cap);
-        }
+        apply_caps(origin, trial, self.atom, self.euclid);
     }
 }
 

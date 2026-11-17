@@ -36,7 +36,7 @@ pub struct EonFeat {
     /// The step cleared the curvature pairs.
     pub reset: u8,
 }
-use crate::step::{finite, non_finite, scale_step, scale_step_atom};
+use crate::step::{apply_caps, finite, non_finite};
 
 fn feat_of(
     step: &Array1<f64>,
@@ -457,11 +457,12 @@ impl Solver {
         for i in 0..n {
             x[i] += self.scratch_b[i];
         }
-        if let Some(cap) = self.atom_maxmove {
-            scale_step_atom(&self.scratch, x, cap);
-        } else if let Some(cap) = self.control.maxmove_cap() {
-            scale_step(&self.scratch, x, cap);
-        }
+        apply_caps(
+            &self.scratch,
+            x,
+            self.atom_maxmove,
+            self.control.maxmove_cap(),
+        );
         if v2
             && dt > 0.0
             && let Inner::Fire(state) = &mut self.inner

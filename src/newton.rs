@@ -18,7 +18,7 @@ use ndarray::{Array1, Array2, ArrayView1};
 use crate::control::Control;
 use crate::error::{Error, Result};
 use crate::report::Report;
-use crate::step::{implicit_atom_cap, l2, one_shot_report, scale_step, scale_step_atom};
+use crate::step::{apply_caps, implicit_atom_cap, l2, one_shot_report};
 
 const ENERGY_RISE: f64 = 1.0e-8;
 const EIG_FLOOR: f64 = 1.0e-8;
@@ -191,11 +191,12 @@ where
     let mut alpha = 1.0;
     for _ in 0..10 {
         let mut trial = pos + &(dir * alpha);
-        if let Some(cap) = implicit_atom_cap(control) {
-            scale_step_atom(pos, &mut trial, cap);
-        } else if let Some(cap) = control.maxmove_cap() {
-            scale_step(pos, &mut trial, cap);
-        }
+        apply_caps(
+            pos,
+            &mut trial,
+            implicit_atom_cap(control),
+            control.maxmove_cap(),
+        );
         trial = obj.bounds().clip(trial.view());
         let (ft, gt) = obj.value_and_gradient(trial.view());
         if ft - value <= ENERGY_RISE {

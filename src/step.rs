@@ -194,6 +194,22 @@ pub(crate) fn scale_step_atom(origin: &Array1<f64>, trial: &mut Array1<f64>, cap
     }
 }
 
+/// Cap one trial move: the per-atom cap when there is one, else the
+/// Euclidean cap. A per-atom cap that does not bind still hides the
+/// Euclidean one.
+pub(crate) fn apply_caps(
+    origin: &Array1<f64>,
+    trial: &mut Array1<f64>,
+    atom: Option<f64>,
+    euclid: Option<f64>,
+) {
+    if let Some(cap) = atom {
+        scale_step_atom(origin, trial, cap);
+    } else if let Some(cap) = euclid {
+        scale_step(origin, trial, cap);
+    }
+}
+
 /// Largest per-atom (xyz triple) norm of `v`; a trailing partial triple
 /// counts as one more atom, matching [`scale_step_atom`].
 pub(crate) fn max_atom_norm(v: ArrayView1<'_, f64>) -> f64 {
