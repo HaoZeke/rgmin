@@ -52,13 +52,13 @@ The result JSON contains the odd/even A/A wall-time noise band and its Mann-Whit
 ## Failures and gaps
 
 Nonconverged or failed runs: 408.
-- Cu108-cell cell-lbfgs rgmin: 12 nonconverged; force calls/attempt 1e+03 [1e+03, 1e+03].
-- Cu255-vacancy sd eon: 12 nonconverged; force calls/attempt 1e+03 [1e+03, 1e+03].
-- LJ38 sd eon: 120 nonconverged; force calls/attempt 1e+03 [1e+03, 1e+03].
-- LJ75 lbfgs ase: 120 nonconverged; force calls/attempt 1e+03 [1e+03, 1e+03].
-- LJ75 sd eon: 120 nonconverged; force calls/attempt 1e+03 [1e+03, 1e+03].
-- Si64 sd eon: 12 nonconverged; force calls/attempt 1e+03 [1e+03, 1e+03].
-- Si64-cell cell-lbfgs rgmin: 12 nonconverged; force calls/attempt 1e+03 [1e+03, 1e+03].
+- Cu108-cell cell-lbfgs rgmin: 12 nonconverged; force calls/attempt 1002 [1002, 1002].
+- Cu255-vacancy sd eon: 12 nonconverged; force calls/attempt 1001 [1001, 1001].
+- LJ38 sd eon: 120 nonconverged; force calls/attempt 1001 [1001, 1001].
+- LJ75 lbfgs ase: 120 nonconverged; force calls/attempt 1001 [1001, 1001].
+- LJ75 sd eon: 120 nonconverged; force calls/attempt 1001 [1001, 1001].
+- Si64 sd eon: 12 nonconverged; force calls/attempt 1001 [1001, 1001].
+- Si64-cell cell-lbfgs rgmin: 12 nonconverged; force calls/attempt 1002 [1002, 1002].
 The eOn client has no variable-cell optimizer. A generic rgpot EMT Python binding was absent and is delivered as a separate source revision; the selected Cu systems use the predeclared Morse potential.
 
 ## Bugs
