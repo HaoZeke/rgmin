@@ -127,9 +127,9 @@ def make_system(name: str, seed: int, fixtures: Path) -> tuple[Atoms, str, bool]
     from ase.build import bulk
 
     if name == "LJ38":
-        return load_cluster(fixtures / "lj38.xyz", seed), "ljcluster", False
+        return load_cluster(fixtures / "lj38.xyz", seed), "lj", False
     if name == "LJ75":
-        return load_cluster(fixtures / "lj75.xyz", seed), "ljcluster", False
+        return load_cluster(fixtures / "lj75.xyz", seed), "lj", False
     if name == "Cu255-vacancy":
         atoms = bulk("Cu", "fcc", a=3.61, cubic=True).repeat((4, 4, 4))
         centre = np.asarray(atoms.cell).sum(axis=0) * 0.5
@@ -159,7 +159,7 @@ def tracked_calculator(kind: str, cell_relaxation: bool) -> tuple[RgpotCalculato
     from rgpot.ase import RgpotCalculator
 
     constructors = {
-        "ljcluster": getattr(rgpot, "LJClusterPot", None),
+        "lj": getattr(rgpot, "LJPot", None),
         "morse": getattr(rgpot, "MorsePot", None),
         "sw": getattr(rgpot, "StillingerWeberSi", None),
         "emt": getattr(rgpot, "EMTPot", None),
@@ -415,8 +415,8 @@ def main() -> None:
             "order": "forward on even rounds, reverse on odd rounds",
             "cluster_perturbation_standard_deviation_angstrom": 0.02,
             "potentials": {
-                "LJ38": "LJClusterPot defaults",
-                "LJ75": "LJClusterPot defaults",
+                "LJ38": "LJPot defaults",
+                "LJ75": "LJPot defaults",
                 "Cu255-vacancy": (
                     "MorsePot De=0.3429, a=1.3588, re=2.866, "
                     "cutoff=5.0, switch_width=1.0"
