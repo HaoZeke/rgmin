@@ -217,12 +217,16 @@ def number(value: float | None, scale: float = 1.0, digits: int = 3) -> str:
     return f"{value * scale:.{digits}g}"
 
 
-def interval(stats: dict[str, float | None], scale: float = 1.0) -> str:
+def interval(
+    stats: dict[str, float | None],
+    scale: float = 1.0,
+    digits: int = 3,
+) -> str:
     if stats["median"] is None:
         return "—"
     return (
-        f"{number(stats['median'], scale)} "
-        f"[{number(stats['q1'], scale)}, {number(stats['q3'], scale)}]"
+        f"{number(stats['median'], scale, digits)} "
+        f"[{number(stats['q1'], scale, digits)}, {number(stats['q3'], scale, digits)}]"
     )
 
 
@@ -302,7 +306,8 @@ def markdown_report(document: dict[str, Any]) -> str:
         failure_groups[(row["system"], row["method"], row["implementation"])].append(row)
     failure_text = "\n".join(
         f"- {system} {method} {implementation}: {len(rows)} nonconverged; "
-        f"force calls/attempt {interval(quartiles([row['force_calls'] for row in rows]))}."
+        f"force calls/attempt "
+        f"{interval(quartiles([row['force_calls'] for row in rows]), digits=6)}."
         for (system, method, implementation), rows in sorted(failure_groups.items())
     )
     widest = max(
