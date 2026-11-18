@@ -66,3 +66,14 @@ python bench/optimizers/analyze.py \
 The analyzed JSON includes medians, interquartile ranges, odd/even A/A
 noise bands per cell, Mann-Whitney p-values for continuous metrics, Fisher
 exact p-values for success rates, and paired final-energy agreement.
+
+The variable-cell failure can be reproduced independently:
+
+```console
+python bench/optimizers/repro_cell.py \
+  --system Cu108-cell \
+  --fixtures bench/optimizers/data \
+  --steps 200 \
+  --fmax 0.01 \
+  --stress-max 0.001
+```

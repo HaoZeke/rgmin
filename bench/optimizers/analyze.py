@@ -274,6 +274,38 @@ def markdown_report(document: dict[str, Any]) -> str:
         if row["aa_wall"]["relative_band_width"] is not None
         else -1.0,
     )
+    bugs = []
+    for system in ("Cu108-cell", "Si64-cell"):
+        rgmin_cell = summaries.get((system, "cell-lbfgs", "rgmin"))
+        ase_cell = summaries.get((system, "cell-lbfgs", "ase"))
+        if (
+            rgmin_cell is not None
+            and ase_cell is not None
+            and rgmin_cell["successes"] == 0
+            and ase_cell["successes"] > 0
+        ):
+            final_stresses = [
+                float(record["stress_max_ev_per_angstrom3"])
+                for record in document["records"]
+                if record["system"] == system
+                and record["method"] == "cell-lbfgs"
+                and record["implementation"] == "rgmin"
+                and record["stress_max_ev_per_angstrom3"] is not None
+            ]
+            median_stress = float(np.median(final_stresses)) if final_stresses else None
+            bugs.append(
+                f"- {system}: rgmin capped L-BFGS converged "
+                f"{rgmin_cell['successes']}/{rgmin_cell['n']} times while ASE converged "
+                f"{ase_cell['successes']}/{ase_cell['n']}; rgmin median final stress was "
+                f"{number(median_stress)} eV/A^3."
+            )
+    if bugs:
+        bug_text = "\n".join(bugs) + (
+            "\n- Minimal reproduction: `bench/optimizers/repro_cell.py` runs the same "
+            "capped L-BFGS and filter without the benchmark scheduler."
+        )
+    else:
+        bug_text = "No rgmin bug was identified by this pass."
     lines.extend(
         [
             "",
@@ -288,7 +320,7 @@ def markdown_report(document: dict[str, Any]) -> str:
             "",
             "## Bugs",
             "",
-            "No rgmin bug was identified by this pass.",
+            bug_text,
             "",
         ]
     )
