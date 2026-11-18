@@ -88,13 +88,8 @@ def test_dtype_and_order_are_type_errors(dtype: np.dtype, order: str) -> None:
 
 @settings(max_examples=10, deadline=None)
 @given(index=st.integers(min_value=0, max_value=3))
-def test_nan_in_x_reaches_the_callback(index: int) -> None:
-    """A NaN coordinate is accepted and the callback still runs.
-
-    The wide-box oracle clips with ``f64::max`` before the first
-    evaluation, and ``NaN.max(low)`` is ``low`` (``-1e12``). The binding
-    copies the buffer unchanged; the clip is the solver.
-    """
+def test_nan_in_x_is_refused_before_the_callback(index: int) -> None:
+    """A NaN coordinate is refused before any callback evaluation."""
     seen: list[np.ndarray] = []
 
     def fg(x: np.ndarray) -> tuple[float, np.ndarray]:
@@ -104,10 +99,9 @@ def test_nan_in_x_reaches_the_callback(index: int) -> None:
     x = np.ones(4)
     x[index] = np.nan
     solver = rgmin.Solver(4, rgmin.SolverConfig("sd", maxiter=1, gtol=0.0))
-    solver.step(fg, x)
-    assert seen
-    assert seen[0][index] == -1e12
-    assert np.all(np.isfinite(seen[0]))
+    with pytest.raises(RuntimeError, match="non-finite value or gradient"):
+        solver.step(fg, x)
+    assert not seen
 
 
 @settings(max_examples=15, deadline=None)

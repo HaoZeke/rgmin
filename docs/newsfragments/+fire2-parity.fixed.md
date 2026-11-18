@@ -1,2 +1,7 @@
-- Capped the Guénolé et al. (`Comput. Mater. Sci. 175, 109584 (2020)`) FIRE 2.0 time-step ceiling `dt_max` when an uphill reset is immediately followed by a second non-positive-power step after one downhill move (`prev_n_pos == 1`), and skipped velocity rescaling on unshortened moves under `FirePreset::Guenole2020`, preventing the sawtooth Euler-instability cycle on the 31,999-atom Cu vacancy cell (270 force calls across 262 iterations versus 805 across 766).
-- Added per-step FIRE diagnostic tracing (`FireTrace`, `Solver::start_fire_trace`, `Solver::take_fire_trace`) recording `dt`, `alpha`, `power`, `n_pos`, `half_step_backs`, and `clipped_moves`.
+- Non-finite starts and trials now fail before any clip bookkeeping is
+  recorded in `step_first_order` (`src/session.rs:3710`) and `assess`
+  (`src/session.rs:5237`), and `clip_free` (`src/session/constrained.rs:97`)
+  keeps its finite-only coordinate clipping.
+- ABC-FIRE component clipping now leaves the velocity unchanged when
+  `vmax <= 0` in `fire_clip_components` (`src/fire.rs:609`) instead of
+  forcing every component to zero.
