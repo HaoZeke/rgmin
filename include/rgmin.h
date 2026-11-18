@@ -447,6 +447,9 @@ typedef enum rgmin_accept_t {
     /** Clipped step, one oracle, no line search. Released 0.5.2. */
     RGMIN_ACCEPT_STEP = 3
 } rgmin_accept_t;
+/** Acceptance rule for each step (eOn `lbfgs_accept`). Legal on any session.
+ *  \ref rgmin_solver_create opens with \c RGMIN_ACCEPT_ENERGY. A session
+ *  built from Rust with `Solver::new` opens with \c RGMIN_ACCEPT_NONE. */
 void rgmin_solver_set_accept(rgmin_solver_t *solver, rgmin_accept_t accept);
 
 /** FIRE schedule. */
@@ -454,6 +457,7 @@ typedef enum rgmin_fire_variant_t {
     RGMIN_FIRE_RGMIN = 0,
     RGMIN_FIRE_GUENOLE2020 = 1
 } rgmin_fire_variant_t;
+/** Select the FIRE schedule. A no-op on a session that is not FIRE. */
 void rgmin_solver_set_fire_variant(rgmin_solver_t *solver,
                                    rgmin_fire_variant_t variant);
 /** Split a quick-min session at `at`: atoms `[0, at)`, cell `[at, n)`.
@@ -468,6 +472,9 @@ typedef enum rgmin_quickmin_variant_t {
     RGMIN_QUICKMIN_EON = 1,
     RGMIN_QUICKMIN_PER_ATOM = 2
 } rgmin_quickmin_variant_t;
+/** Select the quick-min options. A no-op on a session that is not
+ *  quick-min. The velocity and the time step restart; the cell split of
+ *  \ref rgmin_solver_set_quickmin_cell stays. */
 void rgmin_solver_set_quickmin_variant(rgmin_solver_t *solver,
                                        rgmin_quickmin_variant_t variant);
 
@@ -567,6 +574,9 @@ void rgmin_solver_set_atom_maxmove(rgmin_solver_t *solver, double maxmove);
  *  Unset, a Wolfe session with an explicit per-atom cap takes this step;
  *  off keeps its strong Wolfe search under the cap. */
 void rgmin_solver_set_geometry_step(rgmin_solver_t *solver, int32_t enabled);
+/** eOn `lbfgs_project_rigid`. Nonzero declares a molecule and selects
+ *  \c RGMIN_RIGID_AUTO; zero forces the Euclidean projection off. A
+ *  quotient manifold still projects. */
 void rgmin_solver_set_project_rigid(rgmin_solver_t *solver, int32_t enabled);
 /** 0 off, 1 auto, 2 translation, 3 translation and rotation.
  *  Nonzero on \ref rgmin_solver_set_project_rigid is auto. */
@@ -576,8 +586,13 @@ typedef enum rgmin_rigid_mode_t {
     RGMIN_RIGID_TRANSLATION = 2,
     RGMIN_RIGID_TRANSLATION_ROTATION = 3
 } rgmin_rigid_mode_t;
+/** Rigid-motion projection mode, an \ref rgmin_rigid_mode_t value. */
 void rgmin_solver_set_rigid_mode(rgmin_solver_t *solver, int32_t mode);
+/** Project in the Cartesian mass inner product `sum m_i u_i . v_i`. Turns
+ *  the mass-weighted chart off. A raw force should leave this at zero. */
 void rgmin_solver_set_rigid_mass_metric(rgmin_solver_t *solver, int32_t enabled);
+/** The coordinates are `q_i = sqrt(m_i) x_i`, so the metric is Euclidean.
+ *  Turns the Cartesian mass metric off; the two switches are not both on. */
 void rgmin_solver_set_rigid_mass_weighted(rgmin_solver_t *solver, int32_t enabled);
 /** Periodic axes. A slab is (1, 1, 0). */
 void rgmin_solver_set_pbc_axes(rgmin_solver_t *solver, int32_t x, int32_t y, int32_t z);
@@ -586,7 +601,11 @@ void rgmin_solver_set_frozen(rgmin_solver_t *solver, const uint8_t *frozen, size
 /** Broken translations, then broken rotations. The host sets both. */
 void rgmin_solver_set_broken_axes(rgmin_solver_t *solver, int32_t tx, int32_t ty,
                                 int32_t tz, int32_t rx, int32_t ry, int32_t rz);
+/** Al-Baali extra updates of the newest L-BFGS pair. Accepted and without
+ *  effect: a replayed newest pair leaves the BFGS map unchanged. */
 void rgmin_solver_set_extra_updates(rgmin_solver_t *solver, size_t extra);
+/** Li-Fukushima cautious pair filter of L-BFGS: a pair `(s, y)` is dropped
+ *  when `s . y < eps |s|^2 |g|^alpha`. `eps <= 0` turns the filter off. */
 void rgmin_solver_set_cautious(rgmin_solver_t *solver, double eps, double alpha);
 /** Opt-in L-BFGS NEB guards: distance, angle and curvature resets and an
  *  empty-memory scale of 0.01. Nonzero enables; other methods ignore it.
@@ -630,6 +649,7 @@ typedef enum rgmin_highs_solver_t {
 _Static_assert(sizeof(rgmin_highs_solver_t) == sizeof(int32_t),
                "rgmin_highs_solver_t is i32-wide; do not build this header with -fshort-enums");
 #endif
+/** HiGHS solver for the constrained step. Unknown integers return 1. */
 int32_t rgmin_solver_set_highs_solver(rgmin_solver_t *solver,
                                       rgmin_highs_solver_t kind);
 /** HiGHS `run_crossover`. Constrained dest defaults to
@@ -643,6 +663,7 @@ typedef enum rgmin_highs_crossover_t {
 _Static_assert(sizeof(rgmin_highs_crossover_t) == sizeof(int32_t),
                "rgmin_highs_crossover_t is i32-wide; do not build this header with -fshort-enums");
 #endif
+/** Set HiGHS `run_crossover`. Unknown integers return 1. */
 int32_t rgmin_solver_set_highs_crossover(rgmin_solver_t *solver,
                                          rgmin_highs_crossover_t kind);
 /** HiGHS callback kind. Integers match HiGHS `HighsCallbackType`. */
@@ -661,6 +682,8 @@ _Static_assert(sizeof(rgmin_highs_cb_kind_t) == sizeof(int32_t),
  *  is freed, and may be called from any thread that steps the session. */
 typedef void (*rgmin_highs_callback_t)(int32_t kind, const char *message,
                                        int32_t *interrupt, void *user);
+/** Install the HiGHS callback of \ref rgmin_highs_callback_t. A NULL `cb`
+ *  clears it. */
 int32_t rgmin_solver_set_highs_callback(rgmin_solver_t *solver,
                                         rgmin_highs_callback_t cb, void *user);
 /** Embedded manifold. Euclidean is the default.
@@ -709,6 +732,8 @@ typedef enum rgmin_manifold_t {
     RGMIN_MANIFOLD_CENTERED_MATRIX = 22,
     RGMIN_MANIFOLD_UNITARY = 23
 } rgmin_manifold_t;
+/** Select the session manifold by token. Tokens that carry a shape start
+ *  at the defaults their entries name; the setters below give the shape. */
 void rgmin_solver_set_manifold(rgmin_solver_t *solver, rgmin_manifold_t manifold);
 /** Oblique OB(n,m): product of m unit spheres in R^n, column-major. */
 void rgmin_solver_set_oblique(rgmin_solver_t *solver, size_t n, size_t m);
@@ -737,7 +762,10 @@ void rgmin_solver_set_positive(rgmin_solver_t *solver, size_t n);
  *  centers rows. */
 void rgmin_solver_set_centered_matrix(rgmin_solver_t *solver, size_t m, size_t n,
                                     int32_t center_rows);
+/** Gr(n,p) for token 8 (Grassmann). A zero dimension clears the shape, and
+ *  the session then reads Gr(len,1). */
 void rgmin_solver_set_factor_shape(rgmin_solver_t *solver, size_t n, size_t p);
+/** U(n), packed interleaved row-major, length 2n^2. Token 23. */
 void rgmin_solver_set_unitary(rgmin_solver_t *solver, size_t n);
 
 /** Cartesian power: count unit-weight copies of the shape-free manifold
@@ -1239,8 +1267,13 @@ rgmin_status_t rgmin_lowest_eigenpair_with_options(
 
 /** Caller-owned Eckart buffers. One per image. */
 typedef struct rgmin_rigid_workspace rgmin_rigid_workspace_t;
+/** Empty workspace, owned by the caller. Release it with
+ *  \ref rgmin_rigid_workspace_free. */
 rgmin_rigid_workspace_t *rgmin_rigid_workspace_new(void);
+/** Free a workspace from \ref rgmin_rigid_workspace_new. NULL is a no-op. */
 void rgmin_rigid_workspace_free(rgmin_rigid_workspace_t *ws);
+/** Rank of the last projection, or Hessian projection, on this workspace;
+ *  0 for NULL. */
 size_t rgmin_rigid_workspace_rank(const rgmin_rigid_workspace_t *ws);
 /** P v in place. n_mass == 0 is unit mass. frozen == NULL is no freeze. */
 rgmin_status_t rgmin_rigid_project(
