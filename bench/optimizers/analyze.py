@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -297,12 +297,13 @@ def markdown_report(document: dict[str, Any]) -> str:
                 + " |"
             )
     failures = document["failures"]
-    failure_counts = Counter(
-        (row["system"], row["method"], row["implementation"]) for row in failures
-    )
+    failure_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in failures:
+        failure_groups[(row["system"], row["method"], row["implementation"])].append(row)
     failure_text = "\n".join(
-        f"- {system} {method} {implementation}: {count} nonconverged."
-        for (system, method, implementation), count in sorted(failure_counts.items())
+        f"- {system} {method} {implementation}: {len(rows)} nonconverged; "
+        f"force calls/attempt {interval(quartiles([row['force_calls'] for row in rows]))}."
+        for (system, method, implementation), rows in sorted(failure_groups.items())
     )
     widest = max(
         document["summaries"],
@@ -382,6 +383,8 @@ def main() -> None:
             "seed": row["seed"],
             "round": row["round"],
             "error": row["error"],
+            "force_calls": row["force_calls"],
+            "wall_seconds": row["wall_seconds"],
             "fmax_ev_per_angstrom": row["fmax_ev_per_angstrom"],
             "stress_max_ev_per_angstrom3": row["stress_max_ev_per_angstrom3"],
         }
