@@ -8,6 +8,8 @@ The cost is ~f(U, S) = |U - U*|^2 / 2 + |S - S*|^2 / 2~, so the Euclidean gradie
 
 The program is ~examples/tutorial_manifold_fit.py~. Continuous integration runs it.
 
+~Product~, ~Stiefel~ and ~SPD~ are in the maturin package under ~python/~, which is not on PyPI. Install it with ~python -m pip install './python'~ from a checkout, as @@rst::doc:`../howto/install`@@ shows. The PyPI wheel does not have them.
+
 Build the product once. ~"polar"~ selects the second-order Stiefel retraction, and the SPD factor uses the affine-invariant metric.
 
 #+begin_src python
