@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add statistical summaries to a completed optimizer benchmark."""
+"""Create analyzed JSON and Markdown from an unmodified raw benchmark."""
 
 from __future__ import annotations
 
@@ -372,12 +372,25 @@ def markdown_report(document: dict[str, Any]) -> str:
 
 def main() -> None:
     args = parse_args()
+    if args.input.resolve() == args.output.resolve():
+        raise ValueError("analysis output must be separate from the raw input")
     document = json.loads(args.input.read_text(encoding="utf-8"))
+    generated_keys = {"analysis", "summaries", "comparisons", "failures"}
+    present = generated_keys & document.keys()
+    if present:
+        raise ValueError(f"raw input contains analysis keys: {sorted(present)}")
     tolerance = float(document["protocol"]["energy_agreement_tolerance_ev"])
     if tolerance != args.energy_tolerance:
         raise ValueError("analysis tolerance differs from the declared benchmark tolerance")
     records = document["records"]
     groups = grouped_records(records)
+    document["analysis"] = {
+        "continuous_test": "two-sided Mann-Whitney U",
+        "energy_agreement_tolerance_ev": tolerance,
+        "input": args.input.name,
+        "schema": 1,
+        "success_test": "two-sided Fisher exact",
+    }
     document["summaries"] = summarize(groups)
     document["comparisons"] = comparisons(groups, tolerance)
     document["failures"] = [

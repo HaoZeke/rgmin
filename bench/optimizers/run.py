@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import os
 import platform
 import time
 import warnings
+import zipfile
 from dataclasses import dataclass
+from email.parser import Parser
 from pathlib import Path
 from typing import Any
 
@@ -62,14 +65,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, required=True)
     parser.add_argument("--energy-tolerance", type=float, required=True)
     parser.add_argument("--rgmin-sha", required=True)
+    parser.add_argument("--rgpot-tag", required=True)
     parser.add_argument("--rgpot-sha", required=True)
     parser.add_argument("--rgpot-patch-sha", required=True)
     parser.add_argument("--eon-tag", required=True)
     parser.add_argument("--eon-sha", required=True)
     parser.add_argument("--eon-rgpot-sha", required=True)
-    parser.add_argument("--rgmin-wheel-sha256", required=True)
-    parser.add_argument("--rgpot-wheel-sha256", required=True)
-    parser.add_argument("--eon-wheel-sha256", required=True)
+    parser.add_argument("--rgmin-wheel", type=Path, required=True)
+    parser.add_argument("--rgpot-wheel", type=Path, required=True)
+    parser.add_argument("--eon-wheel", type=Path, required=True)
     parser.add_argument("--component", action="append", required=True)
     parser.add_argument("--rust-version", required=True)
     parser.add_argument("--cxx-version", required=True)
@@ -94,6 +98,64 @@ def installed_packages() -> dict[str, str]:
         if name:
             rows[name] = dist.version
     return dict(sorted(rows.items(), key=lambda item: item[0].lower()))
+
+
+def canonical_distribution(name: str) -> str:
+    return name.lower().replace("-", "_").replace(".", "_")
+
+
+def wheel_artifact(path: Path, expected_distribution: str) -> dict[str, str]:
+    if not path.is_file() or path.suffix != ".whl":
+        raise ValueError(f"{expected_distribution} wheel must be a wheel file")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    with zipfile.ZipFile(path) as wheel:
+        metadata_files = [
+            name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")
+        ]
+        if len(metadata_files) != 1:
+            raise ValueError(f"{expected_distribution} wheel has invalid metadata")
+        metadata = Parser().parsestr(wheel.read(metadata_files[0]).decode("utf-8"))
+    distribution = metadata["Name"]
+    version = metadata["Version"]
+    if canonical_distribution(distribution) != canonical_distribution(expected_distribution):
+        raise ValueError(f"expected {expected_distribution} wheel, found {distribution}")
+    installed_version = importlib.metadata.version(expected_distribution)
+    if installed_version != version:
+        raise ValueError(
+            f"installed {expected_distribution} {installed_version} differs from wheel {version}"
+        )
+    return {
+        "distribution": distribution,
+        "filename": path.name,
+        "sha256": digest.hexdigest(),
+        "version": version,
+    }
+
+
+def cpu_model() -> str:
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.is_file():
+        for line in cpuinfo.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key.strip() in {"model name", "Processor"}:
+                return value.strip()
+    processor = platform.processor()
+    return processor if processor else "unknown"
+
+
+def machine_header() -> dict[str, Any]:
+    page_size = int(os.sysconf("SC_PAGE_SIZE"))
+    physical_pages = int(os.sysconf("SC_PHYS_PAGES"))
+    return {
+        "architecture": platform.machine(),
+        "available_logical_cpus": len(os.sched_getaffinity(0)),
+        "cpu": cpu_model(),
+        "logical_cpus": os.cpu_count(),
+        "memory_bytes": page_size * physical_pages,
+    }
 
 
 def components(items: list[str]) -> dict[str, str]:
@@ -280,10 +342,11 @@ def run_eon(
     energy = float(relaxed.potential_energy)
     forces = np.asarray(relaxed.forces, dtype=np.float64)
     measured_fmax = float(np.linalg.norm(forces, axis=1).max(initial=0.0))
+    accepted = bool(converged) and measured_fmax <= fmax
     return {
-        "converged": bool(converged) and measured_fmax <= fmax,
-        "energy_ev": energy,
-        "fmax_ev_per_angstrom": measured_fmax,
+        "converged": accepted,
+        "energy_ev": energy if accepted else None,
+        "fmax_ev_per_angstrom": measured_fmax if accepted else None,
         "stress_max_ev_per_angstrom3": None,
         "steps": None,
         "eon_force_calls": int(relaxed.force_calls),
@@ -338,6 +401,7 @@ def run_task(
         "outside_potential_seconds": max(0, elapsed - potential_ns) / 1.0e9,
         "force_calls": tracked.calls,
         "error": error,
+        "endpoint_values_comparable": bool(outcome["converged"]),
         **outcome,
     }
 
@@ -399,6 +463,7 @@ def main() -> None:
         raise ValueError("rounds must be at least 12")
     if args.output.exists():
         raise FileExistsError("output already exists; benchmark runs cannot be resumed or replaced")
+    machine = machine_header()
     cores = set_affinity(args.cores, args.thread_count)
     tasks = schedule(args.rounds)
     document: dict[str, Any] = {
@@ -432,6 +497,7 @@ def main() -> None:
         },
         "sources": {
             "rgmin": args.rgmin_sha,
+            "rgpot_tag": args.rgpot_tag,
             "rgpot": args.rgpot_sha,
             "rgpot_binding_patch": args.rgpot_patch_sha,
             "eon_tag": args.eon_tag,
@@ -439,9 +505,9 @@ def main() -> None:
             "eon_bundled_rgpot": args.eon_rgpot_sha,
         },
         "artifacts": {
-            "rgmin_wheel_sha256": args.rgmin_wheel_sha256,
-            "rgpot_wheel_sha256": args.rgpot_wheel_sha256,
-            "eon_wheel_sha256": args.eon_wheel_sha256,
+            "rgmin_wheel": wheel_artifact(args.rgmin_wheel, "rgmin"),
+            "rgpot_wheel": wheel_artifact(args.rgpot_wheel, "rgpot"),
+            "eon_wheel": wheel_artifact(args.eon_wheel, "pyeonclient"),
         },
         "build": {
             "profile": "release",
@@ -454,10 +520,10 @@ def main() -> None:
             "components": components(args.component),
         },
         "runtime": {
+            "machine": machine,
             "python": platform.python_version(),
             "system": platform.system(),
             "release": platform.release(),
-            "machine": platform.machine(),
             "packages": installed_packages(),
         },
         "gaps": [

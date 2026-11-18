@@ -7,8 +7,8 @@ descent. Variable-cell rows compare rgmin and ASE L-BFGS through the same
 relaxation.
 
 The fixed protocol uses release builds, one pinned core and one thread, 12
-order-flipped rounds, no warm-up, and no rescue reruns. Every LJ seed is run
-12 times. Potential dispatch is pinned to scalar outside the harness.
+interleaved order-flipped rounds, no warm-up, and no rescue reruns. Every LJ
+seed is run 12 times. Potential dispatch is pinned to scalar outside the harness.
 Optimizers keep their documented defaults. The only matched
 optimizer setting is the stopping rule: maximum atomic force
 0.01 eV/A, with maximum stress 0.001 eV/A^3 for cell relaxation. The
@@ -37,14 +37,15 @@ python bench/optimizers/run.py \
   --max-steps 1000 \
   --energy-tolerance 0.001 \
   --rgmin-sha <source-sha> \
+  --rgpot-tag <source-tag> \
   --rgpot-sha <source-sha> \
   --rgpot-patch-sha <source-sha> \
   --eon-tag <source-tag> \
   --eon-sha <source-sha> \
   --eon-rgpot-sha <source-sha> \
-  --rgmin-wheel-sha256 <wheel-sha256> \
-  --rgpot-wheel-sha256 <wheel-sha256> \
-  --eon-wheel-sha256 <wheel-sha256> \
+  --rgmin-wheel <wheel-file> \
+  --rgpot-wheel <wheel-file> \
+  --eon-wheel <wheel-file> \
   --component linkcell=<version> \
   --component minimage=<version> \
   --component vesin=<version> \
@@ -54,7 +55,21 @@ python bench/optimizers/run.py \
   --cxx-version <compiler-version>
 ```
 
-Analysis is a separate deterministic pass over the completed records:
+`run.py` creates `results.json`, the raw benchmark artifact. Its top-level
+keys are `schema`, `protocol`, `sources`, `artifacts`, `build`, `runtime`,
+`gaps`, and `records`; it never writes analysis keys. The artifact section
+contains hashes computed from the three supplied wheel archives after their
+distribution names and versions are checked against the installed packages.
+The runtime section records CPU model, architecture, logical CPU counts,
+memory, package versions, and operating-system version, but no hostname.
+
+The recorded wall times are 12 measured repetitions per cell on the machine
+described by that runtime header. They support comparisons within this run;
+they are not single-run speedup claims. Nonconverged eOn endpoints have null
+energy and force values because only their convergence verdict and force-call
+budget are reproducible and compared.
+
+Analysis is a separate deterministic pass over the untouched raw records:
 
 ```console
 python bench/optimizers/analyze.py \
@@ -64,9 +79,15 @@ python bench/optimizers/analyze.py \
   --energy-tolerance 0.001
 ```
 
-The analyzed JSON includes medians, interquartile ranges, odd/even A/A
-noise bands per cell, Mann-Whitney p-values for continuous metrics, Fisher
-exact p-values for success rates, and paired final-energy agreement.
+`analyze.py` refuses in-place output and raw input that already contains
+analysis keys. `results-analyzed.json` copies all raw provenance and adds
+`analysis`, `summaries`, `comparisons`, and `failures`; `results.md` is the
+short rendered table. The analyzed JSON includes medians, interquartile
+ranges, odd/even A/A noise bands per cell, Mann-Whitney p-values for
+continuous metrics, Fisher exact p-values for success rates, and paired
+final-energy agreement. Repeating the two commands with the same inputs
+reproduces both committed JSON documents byte for byte except for raw timing
+fields and statistics derived from them.
 
 The variable-cell failure can be reproduced independently:
 
