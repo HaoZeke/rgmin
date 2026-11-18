@@ -2347,8 +2347,6 @@ pub enum rgmin_manifold_t {
     /// Positive orthant of packed length n. manopt `positivefactory`.
     /// Token defaults to n = 1; use rgmin_solver_set_positive.
     RGMIN_MANIFOLD_POSITIVE = 21,
-    /// Centered m-by-n matrices, packed m*n. Token defaults to
-    /// 2-by-2 centered columns; use rgmin_solver_set_centered_matrix.
     /// Symmetric positive definite matrices. Released 0.5.2 token 7.
     RGMIN_MANIFOLD_SPD = 7,
     /// Real Grassmann. Released 0.5.2 token 8.
@@ -2357,7 +2355,8 @@ pub enum rgmin_manifold_t {
     RGMIN_MANIFOLD_HYPERBOLIC = 9,
     /// Poincare ball. Released 0.5.2 token 10.
     RGMIN_MANIFOLD_POINCARE = 10,
-    /// Centered m-by-n matrices.
+    /// Centered m-by-n matrices, packed m*n. Token defaults to
+    /// 2-by-2 centered columns; use rgmin_solver_set_centered_matrix.
     RGMIN_MANIFOLD_CENTERED_MATRIX = 22,
     /// Complex unitary matrices. Released 0.5.2 token 23.
     RGMIN_MANIFOLD_UNITARY = 23,
