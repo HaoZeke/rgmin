@@ -39,6 +39,7 @@ python bench/optimizers/run.py \
   --rgmin-sha <source-sha> \
   --rgpot-sha <source-sha> \
   --rgpot-patch-sha <source-sha> \
+  --eon-tag <source-tag> \
   --eon-sha <source-sha> \
   --eon-rgpot-sha <source-sha> \
   --rgmin-wheel-sha256 <wheel-sha256> \

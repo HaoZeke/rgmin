@@ -64,6 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rgmin-sha", required=True)
     parser.add_argument("--rgpot-sha", required=True)
     parser.add_argument("--rgpot-patch-sha", required=True)
+    parser.add_argument("--eon-tag", required=True)
     parser.add_argument("--eon-sha", required=True)
     parser.add_argument("--eon-rgpot-sha", required=True)
     parser.add_argument("--rgmin-wheel-sha256", required=True)
@@ -433,6 +434,7 @@ def main() -> None:
             "rgmin": args.rgmin_sha,
             "rgpot": args.rgpot_sha,
             "rgpot_binding_patch": args.rgpot_patch_sha,
+            "eon_tag": args.eon_tag,
             "eon": args.eon_sha,
             "eon_bundled_rgpot": args.eon_rgpot_sha,
         },
