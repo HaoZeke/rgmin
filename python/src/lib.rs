@@ -96,6 +96,7 @@ impl Session {
         f_dec=0.5,
         alpha=0.1,
         f_alpha=0.99,
+        cap_two_step_overshoot=false,
         downhill=false,
         h0=None,
         maxmove=None,
@@ -119,6 +120,7 @@ impl Session {
         f_dec: f64,
         alpha: f64,
         f_alpha: f64,
+        cap_two_step_overshoot: bool,
         downhill: bool,
         h0: Option<f64>,
         maxmove: Option<f64>,
@@ -198,13 +200,14 @@ impl Session {
             cfg.f_dec = f_dec;
             cfg.alpha = alpha;
             cfg.f_alpha = f_alpha;
+            cfg.cap_two_step_overshoot = cap_two_step_overshoot;
             solver.set_fire_config(cfg).map_err(value_error)?;
             if abc {
                 solver.set_fire_abc(true).map_err(value_error)?;
             }
-        } else if preset.is_some() || abc {
+        } else if preset.is_some() || abc || cap_two_step_overshoot {
             return Err(PyValueError::new_err(
-                "preset and abc apply to a FIRE session only",
+                "preset, abc and cap_two_step_overshoot apply to a FIRE session only",
             ));
         }
         if nlcg {

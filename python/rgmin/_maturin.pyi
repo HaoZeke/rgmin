@@ -20,6 +20,7 @@ class Session:
         f_dec: float = 0.5,
         alpha: float = 0.1,
         f_alpha: float = 0.99,
+        cap_two_step_overshoot: bool = False,
         downhill: bool = False,
         h0: float | None = None,
         maxmove: float | None = None,

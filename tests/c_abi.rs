@@ -1084,7 +1084,8 @@ fn lowest_eigenpair_elpa_is_unavailable() {
     assert_eq!(status, rgmin_status_t::RGMIN_UNAVAILABLE);
 }
 
-/// ABI minor 47 adds `rgmin_solver_set_level_set` and
+/// ABI minor 48 adds `rgmin_solver_set_fire_cap_two_step_overshoot`.
+/// Minor 47 adds `rgmin_solver_set_level_set` and
 /// `rgmin_solver_clear_level_set`. Minor 46 adds `rgmin_control_default`
 /// and the other struct initializers. Minor 45 is
 /// `rgmin_solver_set_lbfgs_trust` and minor 44 is
@@ -1096,7 +1097,7 @@ fn lowest_eigenpair_elpa_is_unavailable() {
 fn abi_stamp_identifies_this_optimizer_layout() {
     let stamp = rgmin_abi_stamp();
     assert_eq!(stamp.abi_major, 1);
-    assert_eq!(stamp.abi_minor, 47);
+    assert_eq!(stamp.abi_minor, 48);
     assert_eq!(stamp.layout_revision, 5);
     assert_eq!(unsafe { rgmin_abi_compatible(&stamp) }, 1);
 }
@@ -1135,7 +1136,8 @@ fn c_abi_burdakov_radius_is_off_until_set() {
 #[test]
 fn c_abi_fire_preset_and_abc() {
     use rgmin::ffi::{
-        rgmin_fire_preset_t, rgmin_solver_set_fire_abc, rgmin_solver_set_fire_preset,
+        rgmin_fire_preset_t, rgmin_solver_set_fire_abc,
+        rgmin_solver_set_fire_cap_two_step_overshoot, rgmin_solver_set_fire_preset,
     };
     let ctrl = rgmin_control_t {
         maxiter: 10,
@@ -1150,15 +1152,27 @@ fn c_abi_fire_preset_and_abc() {
     let null = std::ptr::null_mut();
     assert_eq!(unsafe { rgmin_solver_set_fire_preset(null, guenole) }, 1);
     assert_eq!(unsafe { rgmin_solver_set_fire_abc(null, 1) }, 1);
+    assert_eq!(
+        unsafe { rgmin_solver_set_fire_cap_two_step_overshoot(null, 1) },
+        1
+    );
     let v1 = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_FIRE, &ctrl, 2) };
     assert_eq!(unsafe { rgmin_solver_set_fire_preset(v1, guenole) }, 1);
     assert_eq!(unsafe { rgmin_solver_set_fire_abc(v1, 1) }, 1);
+    assert_eq!(
+        unsafe { rgmin_solver_set_fire_cap_two_step_overshoot(v1, 1) },
+        1
+    );
     unsafe { rgmin_solver_free(v1) };
     for (abc, shrink) in [(0, 0.98), (1, 0.92)] {
         let session = unsafe { rgmin_solver_create(rgmin_method_t::RGMIN_FIRE2, &ctrl, 2) };
         assert_eq!(unsafe { rgmin_solver_set_fire_preset(session, 2) }, 1);
         assert_eq!(unsafe { rgmin_solver_set_fire_preset(session, guenole) }, 0);
         assert_eq!(unsafe { rgmin_solver_set_fire_abc(session, abc) }, 0);
+        assert_eq!(
+            unsafe { rgmin_solver_set_fire_cap_two_step_overshoot(session, 1) },
+            0
+        );
         let mut x = [0.5, -0.25];
         let mut out = rgmin_report_t {
             value: 0.0,

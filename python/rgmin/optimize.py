@@ -552,6 +552,7 @@ class FIRE2(_Fire):
         fa: float = 0.99,
         position_reset_callback: Any = None,
         use_abc: bool | None = False,
+        cap_two_step_overshoot: bool = False,
         **kwargs: Any,
     ) -> None:
         self.dt = float(dt)
@@ -568,6 +569,7 @@ class FIRE2(_Fire):
         self.a = self.astart
         self.position_reset_callback = position_reset_callback
         self.use_abc = bool(use_abc)
+        self.cap_two_step_overshoot = bool(cap_two_step_overshoot)
         super().__init__(atoms, restart, logfile, trajectory, **kwargs)
 
     def _session_options(self) -> dict[str, Any]:
@@ -583,6 +585,7 @@ class FIRE2(_Fire):
             "alpha": self.astart,
             "f_alpha": self.fa,
             "abc": self.use_abc,
+            "cap_two_step_overshoot": self.cap_two_step_overshoot,
         }
 
 
