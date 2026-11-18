@@ -478,6 +478,8 @@ def test_session_refuses_hessian_methods_and_misplaced_options():
         Session("bfgs", 3, h0=0.1)
     with pytest.raises(ValueError, match="FIRE"):
         Session("lbfgs", 3, preset="guenole2020")
+    with pytest.raises(ValueError, match="cap_two_step_overshoot"):
+        Session("lbfgs", 3, cap_two_step_overshoot=True)
     with pytest.raises(ValueError, match="accept"):
         Session("sd", 3, accept="sometimes")
 

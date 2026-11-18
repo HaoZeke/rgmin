@@ -19,9 +19,10 @@ use crate::control::{Control, StopNorm};
 use crate::diis::{DiisState, gdiis_point};
 use crate::error::{Error, Result};
 use crate::fire::{
-    Fire2Extras, FireConfig, FireKind, FireMix, FirePreparation, FirePreset, FireState,
-    FireVariant, fire_after_v1_metric, fire_clip_components, fire_displacement_into,
-    fire_prepare_v2, fire_rescale_velocity, fire2_displacement_metric, guenole2020,
+    Fire2Extras, FireConfig, FireKind, FireMix, FirePreparation, FirePreset, FireState, FireTrace,
+    FireVariant, fire_abc_clipped, fire_after_v1_metric, fire_clip_components,
+    fire_displacement_into, fire_move_clipped, fire_prepare_v2, fire_rescale_velocity,
+    fire2_displacement_metric, guenole2020,
 };
 use crate::holonomic::DistanceConstraints;
 use crate::hvp::{
@@ -341,6 +342,10 @@ pub struct Solver {
     brief: bool,
     /// Optional trace of the eOn fill step.
     eon_log: Option<Vec<drive::EonFeat>>,
+    /// Whether per-step FIRE tracing is active.
+    fire_trace_on: bool,
+    /// Recorded per-step trace of a FIRE session.
+    fire_trace: Vec<FireTrace>,
     /// Ratio test on a capped two-loop fill. Off by default.
     trust: bool,
     trust_delta: f64,
@@ -530,6 +535,8 @@ impl Solver {
             level_set: None,
             brief: false,
             eon_log: None,
+            fire_trace_on: false,
+            fire_trace: Vec::new(),
             trust: false,
             trust_delta: 0.0,
             trust_max: 0.0,
@@ -3700,6 +3707,9 @@ impl Solver {
         self.note_bounds(obj.bounds());
         let cached = self.same_last_x(x);
         if !cached {
+            if x.iter().any(|v| !v.is_finite()) {
+                return Err(crate::step::non_finite());
+            }
             *x = obj.bounds().clip(x.view());
         }
 
@@ -4237,6 +4247,7 @@ impl Solver {
                     let curved = !manifold.is_flat();
                     let n_pos_saved = state.n_pos;
                     let dt_saved = state.dt;
+                    let dt_max_saved = state.dt_max;
                     let alpha_saved = state.alpha;
                     let vel_saved = state.vel.clone();
                     // The force, its metric image and the velocity leave the
@@ -4263,13 +4274,20 @@ impl Solver {
                         crate::box_objective::project_tangent(obj.bounds(), x, &mut steepest);
                         crate::box_objective::project_tangent(obj.bounds(), x, &mut state.vel);
                     }
+                    let mut power_trace = crate::vecops::dot(raw.view(), state.vel.view());
+                    let had_vel = state.vel.iter().any(|v| *v != 0.0);
+                    let mut hsb_trace = false;
                     let mix = fire_mix(&self.precon, &state.vel, &raw, &steepest);
                     let displacement = match fire2_local.as_mut() {
-                        Some(ext) => fire2_displacement_metric(state, ext, &raw, &steepest, mix)
-                            .map_err(|_| ()),
+                        Some(ext) => {
+                            hsb_trace = power_trace <= 0.0 && had_vel;
+                            fire2_displacement_metric(state, ext, &raw, &steepest, mix)
+                                .map_err(|_| ())
+                        }
                         None => match fire_prepare_v2(state, &raw) {
                             FirePreparation::Stalled => Err(()),
                             FirePreparation::Rollback(correction) => {
+                                hsb_trace = true;
                                 if curved {
                                     let back = manifold.project(x, &correction);
                                     let Some((point, _)) =
@@ -4315,16 +4333,19 @@ impl Solver {
                             // the integrator as it was, apart from that count.
                             state.n_pos = n_pos_saved;
                             state.dt = dt_saved;
+                            state.dt_max = dt_max_saved;
                             state.alpha = alpha_saved;
                             state.vel.assign(&vel_saved);
                             stalled = true;
                             Array1::zeros(state.vel.len())
                         }
                     };
+                    let mut clip_trace = false;
                     if !stalled
                         && state.abc
                         && let Some(cap) = self.atom_maxmove.or(self.control.maxmove_cap())
                     {
+                        clip_trace = fire_abc_clipped(state, cap);
                         dx = fire_clip_components(state, cap);
                     }
                     if !stalled {
@@ -4338,7 +4359,12 @@ impl Solver {
                                 (self.atom_maxmove, self.control.maxmove_cap())
                             };
                             let tangent = manifold.project(x, &dx);
-                            let Some((trial, _)) =
+                            if tangent.iter().any(|v| !v.is_finite()) {
+                                state.restore(saved);
+                                *x = start;
+                                return Err(crate::step::non_finite());
+                            }
+                            let Some((trial, used)) =
                                 retract_within_cap(obj, x, &tangent, atom_cap, cap, &manifold)
                             else {
                                 state.restore(saved);
@@ -4347,6 +4373,9 @@ impl Solver {
                                     kind: manifold.as_str(),
                                 });
                             };
+                            if fire_move_clipped(&used, &tangent) {
+                                clip_trace = true;
+                            }
                             if matches!(state.kind, FireKind::V2) && state.dt > 0.0 {
                                 let mut secant = (&trial - &*x) / state.dt;
                                 manifold.project_in_place(&trial, &mut secant);
@@ -4356,6 +4385,10 @@ impl Solver {
                         } else {
                             let mut trial = x.clone();
                             trial += &dx;
+                            let plain = state.preset() == FirePreset::Default
+                                && !state.abc
+                                && fire2_local.is_none();
+                            let unclipped = (!plain || self.fire_trace_on).then(|| trial.clone());
                             if !state.abc {
                                 apply_caps(
                                     x,
@@ -4365,10 +4398,26 @@ impl Solver {
                                 );
                             }
                             let bounds = obj.bounds();
-                            if bounds.low.iter().any(|v| v.is_finite())
-                                || bounds.high.iter().any(|v| v.is_finite())
+                            if (bounds.low.iter().any(|v| v.is_finite())
+                                || bounds.high.iter().any(|v| v.is_finite()))
+                                && trial.iter().all(|v| v.is_finite())
                             {
                                 trial = bounds.clip(trial.view());
+                            }
+                            let shortened = unclipped
+                                .as_ref()
+                                .is_some_and(|free| fire_move_clipped(&trial, free));
+                            if shortened {
+                                clip_trace = true;
+                            }
+                            if unclipped
+                                .as_ref()
+                                .is_some_and(|free| free.iter().any(|v| !v.is_finite()))
+                                || trial.iter().any(|v| !v.is_finite())
+                            {
+                                state.restore(saved);
+                                *x = start;
+                                return Err(crate::step::non_finite());
                             }
                             // The clamp and clip shorten the move; the velocity has to
                             // describe the move taken, or the power adapt reads an
@@ -4378,7 +4427,8 @@ impl Solver {
                             // whole is shortened to nothing.
                             let swallowed = trial == *x && dx.iter().any(|v| *v != 0.0);
                             if swallowed
-                                || (!state.abc
+                                || ((plain || shortened)
+                                    && !state.abc
                                     && (self.atom_maxmove.is_some()
                                         || self.control.maxmove_cap().is_some()))
                             {
@@ -4428,8 +4478,26 @@ impl Solver {
                             crate::box_objective::project_tangent(obj.bounds(), x, &mut steep_new);
                             crate::box_objective::project_tangent(obj.bounds(), x, &mut state.vel);
                         }
+                        if matches!(state.kind, FireKind::V1) {
+                            power_trace = crate::vecops::dot(raw_new.view(), state.vel.view());
+                        }
                         let mix_new = fire_mix(&self.precon, &state.vel, &raw_new, &steep_new);
                         fire_after_v1_metric(state, &raw_new, &steep_new, mix_new);
+                        if self.fire_trace_on {
+                            let (prev_hsb, prev_clip) = match self.fire_trace.last() {
+                                Some(last) => (last.half_step_backs, last.clipped_moves),
+                                None => (0, 0),
+                            };
+                            self.fire_trace.push(FireTrace {
+                                dt: state.dt,
+                                dt_max: state.dt_max,
+                                alpha: state.alpha,
+                                power: power_trace,
+                                n_pos: state.n_pos,
+                                half_step_backs: prev_hsb + usize::from(hsb_trace),
+                                clipped_moves: prev_clip + usize::from(clip_trace),
+                            });
+                        }
                     }
                 }
                 Inner::Bb { prev_s, prev_y } => {
@@ -4801,6 +4869,17 @@ impl Solver {
         }
     }
 
+    /// Opt into capping `dt_max` after one downhill step followed by an uphill one.
+    pub fn set_fire_cap_two_step_overshoot(&mut self, on: bool) -> Result<()> {
+        match &mut self.inner {
+            Inner::Fire(state) if state.kind == FireKind::V2 => {
+                state.set_cap_two_step_overshoot(on);
+                Ok(())
+            }
+            _ => Err(Error::NeedFire2),
+        }
+    }
+
     /// ABC-FIRE on a FIRE 2.0 session. The fill path applies the bias.
     /// [`Solver::step`] on the published schedule keeps [`fire2_displacement`](crate::fire::fire2_displacement).
     pub fn set_fire_abc(&mut self, on: bool) -> Result<()> {
@@ -4811,6 +4890,18 @@ impl Solver {
             }
             _ => Err(Error::NeedFire2),
         }
+    }
+
+    /// Start recording per-step [`FireTrace`] entries on a FIRE session.
+    pub fn start_fire_trace(&mut self) {
+        self.fire_trace.clear();
+        self.fire_trace_on = true;
+    }
+
+    /// Take the recorded [`FireTrace`] entries, if tracing was started.
+    pub fn take_fire_trace(&mut self) -> Vec<FireTrace> {
+        self.fire_trace_on = false;
+        std::mem::take(&mut self.fire_trace)
     }
 
     /// Step-length rule for an L-BFGS session.
@@ -5154,6 +5245,9 @@ impl Solver {
         let (value, raw_grad) = if self.same_last_x(x) {
             (self.last_value, self.last_grad.clone())
         } else {
+            if x.iter().any(|v| !v.is_finite()) {
+                return Err(crate::step::non_finite());
+            }
             *x = obj.bounds().clip(x.view());
             self.gradient_calls += 1;
             obj.value_and_gradient(x.view())
@@ -5302,6 +5396,7 @@ impl Solver {
             && !self.project_rigid
             && self.exp.is_none()
             && self.fire2.is_none()
+            && !self.fire_trace_on
             && !state.abc
             && state.preset() == FirePreset::Default
     }
@@ -5806,6 +5901,13 @@ mod tests {
         }
     }
 
+    fn fire_state_mut(solver: &mut Solver) -> &mut FireState {
+        match &mut solver.inner {
+            Inner::Fire(state) => state,
+            _ => unreachable!("FIRE session"),
+        }
+    }
+
     /// `f = |x|^2 / 2` whose oracle flips the sign of the gradient's
     /// first component when `flip` is set: an objective that changes
     /// between steps, like a min-mode effective gradient after `tau`
@@ -5919,6 +6021,7 @@ mod tests {
     fn fire_v2_velocity_times_dt_is_the_clamped_move() {
         let obj = steep();
         let mut solver = fire_solver(FireKind::V2);
+        solver.start_fire_trace();
         let mut x = array![1.0, 1.0];
         for _ in 0..5 {
             let before = x.clone();
@@ -5939,6 +6042,62 @@ mod tests {
                 );
             }
         }
+        let trace = solver.take_fire_trace();
+        assert_eq!(trace.len(), 5);
+        assert_eq!(trace.last().unwrap().clipped_moves, 5);
+    }
+
+    #[test]
+    fn fire_v2_stall_restores_dt_max() {
+        let obj = steep();
+        let mut solver = fire_solver(FireKind::V2);
+        solver.set_fire_variant(FireVariant::Guenole2020);
+        solver
+            .set_fire_config(FireConfig::ase().with_dt_max(4.0).with_n_min(0))
+            .unwrap();
+        solver.set_fire_cap_two_step_overshoot(true).unwrap();
+        solver.set_fire_vdfmax(1);
+        if let Some(ext) = &mut solver.fire2 {
+            ext.steps = ext.n_delay;
+        }
+        let mut x = array![1.0, 1.0];
+        {
+            let state = fire_state_mut(&mut solver);
+            state.n_pos = 1;
+            state.vel = array![1.0, 1.0];
+        }
+        solver.step(&obj, &mut x).unwrap();
+        {
+            let state = fire_state_mut(&mut solver);
+            state.n_pos = 1;
+            state.vel = array![1.0, 1.0];
+        }
+        let err = solver.step(&obj, &mut x).unwrap_err();
+        assert!(matches!(err, Error::FireStalled { .. }));
+        assert_eq!(fire_state(&solver).dt_max, 0.1);
+        assert_eq!(fire_state(&solver).n_pos, 1);
+    }
+
+    #[test]
+    fn fire_nan_trial_or_input_is_refused_without_recording_a_clip() {
+        let obj = steep();
+        let mut solver = fire_solver(FireKind::V2);
+        solver.start_fire_trace();
+        if let Inner::Fire(state) = &mut solver.inner {
+            state.vel = array![f64::NAN, 0.2];
+        }
+        let mut x = array![0.5, 0.5];
+        let err = solver.step(&obj, &mut x).unwrap_err();
+        assert!(matches!(err, Error::Oracle { .. }), "{err:?}");
+        assert_eq!(x, array![0.5, 0.5]);
+        assert!(solver.take_fire_trace().is_empty());
+
+        solver.start_fire_trace();
+        let mut nan_start = array![f64::NAN, 0.5];
+        let err = solver.step(&obj, &mut nan_start).unwrap_err();
+        assert!(matches!(err, Error::Oracle { .. }), "{err:?}");
+        assert!(nan_start[0].is_nan());
+        assert!(solver.take_fire_trace().is_empty());
     }
 
     #[test]

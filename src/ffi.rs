@@ -77,7 +77,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 47;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 48;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 5;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -1835,6 +1835,24 @@ pub unsafe extern "C" fn rgmin_solver_set_fire_abc(solver: *mut rgmin_solver_t, 
         return 1;
     }
     flag(unsafe { (*solver).solver.set_fire_abc(on != 0) })
+}
+
+/// Opt into capping `dt_max` after one downhill step followed by an uphill one,
+/// on a FIRE 2.0 session. Returns 0, or 1 on a null session or a session
+/// that is not `RGMIN_FIRE2`.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_fire_cap_two_step_overshoot(
+    solver: *mut rgmin_solver_t,
+    on: i32,
+) -> i32 {
+    if solver.is_null() {
+        set_last_error("rgmin_solver_set_fire_cap_two_step_overshoot: null solver");
+        return 1;
+    }
+    flag(unsafe { (*solver).solver.set_fire_cap_two_step_overshoot(on != 0) })
 }
 
 /// Per-atom cap of the default eOn L-BFGS step.

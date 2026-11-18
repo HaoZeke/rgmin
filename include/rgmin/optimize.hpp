@@ -731,6 +731,11 @@ public:
     }
     /// ABC-FIRE on a FIRE 2.0 session. Returns 0, or 1 on a non-FIRE 2.0 session.
     int set_fire_abc(bool on) { return rgmin_solver_set_fire_abc(ptr_, on ? 1 : 0); }
+    /// Opt into capping dt_max after one downhill step followed by an uphill one.
+    /// Returns 0, or 1 on a non-FIRE 2.0 session.
+    int set_fire_cap_two_step_overshoot(bool on) {
+        return rgmin_solver_set_fire_cap_two_step_overshoot(ptr_, on ? 1 : 0);
+    }
     /// eOn L-BFGS cap. A non-positive cap restores 0.2.
     /// Returns 0, or 1 when the session cannot run the capped step.
     int set_lbfgs_capped(double max_atom) { return rgmin_solver_set_lbfgs_capped(ptr_, max_atom); }

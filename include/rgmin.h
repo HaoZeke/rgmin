@@ -70,14 +70,15 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 47
+#define RGMIN_ABI_VERSION_MINOR 48
 /* 37 linesearch, 38 lbfgs_direction, 39 rgmin_lowest_eigenpairs.
  * 40 is the 0.6.0 union with the 0.5.2 C surface.
  * 41 rgmin_manifold_handle_t, 42 rgmin_lowest_eigenpairs_ex,
  * 43 rgmin_lbfgs_pairs_push_rho, 44 rgmin_solver_set_power,
  * 45 rgmin_solver_set_lbfgs_trust (Burdakov ray, not set_lbfgs_trust),
  * 46 rgmin_control_default and the other struct initializers,
- * 47 level-set constraint setters. */
+ * 47 level-set constraint setters,
+ * 48 rgmin_solver_set_fire_cap_two_step_overshoot. */
 #define RGMIN_ABI_LAYOUT_REVISION 5
 /* Layout revision 5. rgmin_control_t is maxiter, gtol, istep, memory,
  * maxmove, noise_eps, noise_c. maxmove > 0 is the Euclidean cap; 0 keeps
@@ -519,6 +520,10 @@ int32_t rgmin_solver_set_fire_preset(rgmin_solver_t *solver, rgmin_fire_preset_t
  *  \c maxmove, bounds each displacement component. Returns 0, or 1 on
  *  a null session or a session that is not RGMIN_FIRE2. ABI minor 30. */
 int32_t rgmin_solver_set_fire_abc(rgmin_solver_t *solver, int32_t on);
+/** Opt into capping `dt_max` after one downhill step followed by an
+ *  uphill one on FIRE 2.0. Returns 0, or 1 on a null session or a
+ *  session that is not RGMIN_FIRE2. ABI minor 48. */
+int32_t rgmin_solver_set_fire_cap_two_step_overshoot(rgmin_solver_t *solver, int32_t on);
 /** Per-atom cap of the default eOn L-BFGS step. The first step probes
  *  curvature. A proposal at least as long as the cap clears the memory
  *  and steps along H0 times the force. A positive \c max_atom sets the
