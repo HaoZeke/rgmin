@@ -402,4082 +402,4898 @@
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.081462354
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080372285
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080120925
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.085844917
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080233383
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079617266
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.081352382
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.085868445
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.081479136
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080690003
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 0,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.735701338
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 0,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.708982291
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 0,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.725871231
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 0,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.724200235
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 0,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.785799968
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 0,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.720119234
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 0,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.733183644
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 0,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.714538491
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 0,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.832535545
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 0,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.758221945
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.121015739
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.122393651
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.122012541
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.121263095
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.150635483
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.120614318
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.120825439
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11909039
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.125337303
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.126311688
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.40776586
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 0,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.094740497
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 0,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 34.123400971
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 0,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.470239355
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 1,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.269357566
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 1,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 33.702801847
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.08780035
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.385566819
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116502922
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116183919
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117807165
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11675676
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11788958
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117425355
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117069227
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116759435
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117025646
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117788705
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 1,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.705424314
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 1,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.702795048
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 1,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.701067172
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 1,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.700755986
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 1,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.704943011
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 1,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.699054616
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 1,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.69756862
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 1,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.697510824
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 1,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.694216085
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 1,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.706414466
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078837472
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079233161
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.0790321
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079092153
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078542063
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.07844364
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078615979
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079483143
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078803348
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 1,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.07891935
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079816712
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.07899577
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078688016
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078792944
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078353823
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078292185
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.077875232
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078756648
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078501173
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078956998
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 2,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.707684967
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 2,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.697463434
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 2,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.697993549
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 2,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.702211308
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 2,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.696688344
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 2,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.701384789
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 2,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.70245911
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 2,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.704859176
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 2,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.740789097
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 2,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.708884736
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117022469
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116127415
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116817071
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118373963
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.178922986
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116171124
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.119371249
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11664629
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.122231835
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116934312
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.389983969
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 2,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.119260885
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 2,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 34.214895093
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 2,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.329289994
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 3,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.17435879
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 3,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 33.500140642
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.089966534
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.384924321
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116549609
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116452705
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.115842572
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116119288
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.115875298
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.115723009
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117741928
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117356419
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116386445
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116939702
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 3,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.700557217
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 3,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.696237465
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 3,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.698655402
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 3,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.713748875
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 3,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.705087747
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 3,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.699896087
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 3,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.699689584
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 3,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.701380465
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 3,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.700502655
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 3,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.71232153
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080148151
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079257912
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080179749
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078958811
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079239392
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079297826
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078288358
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079418689
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079250559
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 3,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.077977445
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.077576244
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078870242
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.086059107
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078412819
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078173713
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.077668468
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078224589
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.077453425
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078635864
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078097269
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 4,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.706677132
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 4,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.705285347
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 4,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.703475535
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 4,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.704770313
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 4,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.710351141
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 4,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.705769395
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 4,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.701042023
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 4,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.700007725
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 4,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.705522393
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 4,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.712861472
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116213146
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116241666
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116650728
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117095047
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116515378
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11685657
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117050041
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117928185
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118375407
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117202413
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.38656619
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 4,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.087606092
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 4,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 33.788532095
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 4,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.083342687
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 5,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.155218901
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 5,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 33.727504165
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.08879796
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.389457029
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11709221
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116496456
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116289611
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.115633898
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116443814
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11641897
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.115585668
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.123873518
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116675551
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.115693031
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 5,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.75267834
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 5,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.720758904
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 5,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.720116722
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 5,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.713439425
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 5,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.714570966
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 5,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.711856289
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 5,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.711790552
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 5,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.709625586
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 5,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.712034649
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 5,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.713169122
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078743966
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.0806665
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079319917
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.07980723
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079685999
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079473668
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079312334
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.07933884
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079193847
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 5,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078384062
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079338667
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078878212
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.077836128
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079426898
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079313389
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079710919
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078369854
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079472805
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.07908667
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078904903
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 6,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.707387471
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 6,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.703317813
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 6,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.726318836
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 6,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.716318559
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 6,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.752046328
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 6,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.709436617
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 6,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.703579476
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 6,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.703709444
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 6,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.712092006
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 6,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.70911126
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116517801
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116231215
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.115485779
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116254079
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116169483
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116618203
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.115638787
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11613157
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.115854097
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.115553592
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.383555506
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 6,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.087390499
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 6,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 33.489437617
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 6,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.275495868
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 7,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.278537394
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 7,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 33.694717139
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.088736661
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.387269825
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117235077
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.1172661
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116923511
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.1169267
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117136497
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116783925
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117163768
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117075773
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117499123
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116659762
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 7,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.703574142
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 7,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.711901916
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 7,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.706392036
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 7,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.716411177
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 7,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.72267915
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 7,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.710758017
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 7,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.716593984
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 7,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.71138698
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 7,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.717001699
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 7,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.71075705
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.07865853
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079612779
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079804961
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079993177
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079234837
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.07960074
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079180859
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079473732
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080499619
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 7,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079339215
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.081529923
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.08071359
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079270509
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078827908
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079613624
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079946524
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079212933
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079387725
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079494816
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.07945117
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 8,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.715065088
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 8,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.721313248
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 8,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.72027453
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 8,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.71032804
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 8,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.7134324
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 8,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.710909447
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 8,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.726665094
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 8,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.712219749
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 8,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.716435459
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 8,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.711058914
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116858172
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117097819
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117527095
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117830604
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116694819
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117523466
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.1167761
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118082882
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11696809
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116857718
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.388717502
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 8,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.099307241
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 8,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 34.369514984
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 8,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.764109941
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 9,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.554226897
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 9,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 34.30560495
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.089049009
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.389649801
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11751486
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.121154779
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118340201
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117652762
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117433474
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117259258
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117658308
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118462143
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118690275
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.120227739
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 9,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.750110406
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 9,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.71982328
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 9,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.706374739
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 9,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.707889081
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 9,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.715687412
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 9,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.865634715
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 9,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.82452078
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 9,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.729141155
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 9,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.726358381
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 9,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.740956461
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.081025369
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079401685
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079937644
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079765354
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079014268
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.07930478
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080227051
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079625236
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.083165157
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 9,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.083250936
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.09104707
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.087985168
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.090837949
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080401603
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079061102
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.091999505
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079028535
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079345095
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.085793961
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.082277565
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 10,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.722132939
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 10,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.744208379
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 10,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.726255168
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 10,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.710065256
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 10,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.716576357
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 10,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.716271296
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 10,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.716197621
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 10,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.717115477
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 10,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.805681307
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 10,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.709223077
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116372849
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118644952
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.15040739
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117984321
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116651492
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11585008
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116640584
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.119091794
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118801699
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118474602
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.433839215
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 10,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.088561061
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 10,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 34.64465349
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 10,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.823337003
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 6.459340322584441,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 11,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.074644938731945,
-      "system": "Si64-cell"
+      "system": "Si64-cell",
+      "wall_seconds": 12.395403806
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 1.7744925970671912,
+      "force_calls": 1002,
       "implementation": "rgmin",
       "method": "cell-lbfgs",
       "round": 11,
       "seed": 0,
       "stress_max_ev_per_angstrom3": 0.01596279063974878,
-      "system": "Cu108-cell"
+      "system": "Cu108-cell",
+      "wall_seconds": 34.255674995
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 4.010390122729472,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Si64"
+      "system": "Si64",
+      "wall_seconds": 0.088599636
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 3.3099601356137125,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "Cu255-vacancy"
+      "system": "Cu255-vacancy",
+      "wall_seconds": 0.395279676
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 62.25517990449079,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118163209
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 41.54380235608412,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.119282855
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 116.89783344790813,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118135881
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 65.28593048168035,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117386382
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 194.43227451677046,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.118116407
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 135.30322388190925,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117485284
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 60.5507913756149,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116675248
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 32.97535281143213,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.117081976
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 42.768452392476604,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.11896782
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.28421624643706,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.116913077
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 52.312057451906306,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 11,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.713676974
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 71.64854935502392,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 11,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.70895952
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.553000700992264,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 11,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.716705016
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 55.22246796603986,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 11,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.710792757
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 26.566737059136752,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 11,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.708398709
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 18.84784110092567,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 11,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.706961894
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 35.66192222268988,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 11,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.710002786
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 64.37311972594269,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 11,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.696316486
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 110.15548635527816,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 11,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.730171118
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 25.31964270412839,
+      "force_calls": 1001,
       "implementation": "ase",
       "method": "lbfgs",
       "round": 11,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ75"
+      "system": "LJ75",
+      "wall_seconds": 0.752910308
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 38.420659808513435,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 9,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079419731
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.88129591843875,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 8,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080578708
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 127.35359057329117,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 7,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080340418
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 256.5246040771784,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 6,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.118406543
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 103.84287917673672,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 5,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079059411
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 77.98531517938873,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 4,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.079607265
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 47.6358907935814,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 3,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080829212
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 33.63781517207978,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 2,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080113557
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 43.77853190464518,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 1,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.080479271
     },
     {
       "error": null,
       "fmax_ev_per_angstrom": 93.63811328682716,
+      "force_calls": 1001,
       "implementation": "eon",
       "method": "sd",
       "round": 11,
       "seed": 0,
       "stress_max_ev_per_angstrom3": null,
-      "system": "LJ38"
+      "system": "LJ38",
+      "wall_seconds": 0.078943444
     }
   ],
   "gaps": [
