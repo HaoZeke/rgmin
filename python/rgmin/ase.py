@@ -127,6 +127,15 @@ def _nonconservative_types() -> tuple[type, ...]:
     return tuple(found)
 
 
+def _cell_filter_types() -> tuple[type, ...]:
+    found: list[type] = []
+    for name in ("FrechetCellFilter", "UnitCellFilter", "ExpCellFilter", "StrainFilter"):
+        cls = _import_attr("ase.filters", name)
+        if isinstance(cls, type):
+            found.append(cls)
+    return tuple(found)
+
+
 def _is_nonconservative(obj: Any) -> bool:
     if obj is None:
         return False
@@ -135,6 +144,11 @@ def _is_nonconservative(obj: Any) -> bool:
         return True
     probe = getattr(obj, "is_neb", None)
     return bool(callable(probe) and probe())
+
+
+def _is_cell_filter(obj: Any) -> bool:
+    kinds = _cell_filter_types()
+    return bool(kinds and isinstance(obj, kinds))
 
 
 def _minmode(obj: Any) -> Any | None:
@@ -389,6 +403,8 @@ class Optimizer(_ASEOptimizer):
     def _config_options(self) -> dict[str, Any]:
         opts = dict(self._rgmin_options)
         opts["maxstep"] = self.maxstep
+        if self._rgmin_method == "lbfgs" and "linesearch" not in opts and _is_cell_filter(self.atoms):
+            opts["linesearch"] = "wolfe"
         if self._rgmin_accept is not None:
             opts["accept"] = self._rgmin_accept
         elif self._needs_step_accept():
@@ -584,6 +600,10 @@ class CG(Optimizer):
 
 class LBFGS(Optimizer):
     """Limited-memory BFGS.
+
+    ASE cell filters use strong Wolfe search because their final
+    coordinates are scaled cell deformations rather than Cartesian
+    atom positions. Other optimizables keep the capped eOn step.
 
     Liu and Nocedal, Mathematical Programming 45, 503 (1989),
     https://doi.org/10.1007/BF01589116.

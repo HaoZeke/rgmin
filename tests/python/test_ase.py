@@ -187,6 +187,30 @@ def test_cell_filter_runs() -> None:
     assert opt.run(fmax=0.05, steps=80) is True
 
 
+def test_lbfgs_frechet_cell_filter_converges_near_ase_budget() -> None:
+    from ase.build import bulk
+    from ase.filters import FrechetCellFilter
+    from ase.optimize import LBFGS as AseLBFGS
+
+    def relax(optimizer: type[ASEOptimizer]) -> tuple[bool, int, float, float]:
+        atoms = bulk("Cu", cubic=True) * (2, 2, 2)
+        atoms.set_cell(atoms.cell * 1.02, scale_atoms=True)
+        calculator = CountingEMT()
+        atoms.calc = calculator
+        converged = optimizer(FrechetCellFilter(atoms), logfile=None).run(
+            fmax=0.01, steps=80
+        )
+        stress = float(np.abs(atoms.get_stress()).max())
+        return bool(converged), calculator.calls, atoms.get_potential_energy(), stress
+
+    reference = relax(AseLBFGS)
+    result = relax(LBFGS)
+    assert result[0]
+    assert result[1] <= reference[1] + 6
+    assert result[2] == pytest.approx(reference[2], abs=5.0e-5)
+    assert result[3] < 1.0e-3
+
+
 @pytest.mark.skipif(_SLOW, reason="NEB is too slow under TSan")
 def test_neb_au_on_al() -> None:
     from ase.build import add_adsorbate, fcc100
