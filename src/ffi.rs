@@ -82,7 +82,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 51;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 52;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 5;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -145,7 +145,7 @@ pub enum rgmin_method_t {
     RGMIN_POLAK_RIBIERE_PLUS = 26,
     /// eOn Polak-Ribiere with the Powell restart at 0.5. Develop surface.
     RGMIN_EON_CG = 27,
-    /// GROMACS `integrator = steep`. ABI minor 48.
+    /// GROMACS `integrator = steep`. ABI minor 52.
     RGMIN_GROMACS_STEEP = 28,
 }
 
@@ -210,7 +210,7 @@ pub enum rgmin_stop_t {
     /// The evaluation budget set by `rgmin_solver_set_max_evals` was spent.
     /// ABI minor 50.
     RGMIN_STOP_EVAL_BUDGET = 7,
-    /// GROMACS steep could not represent another coordinate change. ABI minor 51.
+    /// GROMACS steep could not represent another coordinate change. ABI minor 52.
     RGMIN_STOP_MACHINE_PRECISION = 8,
 }
 
