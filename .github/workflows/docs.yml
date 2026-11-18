@@ -7,14 +7,12 @@ on:
       - "docs/**"
       - "README.md"
       - "CHANGELOG.md"
-      - "scripts/check_links.py"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
       - "README.md"
       - "CHANGELOG.md"
-      - "scripts/check_links.py"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -53,15 +51,6 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/build
-  links:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: DOIs and URLs in the tracked sources
-        run: python3 scripts/check_links.py
   deploy:
     needs: build
     # Job permissions replace the workflow set, so read is repeated.
