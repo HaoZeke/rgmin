@@ -86,6 +86,7 @@ That installs the 0.6 release on Rust 1.88 or newer.
    howto/fire
    howto/strong-scaling
    howto/constraints
+   howto/level-set
    howto/noise
    howto/manifolds
    howto/irc
