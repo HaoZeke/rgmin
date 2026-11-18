@@ -80,7 +80,9 @@ it. Morse bonds and FF torsions are Rust-only.
 ~rgmin_solver_forget~ drops pairs / conjugacy / moments. Newton and RFO
 use ~rgmin_solver_step_hess_fg~ (fused energy and gradient, one host
 potential call). Split ~eval~ / ~grad~ callbacks remain. ~accept~
-is ~none~ (take the clipped step), ~energy~, or ~nonmonotone~.
+is ~none~ (take the clipped step), ~energy~, ~nonmonotone~, or ~step~
+(the clipped step with no line search, for a force that is not the
+gradient of the energy). ~rgmin_solver_create~ opens with ~energy~.
 Callbacks are arguments of each step, not stored on the handle.
 
 ~rgmin_solver_set_exp~ installs the exponential preconditioner.
@@ -230,8 +232,11 @@ n² doubly-stochastic; ~rgmin_solver_set_multinomial_ds~),
 interleaved ~(re, im)~, length ~2 n~; ~rgmin_solver_set_sphere_complex~),
 ~POSITIVE~ (token 21, packed length ~n~; ~rgmin_solver_set_positive~),
 ~CENTERED_MATRIX~ (token 22, packed ~m n~ row-major;
-~rgmin_solver_set_centered_matrix~).
-Tokens 7-10 stay reserved. See
+~rgmin_solver_set_centered_matrix~), ~SPD~ (token 7, row-major ~n^2~),
+~GRASSMANN~ (token 8; ~rgmin_solver_set_factor_shape~), ~HYPERBOLIC~
+(token 9), ~POINCARE~ (token 10) and ~UNITARY~ (token 23, interleaved
+row-major ~2 n^2~; ~rgmin_solver_set_unitary~).
+No token is reserved. See
 @@rst::doc:`retract onto an embedded manifold <manifolds>`@@.
 ~rgmin_solver_set_masses~ supplies N atomic masses for ~MW_RIGID~.
 

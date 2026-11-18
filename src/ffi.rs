@@ -2276,7 +2276,6 @@ pub enum rgmin_manifold_t {
     RGMIN_MANIFOLD_RIGID_QUOTIENT = 5,
     /// Mass-weighted Eckart (Sella IRC / Page–McIver). 3N, N >= 2.
     RGMIN_MANIFOLD_MW_RIGID = 6,
-    /// Reserved: 7 SPD, 8 Grassmann, 9 Hyperbolic, 10 Poincare.
     /// Product of unit spheres. Shape from `rgmin_solver_set_oblique`.
     RGMIN_MANIFOLD_OBLIQUE = 11,
     /// Simplex with the Fisher metric. manopt `multinomialfactory` (m = 1).
@@ -2296,17 +2295,16 @@ pub enum rgmin_manifold_t {
     /// Token defaults to n = 1; use rgmin_solver_set_constant.
     RGMIN_MANIFOLD_CONSTANT = 17,
     /// Doubly-stochastic n-by-n, packed n². Token defaults to n = 2;
-    /// use rgmin_solver_set_multinomial_ds. Reserved 7-10 unused.
+    /// use rgmin_solver_set_multinomial_ds.
     RGMIN_MANIFOLD_MULTINOMIAL_DS = 18,
     /// Symmetric doubly-stochastic n-by-n. Token defaults to n = 2;
-    /// use rgmin_solver_set_multinomial_sym. Reserved 7-10 unused.
+    /// use rgmin_solver_set_multinomial_sym.
     RGMIN_MANIFOLD_MULTINOMIAL_SYM = 19,
     /// Complex unit sphere C^n, packed 2n. Token defaults to n = 1;
-    /// use rgmin_solver_set_sphere_complex. Reserved 7-10 unused.
+    /// use rgmin_solver_set_sphere_complex.
     RGMIN_MANIFOLD_SPHERE_COMPLEX = 20,
     /// Positive orthant of packed length n. manopt `positivefactory`.
     /// Token defaults to n = 1; use rgmin_solver_set_positive.
-    /// Reserved 7-10 unused.
     RGMIN_MANIFOLD_POSITIVE = 21,
     /// Centered m-by-n matrices, packed m*n. Token defaults to
     /// 2-by-2 centered columns; use rgmin_solver_set_centered_matrix.
@@ -2453,7 +2451,7 @@ pub unsafe extern "C" fn rgmin_solver_set_sphere_complex(solver: *mut rgmin_solv
 }
 
 /// Positive orthant of packed length `n`. manopt `positivefactory`.
-/// Token 21 defaults to n = 1. Reserved tokens 7-10 unused.
+/// Token 21 defaults to n = 1.
 ///
 /// # Safety
 /// `solver` is null or a live session from [`rgmin_solver_create`].
@@ -2465,7 +2463,6 @@ pub unsafe extern "C" fn rgmin_solver_set_positive(solver: *mut rgmin_solver_t, 
 /// Centered `m x n` matrices, packed row-major `m n`.
 /// manopt `centeredmatrixfactory`. Token 22 defaults to 2-by-2
 /// centered columns. `center_rows != 0` centers rows (`1^T X = 0`).
-/// Reserved tokens 7-10 unused.
 ///
 /// # Safety
 /// `solver` is null or a live session from [`rgmin_solver_create`].
@@ -5638,7 +5635,8 @@ pub unsafe extern "C" fn rgmin_solver_set_highs_trust(
     unsafe { rgmin_solver_set_trust(solver, radius) }
 }
 
-/// Configure the factor shape geometry.
+/// Gr(n,p) for token 8 (Grassmann). A zero dimension clears the shape, and
+/// the session then reads Gr(len,1).
 ///
 /// # Safety
 /// `solver` must be null or a live handle from [`rgmin_solver_create`].
@@ -5651,7 +5649,7 @@ pub unsafe extern "C" fn rgmin_solver_set_factor_shape(
     unsafe { with_solver(solver, |s| s.set_factor_shape(n, p)) };
 }
 
-/// Configure the unitary geometry.
+/// U(n), packed interleaved row-major, length `2 n^2`. Token 23.
 ///
 /// # Safety
 /// `solver` must be null or a live handle from [`rgmin_solver_create`].

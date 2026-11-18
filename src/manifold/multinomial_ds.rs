@@ -11,7 +11,7 @@
 //! `proj(X, X ⊙ egrad)`.
 //!
 //! Distinct from [`super::Multinomial`] (one simplex) and from the
-//! reserved grassmann / hyperbolic / SPD tokens 7-10.
+//! [`super::Spd`], [`super::Grassmann`] and [`super::Hyperbolic`] kinds.
 
 use ndarray::{Array1, Array2, ArrayView1};
 

@@ -9,7 +9,7 @@
 //! \((x+v)/\|x+v\|\). Transport is projection at the arrival point.
 //! This token is not [`super::Sphere`] (real \(S^{n-1}\) with a
 //! different packing contract) and not [`super::ComplexCircle`]
-//! (product of \(S^1\)). Reserved tokens 7-10 stay unused.
+//! (product of \(S^1\)).
 //!
 //! Reductions go through [`crate::vecops`].
 

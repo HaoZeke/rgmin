@@ -668,7 +668,12 @@ int32_t rgmin_solver_set_highs_callback(rgmin_solver_t *solver,
  *  R^{3N}/SE(3)) or MW_RIGID (Page-McIver / Sella IRC Eckart).
  *  SO3 is length 9; SE3 is length 12. Oblique is n-by-m via
  *  rgmin_solver_set_oblique. Stiefel p>1 is rgmin_solver_set_stiefel.
- *  Reserved: 7 SPD, 8 Grassmann, 9 Hyperbolic, 10 Poincare.
+ *  Token 7 is SPD, affine-invariant, packed row-major n*n. Token 8 is
+ *  Grassmann Gr(n,1) of the packed length, or the Gr(n,p) that
+ *  rgmin_solver_set_factor_shape names. Token 9 is the hyperboloid,
+ *  packed length at least 2. Token 10 is the Poincare ball. Token 23 is
+ *  U(n), interleaved row-major 2n^2, with n from rgmin_solver_set_unitary
+ *  (default 1).
  *  Token 15 is skew-symmetric n-by-n, n >= 2.
  *  Token 16 is complex Euclidean C^n, packed interleaved, length 2n.
  *  Token 17 is the singleton {A} of packed length n (constantfactory).
@@ -677,8 +682,7 @@ int32_t rgmin_solver_set_highs_callback(rgmin_solver_t *solver,
  *  (multinomialsymmetricfactory).
  *  Token 20 is the complex unit sphere C^n, packed interleaved, length 2n.
  *  Token 21 is the positive orthant of packed length n (positivefactory).
- *  Token 22 is centered m-by-n matrices (centeredmatrixfactory).
- *  Reserved 7-10 unused. */
+ *  Token 22 is centered m-by-n matrices (centeredmatrixfactory). */
 typedef enum rgmin_manifold_t {
     RGMIN_MANIFOLD_EUCLIDEAN = 0,
     RGMIN_MANIFOLD_SPHERE = 1,
@@ -726,11 +730,11 @@ void rgmin_solver_set_multinomial_sym(rgmin_solver_t *solver, size_t n);
  *  manopt spherecomplexfactory. Token 20 defaults to n = 1. */
 void rgmin_solver_set_sphere_complex(rgmin_solver_t *solver, size_t n);
 /** Positive orthant of packed length n. manopt positivefactory.
- *  Token 21 defaults to n = 1. Reserved 7-10 unused. */
+ *  Token 21 defaults to n = 1. */
 void rgmin_solver_set_positive(rgmin_solver_t *solver, size_t n);
 /** Centered m-by-n matrices, packed m*n. manopt centeredmatrixfactory.
  *  Token 22 defaults to 2-by-2 centered columns. center_rows != 0
- *  centers rows. Reserved 7-10 unused. */
+ *  centers rows. */
 void rgmin_solver_set_centered_matrix(rgmin_solver_t *solver, size_t m, size_t n,
                                     int32_t center_rows);
 void rgmin_solver_set_factor_shape(rgmin_solver_t *solver, size_t n, size_t p);

@@ -7,8 +7,8 @@
 //! the centering operator (subtract the mean column or mean
 //! row). Retraction is `X + U` then center. Transport is the
 //! identity. This token is not [`super::Sphere`], not a 3N
-//! cluster packing, and not the reserved SPD / grassmann /
-//! hyperbolic tokens 7-10.
+//! cluster packing, and not [`super::Spd`], [`super::Grassmann`] or
+//! [`super::Hyperbolic`].
 //!
 //! Reductions go through [`crate::vecops`].
 
