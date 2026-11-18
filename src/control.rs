@@ -84,7 +84,9 @@ impl NoiseFloor {
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Control {
-    /// Maximum CG iterations.
+    /// Iteration budget of [`crate::Solver::run`] and of the one-shot
+    /// minimizers that take a control. One [`crate::Solver::step`] is one
+    /// iteration. A zero budget takes no step in `Solver::run`.
     pub maxiter: usize,
     /// Stop when the gradient norm is below `gtol`: [`Self::stop_norm`]
     /// in a session, `||g||_2` elsewhere. A noise floor, when set, can
