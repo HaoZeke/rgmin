@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -22,11 +22,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def finite_values(records: Iterable[dict[str, Any]], key: str) -> list[float]:
+def finite_values(
+    records: Iterable[dict[str, Any]],
+    key: str,
+    *,
+    converged_only: bool = True,
+) -> list[float]:
     values = []
     for record in records:
         value = record.get(key)
-        if record["converged"] and value is not None and np.isfinite(value):
+        if (
+            (record["converged"] or not converged_only)
+            and value is not None
+            and np.isfinite(value)
+        ):
             values.append(float(value))
     return values
 
@@ -42,14 +51,18 @@ def quartiles(values: list[float]) -> dict[str, float | None]:
 def mw_p(left: list[float], right: list[float]) -> float | None:
     if not left or not right:
         return None
-    return float(mannwhitneyu(left, right, alternative="two-sided", method="auto").pvalue)
+    result = float(mannwhitneyu(left, right, alternative="two-sided", method="auto").pvalue)
+    if np.isfinite(result):
+        return result
+    pooled = np.asarray(left + right, dtype=np.float64)
+    return 1.0 if np.ptp(pooled) == 0.0 else None
 
 
 def aa_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     odd = [row for row in records if row["round"] % 2 == 1]
     even = [row for row in records if row["round"] % 2 == 0]
-    odd_wall = finite_values(odd, "wall_seconds")
-    even_wall = finite_values(even, "wall_seconds")
+    odd_wall = finite_values(odd, "wall_seconds", converged_only=False)
+    even_wall = finite_values(even, "wall_seconds", converged_only=False)
     odd_median = quartiles(odd_wall)["median"]
     even_median = quartiles(even_wall)["median"]
     band = None
@@ -88,9 +101,15 @@ def summarize(groups: dict[tuple[str, str, str], list[dict[str, Any]]]) -> list[
                 "n": len(records),
                 "successes": successes,
                 "success_rate": successes / len(records),
-                "wall_seconds": quartiles(finite_values(records, "wall_seconds")),
+                "wall_seconds": quartiles(
+                    finite_values(records, "wall_seconds", converged_only=False)
+                ),
                 "outside_potential_seconds": quartiles(
-                    finite_values(records, "outside_potential_seconds")
+                    finite_values(
+                        records,
+                        "outside_potential_seconds",
+                        converged_only=False,
+                    )
                 ),
                 "force_calls": quartiles(finite_values(records, "force_calls")),
                 "energy_ev": quartiles(finite_values(records, "energy_ev")),
@@ -166,12 +185,20 @@ def comparisons(
                     "reference": "rgmin",
                     "comparator": implementation,
                     "wall_mann_whitney_p": mw_p(
-                        finite_values(reference, "wall_seconds"),
-                        finite_values(comparator, "wall_seconds"),
+                        finite_values(reference, "wall_seconds", converged_only=False),
+                        finite_values(comparator, "wall_seconds", converged_only=False),
                     ),
                     "outside_potential_mann_whitney_p": mw_p(
-                        finite_values(reference, "outside_potential_seconds"),
-                        finite_values(comparator, "outside_potential_seconds"),
+                        finite_values(
+                            reference,
+                            "outside_potential_seconds",
+                            converged_only=False,
+                        ),
+                        finite_values(
+                            comparator,
+                            "outside_potential_seconds",
+                            converged_only=False,
+                        ),
                     ),
                     "force_calls_mann_whitney_p": mw_p(
                         finite_values(reference, "force_calls"),
@@ -221,8 +248,8 @@ def markdown_report(document: dict[str, Any]) -> str:
             f"{document['protocol']['energy_agreement_tolerance_ev']} eV."
         ),
         "",
-        "| System | Method | Code | Success | Wall ms, median [IQR] | Outside potential ms | Force calls | Final energy eV | Wall p | Calls p | Success p | Energy agreement |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| System | Method | Code | Success | Wall ms, median [IQR] | Outside potential ms | Force calls to converge | Final energy eV | Wall p | Outside p | Calls p | Success p | Energy agreement |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     gaps = {(gap["method"], gap["implementation"]): gap["reason"] for gap in document["gaps"]}
     for system, method in systems_methods:
@@ -232,12 +259,12 @@ def markdown_report(document: dict[str, Any]) -> str:
                 gap = gaps.get((method, implementation))
                 if gap:
                     lines.append(
-                        f"| {system} | {method} | {implementation} | gap | — | — | — | — | — | — | — | {gap} |"
+                        f"| {system} | {method} | {implementation} | gap | — | — | — | — | — | — | — | — | {gap} |"
                     )
                 continue
             comparison = comparisons_by_key.get((system, method, implementation))
             energy = "—"
-            wall_p = calls_p = success_p = "—"
+            wall_p = outside_p = calls_p = success_p = "—"
             if comparison is not None:
                 agreement = comparison["energy_agreement"]
                 energy = (
@@ -245,6 +272,7 @@ def markdown_report(document: dict[str, Any]) -> str:
                     f"max Δ={number(agreement['max_abs_delta_ev'])}"
                 )
                 wall_p = number(comparison["wall_mann_whitney_p"])
+                outside_p = number(comparison["outside_potential_mann_whitney_p"])
                 calls_p = number(comparison["force_calls_mann_whitney_p"])
                 success_p = number(comparison["success_fisher_p"])
             lines.append(
@@ -260,6 +288,7 @@ def markdown_report(document: dict[str, Any]) -> str:
                         interval(row["force_calls"]),
                         interval(row["energy_ev"]),
                         wall_p,
+                        outside_p,
                         calls_p,
                         success_p,
                         energy,
@@ -268,6 +297,13 @@ def markdown_report(document: dict[str, Any]) -> str:
                 + " |"
             )
     failures = document["failures"]
+    failure_counts = Counter(
+        (row["system"], row["method"], row["implementation"]) for row in failures
+    )
+    failure_text = "\n".join(
+        f"- {system} {method} {implementation}: {count} nonconverged."
+        for (system, method, implementation), count in sorted(failure_counts.items())
+    )
     widest = max(
         document["summaries"],
         key=lambda row: row["aa_wall"]["relative_band_width"]
@@ -316,7 +352,8 @@ def markdown_report(document: dict[str, Any]) -> str:
             "## Failures and gaps",
             "",
             f"Nonconverged or failed runs: {len(failures)}.",
-            "The eOn client has no variable-cell optimizer. The rgpot Python surface needed a generic EMTPot binding; the separate source revision is recorded in the result JSON.",
+            failure_text,
+            "The eOn client has no variable-cell optimizer. A generic rgpot EMT Python binding was absent and is delivered as a separate source revision; the selected Cu systems use the predeclared Morse potential.",
             "",
             "## Bugs",
             "",
