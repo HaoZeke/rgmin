@@ -96,8 +96,9 @@ Objects
     follows the same unmet-stop policy. Minor 50 adds the energy and
     evaluation stops. Minor 51 adds ``rgmin_minimize_rlbfgs`` and
     ``rgmin_rlbfgs_default``. Minor 52 adds ``RGMIN_GROMACS_STEEP``,
-    ``RGMIN_STOP_MACHINE_PRECISION``, and
-    ``rgmin_solver_set_gromacs_steep``. ``rgmin_control_t`` is unchanged.
+    ``RGMIN_STOP_MACHINE_PRECISION``,
+    ``rgmin_solver_set_gromacs_steep``, and
+    ``rgmin_gromacs_steep_max_constraint_shrinks``. ``rgmin_control_t`` is unchanged.
     ``rgmin_abi_compatible`` checks the major version and the layout revision only.
 
 ``DistanceConstraints``
