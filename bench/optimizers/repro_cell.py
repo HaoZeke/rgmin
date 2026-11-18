@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import warnings
 from pathlib import Path
 
 from ase.filters import FrechetCellFilter
@@ -25,6 +26,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    warnings.filterwarnings(
+        "ignore",
+        category=RuntimeWarning,
+        message="logm result may be inaccurate",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        category=FutureWarning,
+        message="Log flushes by default now",
+    )
     atoms, kind, cell_relaxation = make_system(args.system, 0, args.fixtures)
     calculator, tracked = tracked_calculator(kind, cell_relaxation)
     atoms.calc = calculator
