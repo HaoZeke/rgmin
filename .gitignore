@@ -62,5 +62,8 @@ __pycache__/
 /build/
 .cache/
 
-# reStructuredText exported from docs/orgmode by docs/export.el
+# Sphinx output. The rst exported from docs/orgmode by docs/export.el is
+# tracked, and the docs workflow fails when it is stale.
 docs/build/
+# Written by sphinxcontrib-rust when it is installed.
+docs/source/crates/

@@ -104,6 +104,19 @@ jobs:
             cargo run --locked --quiet --example "$ex"
           done
 
+  rustdoc:
+    name: cargo doc (warnings are errors)
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --locked --no-deps --features capi,par,highs,readcon
+
   # rustc 1.93 and 1.94 ship LLVM 21, whose loop vectorizer segfaulted on
   # an f64::max reduction in session/drive.rs. Debug builds skip it.
   # `--all-features` on this line links SLEPc, PRIMME, ChASE and libkrylov,
