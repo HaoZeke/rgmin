@@ -144,7 +144,7 @@ pub enum Method {
     /// case of SCF iteration*,
     /// <https://doi.org/10.1016/0009-2614(80)80396-4>.
     /// Császár and Pulay, J. Mol. Struct. 114, 31 (1984),
-    /// <https://doi.org/10.1016/0022-2860(84)87198-7>.
+    /// <https://doi.org/10.1016/S0022-2860(84)87198-7>.
     /// The image is `sum c_i (x_i - α g_i)`. A step past eight caps,
     /// an uphill image, or a step that does not lower the force drops
     /// the history and takes one steepest step. The line search chooses

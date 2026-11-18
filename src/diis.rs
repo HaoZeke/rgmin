@@ -7,7 +7,7 @@
 //! of SCF iteration*, <https://doi.org/10.1016/0009-2614(80)80396-4>.
 //! Császár and Pulay, *Geometry optimization by direct inversion in
 //! the iterative subspace*, J. Mol. Struct. 114, 31 (1984),
-//! <https://doi.org/10.1016/0022-2860(84)87198-7>.
+//! <https://doi.org/10.1016/S0022-2860(84)87198-7>.
 //! Farkas and Schlegel, *Methods for optimizing large molecules*,
 //! J. Chem. Phys. 111, 10806 (1999),
 //! <https://doi.org/10.1063/1.480484>.

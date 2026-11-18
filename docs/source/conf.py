@@ -79,11 +79,6 @@ html_theme_options = {
                     "summary": "Saddle-point search on potential energy surfaces",
                 },
                 {
-                    "title": "gpr_optim",
-                    "url": "https://github.com/TheochemUI/gpr_optim",
-                    "summary": "GP-NEB and IRCDriver host",
-                },
-                {
                     "title": "readcon-core",
                     "url": "https://github.com/lode-org/readcon-core",
                     "summary": "CON frames; chemfiles import is a feature",

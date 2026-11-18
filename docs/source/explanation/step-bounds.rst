@@ -24,7 +24,7 @@ Through the C ABI, zero and negative ``maxmove`` arrive as no bound.
 
 The damped model along ``d`` predicts the change ``m(alpha) = alpha mu + alpha^2 delta / 2``.
 Its minimizer ``alpha* = -mu / delta`` predicts ``alpha* mu / 2``.
-Moller's comparison ratio :cite:`mllerScaledConjugateGradient1993` divides the measured change by that value.
+Moller's comparison ratio :cite:`mollerScaledConjugateGradient1993` divides the measured change by that value.
 
 ::
 
@@ -65,8 +65,8 @@ None of these sources sets a fixed per-step bound on log-hyperparameters.
 
 - GPstuff ``fminscg`` takes ``alpha = -mu / delta`` with no clip, from ``sigma0 = 1e-4`` and ``lambda = 10``.
 
-- The GP-NEB and GP-dimer papers of Koistinen et al. (2017, 2019) and Goswami et al. (2025) fit the hyperparameters by SCG with no step bound on them.
-  Goswami and Jonsson (2025) write in their optimal-transport GP paper that the hyperparameters have no direct physical reading.
+- The GP-NEB and GP-dimer papers of Koistinen et al. :cite:`koistinenNudgedElasticBand2017,koistinenNudgedElasticBand2019,koistinenMinimumModeSaddle2020` and Goswami et al. :cite:`goswamiEfficientImplementationGaussian2025` fit the hyperparameters by SCG with no step bound on them.
+  Goswami and Jónsson :cite:`goswamiAdaptivePruningIncreased2026` write in their optimal-transport GP paper that the hyperparameters have no direct physical reading.
 
 - Nocedal and Wright :cite:`nocedalNumericalOptimization2006` Algorithm 4.1 takes the overall bound as an input, and Theorems 4.5 and 4.6 converge for every positive value.
   Section 4.5 asks for a norm matched to how sensitive the model is to each variable.
@@ -78,7 +78,7 @@ The kernel still fixes the norm of the bound, and the likelihood fixes a unit fo
 5 The shape from the kernel
 ---------------------------
 
-Take the value block of the inverse-distance squared-exponential kernel of Koistinen et al. (2019), with ``u_p = ln l_p`` for pair type ``p``:
+Take the value block of the inverse-distance squared-exponential kernel of Koistinen et al. :cite:`koistinenNudgedElasticBand2019`, with ``u_p = ln l_p`` for pair type ``p``:
 
 ::
 

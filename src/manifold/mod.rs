@@ -373,7 +373,7 @@ pub enum ManifoldKind {
     },
     /// Doubly-stochastic n-by-n, row-major n², `n >= 2`.
     /// manopt `multinomialdoublystochasticfactory`.
-    /// Not the reserved SPD / grassmann / hyperbolic tokens.
+    /// Not [`Self::Spd`], [`Self::Grassmann`] or [`Self::Hyperbolic`].
     MultinomialDoublyStochastic {
         /// Side length.
         n: usize,
@@ -397,8 +397,8 @@ pub enum ManifoldKind {
         n: usize,
     },
     /// Centered `m x n` matrices, packed row-major `m n`.
-    /// manopt `centeredmatrixfactory`. Not the reserved SPD /
-    /// grassmann / hyperbolic tokens.
+    /// manopt `centeredmatrixfactory`. Not [`Self::Spd`],
+    /// [`Self::Grassmann`] or [`Self::Hyperbolic`].
     CenteredMatrix {
         /// Rows of the matrix. MATLAB `m`.
         m: usize,

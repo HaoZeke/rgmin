@@ -91,17 +91,31 @@ jobs:
             echo "this row links readcon"
             exit 1
           fi
-      - name: Public docs and C ABI names
+      - name: Public docs, C ABI names and header docs
         if: matrix.name == 'default'
         run: |
           python3 scripts/check_public_docs.py
           python3 scripts/check_abi.py
+          python3 scripts/check_header_docs.py
       - name: Tutorial examples
         if: matrix.name == 'default'
         run: |
-          for ex in tutorial_lbfgs tutorial_fire tutorial_cg tutorial_bfgs tutorial_newton tutorial_scg tutorial_linesearch tutorial_lbfgs_direction; do
+          for ex in tutorial_quickstart tutorial_session tutorial_lbfgs tutorial_fire tutorial_cg tutorial_bfgs tutorial_newton tutorial_scg tutorial_linesearch tutorial_lbfgs_direction howto_level_set; do
             cargo run --locked --quiet --example "$ex"
           done
+
+  rustdoc:
+    name: cargo doc (warnings are errors)
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --locked --no-deps --features capi,par,highs,readcon
 
   # rustc 1.93 and 1.94 ship LLVM 21, whose loop vectorizer segfaulted on
   # an f64::max reduction in session/drive.rs. Debug builds skip it.

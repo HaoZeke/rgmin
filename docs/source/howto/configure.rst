@@ -1,0 +1,140 @@
+
+
+Configure a solver
+------------------
+
+Every public configuration type is ``#[non_exhaustive]``. Outside this
+crate it cannot be written as a struct literal. Start from
+``default()`` or a named constructor and chain ``with_*`` setters, one per
+field. The fields stay public, so they can still be read.
+
+.. code:: rust
+
+    use rgmin::{Control, EigenParams, EigensolverKind, Method, Solver, StopNorm};
+
+    let control = Control::default()
+        .with_maxiter(500)
+        .with_gtol(0.01)
+        .with_stop_norm(StopNorm::MaxAtom)
+        .with_maxmove(0.2);
+    assert_eq!(control.maxmove, Some(0.2));
+    let solver = Solver::new(Method::lbfgs_with_memory(8), control, 21);
+
+    let eigen = EigenParams::default()
+        .with_kind(EigensolverKind::Lanczos)
+        .with_krylov(8);
+
+A setter for an ``Option`` field takes ``impl Into<Option<T>>``:
+``with_maxmove(0.2)`` stores ``Some(0.2)`` and ``with_maxmove(None)``
+clears it. ``Control`` is ``Clone`` and not ``Copy``, so a setter chain on a
+control that is used again starts from ``control.clone()``.
+
+Types built this way
+~~~~~~~~~~~~~~~~~~~~
+
+.. table::
+
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | Type                                                                                      | Start from                                                     |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``Control``                                                                               | ``Control::default()``                                         |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``NoiseFloor``                                                                            | ``NoiseFloor::new(eps_g)``                                     |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``EigenParams``, ``SlepcParams``, ``EigenExaParams``, ``DlaFutureParams``, ``ElpaParams`` | ``default()``                                                  |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``ScgParams``, ``ScgOptions``, ``HighsOptions``, ``HighsStep``                            | ``default()``                                                  |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``ExpParams``, ``LindhParams``, ``FfParams``                                              | ``default()``                                                  |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``EonCg``                                                                                 | ``EonCg::default()``                                           |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``QuickMinOptions``                                                                       | ``rgmin()``, ``eon()``, ``per_atom()``                         |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``FireConfig``                                                                            | ``FireConfig::ase()``                                          |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``TrustRegion``                                                                           | ``TrustRegion::new(delta)``                                    |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``IrcTrust``                                                                              | ``IrcTrust::new(d1, sqrtm, dx)``, ``from_atom_masses``         |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``RtrRadius``                                                                             | ``RtrRadius::new(radius_max)``                                 |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``LindhSpec``                                                                             | ``LindhSpec::new(z, c_stab, cell)``                            |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+    | ``Report``                                                                                | ``Report::new(value, coords)``, for a host that writes its own |
+    +-------------------------------------------------------------------------------------------+----------------------------------------------------------------+
+
+Results (``LowestMode``, ``Eigenpair``, ``Eigenpairs``, ``RestrictedStep``,
+``TcgResult``, ``EonCgReport``, ``LineOutcome``, ``NoiseEstimate``,
+``ValueGradientNoise``, ``Ode12rVerdict``, ``ConstraintReport``,
+``ElpaSpectrum``) are non-exhaustive too. Read their fields; a
+destructuring pattern needs ``..``.
+
+Methods and step rules
+~~~~~~~~~~~~~~~~~~~~~~
+
+A variant that carries parameters is non-exhaustive. Build it with its
+constructor and match it with ``..``:
+
+.. table::
+
+    +-------------------------------------+-------------------------------------------------------------------+
+    | Variant                             | Constructor                                                       |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``Method::Lbfgs``                   | ``Method::lbfgs()``, ``Method::lbfgs_with_memory(m)``             |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``Method::Diis``                    | ``Method::diis()``, ``Method::diis_with_memory(m)``               |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``Method::Fire``                    | ``Method::fire(kind)``                                            |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``Method::Newton``                  | ``Method::newton(kind)``                                          |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``Method::Nlcg``                    | ``Method::nlcg(c)``, ``Method::nlcg_with_restart(c, r)``          |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``Method::Adam``                    | ``Method::adam()``, ``Method::adam_with(beta1, beta2, eps)``      |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``Method::Pso``                     | ``Method::pso()``, ``Method::pso_with(n, w, c1, c2)``             |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``LineSearch::Brent`` ... ``Wolfe`` | ``LineSearch::brent``, ``backtracking``, ``goldstein``, ``wolfe`` |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``LbfgsStep::Capped``, ``Scaled``   | ``LbfgsStep::capped(max_atom)``, ``scaled(max_atom)``             |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``Restart::Njws``, ``Powell``       | ``Restart::njws_at(t)``, ``powell_at(t)``                         |
+    +-------------------------------------+-------------------------------------------------------------------+
+    | ``Conjugacy::Hybrid``               | ``Conjugacy::hybrid(a, b, take_max)``                             |
+    +-------------------------------------+-------------------------------------------------------------------+
+
+``LbfgsStep::default()`` is still the eOn cap,
+``LbfgsStep::capped(EON_MAX_MOVE)``.
+
+.. code:: rust
+
+    use rgmin::Method;
+
+    let method = Method::lbfgs_with_memory(8);
+    let memory = match method {
+        Method::Lbfgs { memory, .. } => memory,
+        _ => 10,
+    };
+    assert_eq!(memory, 8);
+
+New knobs are additive
+~~~~~~~~~~~~~~~~~~~~~~
+
+A field added to one of these types gets a default that keeps the
+earlier behaviour, and a setter. A parameter added to a method variant
+gets a default, and the constructors above keep their signatures. A
+caller that builds through ``default()``, constructors and setters, and
+matches with ``..``, compiles against the next minor release unchanged.
+
+Errors
+~~~~~~
+
+Every fallible entry point returns ``rgmin::Result<T>``, whose error is
+``rgmin::Error``: the eigenpair calls (``lowest_eigenpair``, ``lowest_mode``
+and its backend arms, ``lowest_eigenpairs``), the minimizers, FIRE 2.0
+(``fire2_displacement`` stalls with ``Error::FireStalled``), the manifold
+factories (``StiefelNp::new``, ``Grassmann::new``, ``Unitary::new`` refuse a
+shape with ``Error::ManifoldShape``) and ``Vector::try_on``
+(``Error::UnsupportedDevice``). ``Error`` is non-exhaustive, so a ``match``
+on it needs a wildcard arm.

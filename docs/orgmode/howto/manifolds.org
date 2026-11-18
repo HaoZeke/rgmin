@@ -17,7 +17,7 @@ vector: ~project~, ~retract~, ~transport~. Citations:
 - Boumal, /An Introduction to Optimization on Smooth Manifolds/
   ([[https://doi.org/10.1017/9781009166164][10.1017/9781009166164]]).
 - Boumal, Mishra, Absil, Sepulchre, Manopt
-  ([[https://doi.org/10.5555/2627435.2638581][10.5555/2627435.2638581]]).
+  ([[https://jmlr.org/papers/v15/boumal14a.html][JMLR 15, 1455 (2014)]]).
 - Huang, Absil, Gallivan, Hand, ROPTLIB
   ([[https://doi.org/10.1145/3218822][10.1145/3218822]]).
 
@@ -41,6 +41,14 @@ vector: ~project~, ~retract~, ~transport~. Citations:
 | ~EuclideanComplex { n }~ | interleaved ~(re, im)~, length ~2 n~ | ~x + v~ |
 | ~Constant { n }~ | singleton of length ~n~ | the fixed point |
 | ~Positive { n }~ | positive orthant, length ~n~ | ~x odot exp(v oslash x)~ |
+| ~Spd~ | row-major ~n x n~, length ~n^2~, a perfect square | ~symm(X + U + U X^{-1} U / 2)~ |
+| ~Grassmann~, ~GrassmannP { n, p }~ | column-major ~n x p~ frame, length ~n p~; ~Grassmann~ is Gr(len, 1) until ~set_factor_shape~ | polar factor of ~X + U~ |
+| ~Hyperbolic~ | hyperboloid point, time-like entry first, length ~n >= 2~ | the exponential map |
+| ~PoincareBall~ | open unit ball, length ~k~ | the exponential map by Möbius addition |
+| ~Unitary { n }~ | interleaved ~(re, im)~ row-major ~n x n~, length ~2 n^2~ | unique QR of ~U + V~ |
+| ~MultinomialDoublyStochastic { n }~, ~MultinomialSymmetric { n }~ | row-major ~n x n~, length ~n^2~ | ~X odot exp(V oslash X)~, then Sinkhorn |
+| ~SphereComplex { n }~ | interleaved ~(re, im)~, length ~2 n~ | ~(x+v)/norm(x+v)~ |
+| ~CenteredMatrix { m, n, rows }~ | row-major ~m x n~, length ~m n~ | ~X + U~, then center |
 | ~Product~ | the factor packings end to end | each factor's retraction |
 
 An isolated molecule or cluster lives on ~RigidQuotient~
@@ -297,13 +305,11 @@ The Riemannian Hessian adds the Weingarten term, which removes the dependence on
   interleaved ~(re, im)~ pairs, length ~2 n~. Projection is the
   identity. Retraction is ~x + v~. Transport is the identity.
   It is not the sphere, not ~(S^1)^n~, and not a 3N cluster.
-  C token 16 (~rgmin_solver_set_euclidean_complex~). Tokens 7-10
-  stay reserved.
+  C token 16 (~rgmin_solver_set_euclidean_complex~).
 - ~Constant { n }~ is manopt ~constantfactory~: a singleton of
   packed length ~n~. Projection and transport are the zero
   tangent. Retraction is the fixed point. It is not the sphere
   and not a 3N cluster. C token 17 (~rgmin_solver_set_constant~).
-  Tokens 7-10 stay reserved.
 - ~MultinomialDoublyStochastic { n }~ is manopt
   ~multinomialdoublystochasticfactory~: an ~n x n~ positive
   doubly-stochastic matrix packed row-major (~n^2~, ~n >= 2~).
@@ -311,7 +317,7 @@ The Riemannian Hessian adds the Weingarten term, which removes the dependence on
   Retraction is ~X ⊙ exp(V ⊘ X)~ then Sinkhorn. Transport is
   projection at arrival. It is not the simplex, not the sphere,
   and not a 3N cluster. C token 18
-  (~rgmin_solver_set_multinomial_ds~). Tokens 7-10 stay reserved.
+  (~rgmin_solver_set_multinomial_ds~).
 - ~MultinomialSymmetric { n }~ is manopt
   ~multinomialsymmetricfactory~: an ~n x n~ positive symmetric
   doubly-stochastic matrix packed row-major (~n^2~, ~n >= 2~).
@@ -320,28 +326,38 @@ The Riemannian Hessian adds the Weingarten term, which removes the dependence on
   Transport is projection at arrival. It is not the simplex, not
   the unsigned Birkhoff polytope, not the sphere, and not a 3N
   cluster. C token 19 (~rgmin_solver_set_multinomial_sym~).
-  Tokens 7-10 stay reserved.
 - ~SphereComplex { n }~ is manopt ~spherecomplexfactory~: the
   unit sphere in ~C^n~, interleaved ~(re, im)~, length ~2 n~.
   Projection is ~u - Re(x^* u) x~. Retraction is
   ~(x+v)/||x+v||~. Transport is projection at arrival. It is
   not the real sphere token, not ~(S^1)^n~, and not a 3N
   cluster. C token 20 (~rgmin_solver_set_sphere_complex~).
-  Tokens 7-10 stay reserved.
 - ~Positive { n }~ is manopt ~positivefactory~: the open
   positive orthant of packed length ~n~. Projection is the
   identity. Retraction is ~x odot exp(v oslash x)~. Transport
   is the identity. It is not the sphere, not the simplex, and
   not a 3N cluster. C token 21 (~rgmin_solver_set_positive~).
-  Tokens 7-10 stay reserved.
 - ~CenteredMatrix { m, n, rows }~ is manopt
   ~centeredmatrixfactory~: an ~m x n~ matrix packed row-major
   (~m n~) with ~X 1 = 0~ (~rows = nil~, default) or
   ~1^T X = 0~ (~rows = t~). Projection is the centering operator.
   Retraction is ~X + U~ then center. Transport is the identity.
   It is not the sphere and not a 3N cluster. C token 22
-  (~rgmin_solver_set_centered_matrix~). Tokens 7-10 stay
-  reserved.
+  (~rgmin_solver_set_centered_matrix~).
+- ~Spd~ is manopt ~sympositivedefinitefactory~ with the
+  affine-invariant metric. The Riemannian gradient is
+  ~X sym(egrad) X~. C token 7.
+- ~Grassmann~ and ~GrassmannP { n, p }~ are manopt
+  ~grassmannfactory~. ~Grassmann~ reads Gr(len, 1) until
+  ~set_factor_shape(n, p)~ (C ~rgmin_solver_set_factor_shape~) names
+  the frame; a zero dimension clears it. C token 8.
+- ~Hyperbolic~ is manopt ~hyperbolicfactory~, the hyperboloid model
+  in the Minkowski form. C token 9.
+- ~PoincareBall~ is manopt ~poincareballfactory~: the tangent space
+  is the ambient space and the metric is conformal with factor
+  ~2 / (1 - norm(x)^2)~. C token 10.
+- ~Unitary { n }~ is manopt ~unitaryfactory(n)~ at one block. C token
+  23 selects ~n = 1~; ~rgmin_solver_set_unitary(s, n)~ sets ~n~.
 - ~Product~ packs its factors end to end in the order given. A
   product inside a product is flattened and the weights multiply.
   ~Oblique { n, m }~ stays the token for a power of spheres.

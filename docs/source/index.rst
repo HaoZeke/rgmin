@@ -68,6 +68,8 @@ That installs the 0.6 release on Rust 1.88 or newer.
    tutorials/bfgs
    tutorials/newton
    tutorials/scg
+   tutorials/linesearch
+   tutorials/lbfgs-direction
    tutorials/eigenpairs
    tutorials/python
    tutorials/manifold-fit
@@ -84,6 +86,7 @@ That installs the 0.6 release on Rust 1.88 or newer.
    howto/fire
    howto/strong-scaling
    howto/constraints
+   howto/level-set
    howto/noise
    howto/manifolds
    howto/irc

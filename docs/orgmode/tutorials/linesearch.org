@@ -1,0 +1,15 @@
+#+TITLE: A line search on values you already have
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+
+* A line search on values you already have
+
+A host that owns the potential cannot hand it to a library: it counts every force call itself, and a second call inside the optimizer would spoil the count.
+~SuppliedSearch~ turns the search around. The host passes the energy and gradient at the start, then at each trial the search names, and the search says either "evaluate here next" or "accepted". It never calls an objective.
+
+The search constants are the strong Wolfe ones, ~LineSearch::wolfe(c1, c2, maxiter)~ with ~c1 < c2~. The example runs ~LineSearch::search~ on a closure first, then drives ~SuppliedSearch~ over the same function, and asserts that the two accept the same step length and the same point. @@rst::doc:`../explanation/linesearch`@@ explains the rules.
+
+The listing is ~examples/tutorial_linesearch.rs~, whole. Continuous integration runs it, so it is the program as it builds.
+
+#+INCLUDE: "../../../examples/tutorial_linesearch.rs" src rust
+
+The same loop is the C entry ~rgmin_linesearch~ and the Python class ~rgmin.LineSearch~ of the maturin package.

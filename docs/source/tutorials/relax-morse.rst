@@ -31,7 +31,7 @@ The program prints one line per method when it stops:
 
 ::
 
-    lbfgs: 9 steps, 11 force calls, E = -1396.173031 eV, fmax = 0.005466 eV/Å
+    lbfgs: 9 steps, 11 force calls, E = -1396.173007 eV, fmax = 0.006474 eV/Å
     fire: 50 steps, 51 force calls, E = -1396.172302 eV, fmax = 0.009318 eV/Å
     fire2: 42 steps, 46 force calls, E = -1396.172349 eV, fmax = 0.009145 eV/Å
 
@@ -75,7 +75,7 @@ Read the result
 
     Largest per-atom force against force calls on the Pt256 Morse start.
 
-All three methods reach the same minimum: the final energies agree to within 0.000729 eV.
+All three methods reach the same minimum: the final energies agree to within 0.000705 eV.
 L-BFGS gets there in 11 force calls: its first step used three and every later step one.
 FIRE used one call per step plus one for the start, 51 in all.
 FIRE 2.0 took fewer steps, 42, and 46 calls.

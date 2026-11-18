@@ -18,7 +18,10 @@
 //! objective.
 //!
 //! eOn client `LBFGS::getStep` and `ParametersSSOTDefaults.h`,
-//! <https://github.com/TheochemUI/eOn>.
+//! <https://github.com/TheochemUI/eOn>. Chill et al., *EON: software
+//! for long time simulations of atomic scale systems*, Modelling Simul.
+//! Mater. Sci. Eng. 22, 055002 (2014),
+//! <https://doi.org/10.1088/0965-0393/22/5/055002>.
 //!
 //! Liu and Nocedal, *On the limited memory BFGS method for large scale
 //! optimization*, <https://doi.org/10.1007/BF01589116>.
