@@ -14,7 +14,8 @@ The production method for a smooth unconstrained problem with an
 analytic or fused gradient is limited-memory BFGS without a line
 search. The eOn client does not line-search its L-BFGS step
 (`https://github.com/TheochemUI/eOn <https://github.com/TheochemUI/eOn>`_, ``client/LBFGS.cpp``, commit
-579738a9387e8d0ea55496f45dd057812cfab892). The default cap is that
+579738a9387e8d0ea55496f45dd057812cfab892; the client is described by
+Chill et al., `10.1088/0965-0393/22/5/055002 <https://doi.org/10.1088/0965-0393/22/5/055002>`_). The default cap is that
 client's ``max_move``, 0.2. The first step estimates curvature with a
 finite difference of length 0.01 and sets ``H0 = 1/C``. Later steps use
 ``(s · y) / (y · y)`` when that quotient is positive, and the client's
