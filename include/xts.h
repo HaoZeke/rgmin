@@ -14,6 +14,9 @@
 #define XTS_UNSUPPORTED_DEVICE RGMIN_UNSUPPORTED_DEVICE
 #define XTS_UNAVAILABLE RGMIN_UNAVAILABLE
 #define XTS_CONSTRAINT_ERROR RGMIN_CONSTRAINT_ERROR
+#define XTS_UNMET_STOP RGMIN_UNMET_STOP
+#define XTS_STOP_LINE_SEARCH RGMIN_STOP_LINE_SEARCH
+#define XTS_STOP_POLISH_UNMET RGMIN_STOP_POLISH_UNMET
 
 #define XTS_ABI_VERSION_MAJOR RGMIN_ABI_VERSION_MAJOR
 #define XTS_ABI_VERSION_MINOR RGMIN_ABI_VERSION_MINOR
@@ -122,6 +125,12 @@ typedef rgmin_constraints_t xts_constraints_t;
 #define xts_solver_exp_mu rgmin_solver_exp_mu
 #define xts_solver_set_accept rgmin_solver_set_accept
 #define xts_solver_set_stop_norm rgmin_solver_set_stop_norm
+#define xts_solver_set_error_on_unmet rgmin_solver_set_error_on_unmet
+#define xts_solver_set_backward_polish rgmin_solver_set_backward_polish
+#define xts_backward_error_floor rgmin_backward_error_floor
+#define xts_minimize_opts rgmin_minimize_opts
+#define xts_minimize_hess_opts rgmin_minimize_hess_opts
+#define xts_minimize_hvp_opts rgmin_minimize_hvp_opts
 #define xts_solver_set_fire_preset rgmin_solver_set_fire_preset
 #define xts_solver_set_fire_abc rgmin_solver_set_fire_abc
 #define xts_solver_set_fire_cap_two_step_overshoot rgmin_solver_set_fire_cap_two_step_overshoot
