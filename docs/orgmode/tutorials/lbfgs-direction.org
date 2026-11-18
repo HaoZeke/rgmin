@@ -1,0 +1,16 @@
+#+TITLE: One L-BFGS direction with your own H0
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+
+* One L-BFGS direction with your own H0
+
+~LbfgsPairs~ is the two-loop recursion with the pair memory handed to the caller. It returns the direction ~-H g~ for a gradient you supply and does not evaluate an objective, so a host that has its own step rule, line search or preconditioner can use the L-BFGS metric alone.
+
+The starting matrix ~H0~ is the argument of ~LbfgsPairs::direction~, and it takes three forms of ~LbfgsH0~: ~Scale(gamma)~ is ~gamma I~, ~Diagonal(d)~ is one entry per coordinate, and ~Apply(f)~ is a callback ~v -> H0 v~ that runs once, on the vector in the middle of the two loops.
+
+The example first checks the empty memory, where the direction is ~-gamma g~. It then pushes one pair, compares the direction with the one ~Lbfgs::two_loop~ gives for the same pair, and finishes by checking that a diagonal and the callback that applies it agree.
+
+The listing is ~examples/tutorial_lbfgs_direction.rs~, whole. Continuous integration runs it, so it is the program as it builds.
+
+#+INCLUDE: "../../../examples/tutorial_lbfgs_direction.rs" src rust
+
+~LbfgsPairs::push~ returns ~Ok(true)~ when it stored the pair. A pair that fails the relative-curvature test is dropped and the call returns ~Ok(false)~, which is not an error.
