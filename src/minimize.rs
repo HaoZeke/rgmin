@@ -112,7 +112,8 @@ where
     let mut pos = init.into();
     let mut solver = Solver::new(method, control.clone(), pos.len());
     if control.maxiter == 0 {
-        return solver.assess(obj, &mut pos);
+        let report = solver.assess(obj, &mut pos)?;
+        return control.deliver(report);
     }
     let mut last = None;
     for _ in 0..control.maxiter {
@@ -132,7 +133,7 @@ where
     if last.status == Status::Iterating {
         last.status = Status::Budget;
     }
-    Ok(last)
+    control.deliver(last)
 }
 
 /// Minimize with any [`Method`], including Newton / RFO.
@@ -146,11 +147,43 @@ pub fn minimize_method_hess<O>(
 where
     O: HessianObjective + ?Sized,
 {
-    match method {
-        Method::Newton { kind } => minimize_newton(obj, init, control, kind),
-        Method::Dogleg => run_session_hess(obj, init, control, method),
-        other => minimize_method(obj, init, control, other, linesearch),
+    if matches!(method, Method::Newton { .. }) {
+        return match method {
+            Method::Newton { kind } => minimize_newton(obj, init, control, kind),
+            _ => unreachable!("matched Newton above"),
+        };
     }
+    let quiet = without_polish(control);
+    let report = match method {
+        Method::Dogleg => run_session_hess(obj, init, &quiet, method)?,
+        other => minimize_method(obj, init, &quiet, other, linesearch)?,
+    };
+    polish_after_hess(obj, control, report)
+}
+
+fn without_polish(control: &Control) -> Control {
+    if control.backward_polish {
+        control
+            .clone()
+            .with_backward_polish(false)
+            .with_error_on_unmet(false)
+    } else {
+        control.clone()
+    }
+}
+
+fn polish_after_hess<O>(obj: &O, control: &Control, report: Report) -> Result<Report>
+where
+    O: HessianObjective + ?Sized,
+{
+    if !control.backward_polish {
+        return control.deliver(report);
+    }
+    let prior = report.steps;
+    let polished =
+        crate::newton::polish_inner(obj, report.coords, control, crate::NewtonKind::Shifted)?;
+    let steps = prior + polished.steps;
+    control.deliver(polished.with_steps(steps))
 }
 
 fn run_session_hess<O>(
@@ -180,10 +213,18 @@ pub fn minimize_method_hvp<O>(
 where
     O: HessianVector + ?Sized,
 {
-    match method {
-        Method::NewtonCg | Method::NewtonPcg => run_session_hvp(obj, init, control, method),
-        other => minimize_method(obj, init, control, other, linesearch),
+    let quiet = without_polish(control);
+    let report = match method {
+        Method::NewtonCg | Method::NewtonPcg => run_session_hvp(obj, init, &quiet, method)?,
+        other => minimize_method(obj, init, &quiet, other, linesearch)?,
+    };
+    if !control.backward_polish {
+        return control.deliver(report);
     }
+    let prior = report.steps;
+    let polished = crate::hvp::polish_hvp_inner(obj, report.coords, control)?;
+    let steps = prior + polished.steps;
+    control.deliver(polished.with_steps(steps))
 }
 
 fn run_session_hvp<O>(
@@ -229,7 +270,7 @@ where
     for step in 0..control.maxiter {
         let gnorm = l2(&grad);
         if let Some(status) = control.halt(gnorm, grad.len()) {
-            return Ok(one_shot_report(value, pos, step, gnorm, status));
+            return control.deliver(one_shot_report(value, pos, step, gnorm, status));
         }
         let t = take_step(
             obj,
@@ -243,7 +284,7 @@ where
             implicit_atom_cap(control),
         );
         if t.energy_noise {
-            return Ok(one_shot_report(
+            return control.deliver(one_shot_report(
                 value,
                 pos,
                 step + 1,
@@ -270,7 +311,7 @@ where
         istep = next_istep(lsstep, control);
     }
     let gnorm = l2(&grad);
-    Ok(one_shot_report(
+    control.deliver(one_shot_report(
         value,
         pos,
         control.maxiter,
