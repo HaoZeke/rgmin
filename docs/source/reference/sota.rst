@@ -558,7 +558,7 @@ rank-1 f64 vector.
 
 - Manopt (Boumal, Mishra, Absil, Sepulchre 2014) is the
   factory contract this crate ports
-  (`10.5555/2627435.2638581 <https://doi.org/10.5555/2627435.2638581>`_).
+  (`JMLR 15, 1455 (2014) <https://jmlr.org/papers/v15/boumal14a.html>`_).
 
 - ROPTLIB (Huang, Absil, Gallivan, Hand 2018) is the C++
   library that names Stiefel and SE(3) in the same waist

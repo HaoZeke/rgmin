@@ -550,7 +550,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Comput. Phys. Commun. 184, 2641 (2013),
   https://doi.org/10.1016/j.cpc.2013.06.003. Dröge et al., Softw.
   Pract. Exp. 53, 176 (2023), https://doi.org/10.1002/spe.3075.
-  Holm, Scand. J. Stat. 6, 65 (1979), https://doi.org/10.2307/4615733.
+  Holm, Scand. J. Stat. 6, 65 (1979), https://www.jstor.org/stable/4615733.
 - Geometry preconditioners install through `Solver::set_precon` and
   C `rgmin_solver_set_precon` (ABI minor 32): Exp, Lindh, the bonded
   metric, or `select_precon`.

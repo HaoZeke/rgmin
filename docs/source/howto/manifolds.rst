@@ -17,7 +17,7 @@ vector: ``project``, ``retract``, ``transport``. Citations:
   (`10.1017/9781009166164 <https://doi.org/10.1017/9781009166164>`_).
 
 - Boumal, Mishra, Absil, Sepulchre, Manopt
-  (`10.5555/2627435.2638581 <https://doi.org/10.5555/2627435.2638581>`_).
+  (`JMLR 15, 1455 (2014) <https://jmlr.org/papers/v15/boumal14a.html>`_).
 
 - Huang, Absil, Gallivan, Hand, ROPTLIB
   (`10.1145/3218822 <https://doi.org/10.1145/3218822>`_).

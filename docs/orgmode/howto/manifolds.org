@@ -17,7 +17,7 @@ vector: ~project~, ~retract~, ~transport~. Citations:
 - Boumal, /An Introduction to Optimization on Smooth Manifolds/
   ([[https://doi.org/10.1017/9781009166164][10.1017/9781009166164]]).
 - Boumal, Mishra, Absil, Sepulchre, Manopt
-  ([[https://doi.org/10.5555/2627435.2638581][10.5555/2627435.2638581]]).
+  ([[https://jmlr.org/papers/v15/boumal14a.html][JMLR 15, 1455 (2014)]]).
 - Huang, Absil, Gallivan, Hand, ROPTLIB
   ([[https://doi.org/10.1145/3218822][10.1145/3218822]]).
 
