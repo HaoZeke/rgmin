@@ -24,7 +24,7 @@ Through the C ABI, zero and negative ``maxmove`` arrive as no bound.
 
 The damped model along ``d`` predicts the change ``m(alpha) = alpha mu + alpha^2 delta / 2``.
 Its minimizer ``alpha* = -mu / delta`` predicts ``alpha* mu / 2``.
-Moller's comparison ratio :cite:`mllerScaledConjugateGradient1993` divides the measured change by that value.
+Moller's comparison ratio :cite:`mollerScaledConjugateGradient1993` divides the measured change by that value.
 
 ::
 
