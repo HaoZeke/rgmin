@@ -107,6 +107,61 @@ fn stiefel_joint_diagonalization_reaches_the_diagonalizer() {
     assert!((norm - 1.0).abs() < 1e-8, "left the sphere at {norm}");
 }
 
+struct ContractingMetric;
+
+impl Manifold for ContractingMetric {
+    fn project(&self, _x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+        v.clone()
+    }
+
+    fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+        x + v
+    }
+
+    fn transport(
+        &self,
+        _x_from: &Array1<f64>,
+        _x_to: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Array1<f64> {
+        v.clone()
+    }
+
+    fn inner(&self, x: &Array1<f64>, u: &Array1<f64>, v: &Array1<f64>) -> f64 {
+        let metric = if x[0] <= 1.0 { 1e-12 } else { 1.0 };
+        metric * u.dot(v)
+    }
+
+    fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+        Some(x + v)
+    }
+
+    fn parallel_transport_along(
+        &self,
+        _x: &Array1<f64>,
+        _d: &Array1<f64>,
+        v: &Array1<f64>,
+    ) -> Option<Array1<f64>> {
+        Some(v.clone())
+    }
+}
+
+#[test]
+fn riemannian_gradient_tolerance_outranks_the_evaluation_budget() {
+    let obj = Oracle::unbounded(1, |x: ArrayView1<f64>| (0.5 * x[0] * x[0], array![x[0]]));
+    let control = Control::default()
+        .with_maxiter(2)
+        .with_gtol(1e-4)
+        .with_maxmove(1.0)
+        .with_max_evals(2);
+    let params = Rlbfgs::default().with_grad_ratio(0.0);
+    let report =
+        minimize_rlbfgs(&ContractingMetric, &obj, array![2.0], &control, &params).expect("rlbfgs");
+    assert_eq!(report.status, Status::Tolerance, "{report:?}");
+    assert!(report.grad_norm < control.gtol, "{report:?}");
+    assert_eq!(report.evals, 2);
+}
+
 #[cfg(feature = "capi")]
 mod capi {
     use std::os::raw::c_void;
