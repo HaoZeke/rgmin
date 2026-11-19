@@ -83,11 +83,14 @@ jobs:
       - name: Staticlib readcon link
         run: |
           lib=target/debug/librgmin.a
+          syms=$(mktemp)
+          trap 'rm -f "$syms"' EXIT
+          nm -a "$lib" > "$syms"
           # `readcon_core` is the crate. A bare `readcon` match also hits
           # `ThreadConfig` inside matrixmultiply.
           if [ "${{ matrix.readcon }}" = "1" ]; then
-            nm -a "$lib" | grep -q readcon_core
-          elif nm -a "$lib" | grep -E 'readcon_core|readcon-core'; then
+            grep -q readcon_core "$syms"
+          elif grep -E 'readcon_core|readcon-core' "$syms"; then
             echo "this row links readcon"
             exit 1
           fi
