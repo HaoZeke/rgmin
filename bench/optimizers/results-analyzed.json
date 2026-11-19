@@ -57522,7 +57522,7 @@
     }
   ],
   "runtime": {
-    "blas": "{",
+    "blas": "blas=scipy-openblas 0.3.34.237.2 [OpenBLAS 0.3.34.237.2 USE64BITINT DYNAMIC_ARCH NO_AFFINITY SkylakeX MAX_THREADS=64]; lapack=scipy-openblas 0.3.34.237.2; runtime=openblas 0.3.34.237.2 (libscipy_openblas64_-4b78795a.so)",
     "env_threads": {
       "MKL_NUM_THREADS": "1",
       "NUMEXPR_NUM_THREADS": "1",
@@ -57579,7 +57579,6 @@
     "eon_tag": "v3.6.0",
     "rgmin": "8e5c12c08c5a8c9f86873fc3069cb7a08f41b096",
     "rgpot": "672aef430855036125c902ace024756d682e180a",
-    "rgpot_binding_patch": "6b7c8b25f449bde02ea6581635f8121e449a51d1",
     "rgpot_tag": "v3.7.0"
   },
   "summaries": [
