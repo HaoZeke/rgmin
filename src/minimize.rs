@@ -180,11 +180,11 @@ where
     if !control.backward_polish {
         return control.deliver(report);
     }
-    let prior = report.steps;
+    let steps = report.steps;
+    let evals = report.evals;
     let polished =
         crate::newton::polish_inner(obj, report.coords, control, crate::NewtonKind::Shifted)?;
-    let steps = prior + polished.steps;
-    control.deliver(polished.with_steps(steps))
+    control.deliver(carry_polish(steps, evals, polished))
 }
 
 fn run_session_hess<O>(
@@ -222,10 +222,19 @@ where
     if !control.backward_polish {
         return control.deliver(report);
     }
-    let prior = report.steps;
+    let steps = report.steps;
+    let evals = report.evals;
     let polished = crate::hvp::polish_hvp_inner(obj, report.coords, control)?;
-    let steps = prior + polished.steps;
-    control.deliver(polished.with_steps(steps))
+    control.deliver(carry_polish(steps, evals, polished))
+}
+
+/// The search that ran before the polish already counted its steps and
+/// evaluations. The polish report replaces that report, so both totals
+/// have to be carried across or the caller sees only the polish.
+fn carry_polish(prior_steps: usize, prior_evals: usize, polished: Report) -> Report {
+    let steps = prior_steps + polished.steps;
+    let evals = prior_evals + polished.evals;
+    polished.with_steps(steps).with_evals(evals)
 }
 
 fn run_session_hvp<O>(

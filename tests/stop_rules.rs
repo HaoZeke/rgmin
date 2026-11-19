@@ -919,3 +919,39 @@ fn forget_drops_the_energy_etol_compares() {
 fn forget_evaluation_drops_the_energy_etol_compares() {
     restart_drops_recorded_energy(&mut Solver::forget_evaluation);
 }
+
+#[test]
+fn backward_polish_keeps_the_evaluations_from_the_search() {
+    let control = strict().with_maxiter(6).with_backward_polish(true);
+    let quiet = control
+        .clone()
+        .with_backward_polish(false)
+        .with_error_on_unmet(false);
+    let plain = minimize_method(
+        &Tally::new(Quadratic),
+        quad_start(),
+        &quiet,
+        Method::Bfgs,
+        LineSearch::default(),
+    )
+    .unwrap();
+    assert!(plain.evals > 0, "{plain:?}");
+    let polished = minimize_method_hess(
+        &Tally::new(Quadratic),
+        quad_start(),
+        &control,
+        Method::Bfgs,
+        LineSearch::default(),
+    )
+    .unwrap();
+    assert_eq!(polished.evals, plain.evals, "{polished:?}");
+    let polished_hvp = minimize_method_hvp(
+        &Tally::new(Quadratic),
+        quad_start(),
+        &control,
+        Method::Bfgs,
+        LineSearch::default(),
+    )
+    .unwrap();
+    assert_eq!(polished_hvp.evals, plain.evals, "{polished_hvp:?}");
+}
