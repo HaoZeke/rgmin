@@ -73,7 +73,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 50
+#define RGMIN_ABI_VERSION_MINOR 51
 /* 37 linesearch, 38 lbfgs_direction, 39 rgmin_lowest_eigenpairs.
  * 40 is the 0.6.0 union with the 0.5.2 C surface.
  * 41 rgmin_manifold_handle_t, 42 rgmin_lowest_eigenpairs_ex,
@@ -86,7 +86,9 @@ typedef struct rgmin_abi_stamp_t {
  *    the two session setters, rgmin_backward_error_floor, and the
  *    *_opts one-shots. rgmin_control_t is unchanged.
  * 50 etol and max_evals stops, RGMIN_STOP_ENERGY_TOLERANCE and
- *    RGMIN_STOP_EVAL_BUDGET. rgmin_control_t is unchanged. */
+ *    RGMIN_STOP_EVAL_BUDGET. rgmin_control_t is unchanged.
+ * 51 rgmin_minimize_rlbfgs and rgmin_rlbfgs_default. rgmin_control_t
+ *    is unchanged. */
 #define RGMIN_ABI_LAYOUT_REVISION 5
 /* Layout revision 5. rgmin_control_t is maxiter, gtol, istep, memory,
  * maxmove, noise_eps, noise_c. maxmove > 0 is the Euclidean cap; 0 keeps
@@ -1178,6 +1180,30 @@ rgmin_status_t rgmin_minimize_scg_with_options(
     DLManagedTensorVersioned *x, const rgmin_control_t *ctrl,
     const rgmin_scg_params_t *params, const rgmin_scg_options_t *options,
     rgmin_report_t *out);
+
+/** Cautious limited-memory Riemannian BFGS. Start from
+ *  \ref rgmin_rlbfgs_default. ABI minor 51. */
+typedef struct rgmin_rlbfgs_t {
+    size_t memory;
+    double cautious_slope;
+    double armijo;
+    double backtrack;
+    size_t linesearch_max;
+    double grad_ratio;
+} rgmin_rlbfgs_t;
+/** The record a NULL \a params stands for: Rust \c Rlbfgs::default.
+ *  ABI minor 51. */
+rgmin_rlbfgs_t rgmin_rlbfgs_default(void);
+
+/** Cautious limited-memory Riemannian BFGS on \a manifold.
+ *  NULL \a params selects \ref rgmin_rlbfgs_default. \a manifold uses
+ *  the same default shapes as \ref rgmin_solver_set_manifold.
+ *  A positive \c ctrl->maxmove caps the ambient trial length. Zero
+ *  leaves that cap off. ABI minor 51. */
+rgmin_status_t rgmin_minimize_rlbfgs(rgmin_eval_fn eval, rgmin_grad_fn grad, void *user,
+                                     DLManagedTensorVersioned *x, const rgmin_control_t *ctrl,
+                                     const rgmin_rlbfgs_t *params, rgmin_manifold_t manifold,
+                                     rgmin_report_t *out);
 
 
 

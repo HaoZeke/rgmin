@@ -24,10 +24,11 @@ use crate::{
     Accept, ApplyBlockPreconditioner, ApplyHessian, Conjugacy, Control, DirectionalCurvature,
     EigenParams, EigensolverKind, Error, HessianObjective, HessianOracle, HessianVector, HvpOracle,
     LbfgsH0, LbfgsPairs, LineSearch, ManifoldKind, Method, NewtonKind, Oracle, QnStep, Restart,
-    RiemannianManifold, ScgOptions, ScgParams, ScgStepTolerance, SearchStep, Solver, SpdMetric,
-    StiefelRetraction, StopNorm, SuppliedSearch, lowest_eigenpairs, lowest_eigenpairs_precond,
-    lowest_mode, minimize_method, minimize_method_hess, minimize_method_hvp,
-    minimize_scg_exact_with_options, minimize_scg_with_options,
+    RiemannianManifold, Rlbfgs, ScgOptions, ScgParams, ScgStepTolerance, SearchStep, Solver,
+    SpdMetric, StiefelRetraction, StopNorm, SuppliedSearch, lowest_eigenpairs,
+    lowest_eigenpairs_precond, lowest_mode, minimize_method, minimize_method_hess,
+    minimize_method_hvp, minimize_rlbfgs, minimize_scg_exact_with_options,
+    minimize_scg_with_options,
 };
 
 /// Status codes. 0 is success, matching metatensor / eindir.
@@ -81,7 +82,7 @@ pub struct rgmin_abi_stamp_t {
 }
 
 pub const RGMIN_ABI_VERSION_MAJOR: u16 = 1;
-pub const RGMIN_ABI_VERSION_MINOR: u16 = 50;
+pub const RGMIN_ABI_VERSION_MINOR: u16 = 51;
 pub const RGMIN_ABI_LAYOUT_REVISION: u16 = 5;
 
 /// Method tag. Keep this a closed C enum; Rust [`Method`] is the source.
@@ -305,6 +306,25 @@ pub struct rgmin_scg_params_t {
     /// Leaf conjugacy as `xts_conjugacy_t`. Stored as `i32` so an
     /// unknown C enumerant is not UB on a closed Rust enum.
     pub conjugacy: i32,
+}
+
+/// Cautious limited-memory Riemannian BFGS. Null at the C entry selects
+/// [`Rlbfgs::default`]. ABI minor 51.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct rgmin_rlbfgs_t {
+    /// Curvature pairs kept. Zero is [`rgmin_status_t::RGMIN_INVALID_PARAMETER`].
+    pub memory: usize,
+    /// Factor in `vartheta(||grad||)`.
+    pub cautious_slope: f64,
+    /// Armijo sufficient-decrease factor.
+    pub armijo: f64,
+    /// Trial shrinkage in `(0, 1)`.
+    pub backtrack: f64,
+    /// Armijo trials on one iteration, including the unit trial.
+    pub linesearch_max: usize,
+    /// Stop when `||grad|| / ||grad_0||` falls below this. Zero leaves the ratio off.
+    pub grad_ratio: f64,
 }
 
 /// Closed eigensolver tag. Integers match `schema/eigen.capnp`.
@@ -1160,6 +1180,94 @@ pub unsafe extern "C" fn rgmin_minimize_scg(
             std::ptr::null(),
             out,
         )
+    }
+}
+
+/// Cautious limited-memory Riemannian BFGS on the session manifold token.
+///
+/// Null `params` selects [`Rlbfgs::default`]. The token uses the same
+/// default shapes as [`rgmin_solver_set_manifold`]. ABI minor 51.
+///
+/// # Safety
+///
+/// Same as [`rgmin_minimize`]. `params` may be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_minimize_rlbfgs(
+    eval: Option<rgmin_eval_fn>,
+    grad: Option<rgmin_grad_fn>,
+    user: *mut c_void,
+    x: *mut DLManagedTensorVersioned,
+    ctrl: *const rgmin_control_t,
+    params: *const rgmin_rlbfgs_t,
+    manifold: rgmin_manifold_t,
+    out: *mut rgmin_report_t,
+) -> rgmin_status_t {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let eval = match eval {
+            Some(f) => f,
+            None => {
+                set_last_error("rgmin_minimize_rlbfgs: eval is NULL");
+                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+            }
+        };
+        let grad = match grad {
+            Some(f) => f,
+            None => {
+                set_last_error("rgmin_minimize_rlbfgs: grad is NULL");
+                return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+            }
+        };
+        if ctrl.is_null() || out.is_null() {
+            set_last_error("rgmin_minimize_rlbfgs: ctrl/out null");
+            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        }
+        let rlbfgs = match rlbfgs_from_c(params) {
+            Ok(params) => params,
+            Err(status) => return status,
+        };
+        let init = match cpu_f64_slice_mut(x, "x") {
+            Ok(s) => s.to_vec(),
+            Err(st) => return st,
+        };
+        if init.iter().any(|value| !value.is_finite()) {
+            set_last_error("rgmin_minimize_rlbfgs: x contains a non-finite value");
+            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        }
+        let n = init.len();
+        let obj = c_oracle(eval, grad, user, n);
+        let c = unsafe { &*ctrl };
+        let control = control_from_c(c);
+        let kind = kind_from_token(manifold);
+        let outcome = minimize_rlbfgs(&kind, &obj, Array1::from(init), &control, &rlbfgs);
+        finish_one_shot(x, out, outcome)
+    })) {
+        Ok(status) => status,
+        Err(_) => {
+            set_last_error("rgmin_minimize_rlbfgs: panic");
+            rgmin_status_t::RGMIN_INTERNAL_ERROR
+        }
+    }
+}
+
+fn rlbfgs_from_c(params: *const rgmin_rlbfgs_t) -> std::result::Result<Rlbfgs, rgmin_status_t> {
+    if params.is_null() {
+        return Ok(Rlbfgs::default());
+    }
+    let params = unsafe { &*params };
+    let built = Rlbfgs {
+        memory: params.memory,
+        cautious_slope: params.cautious_slope,
+        armijo: params.armijo,
+        backtrack: params.backtrack,
+        linesearch_max: params.linesearch_max,
+        grad_ratio: params.grad_ratio,
+    };
+    match built.check() {
+        Ok(()) => Ok(built),
+        Err(err) => {
+            set_last_error(&err.to_string());
+            Err(rgmin_status_t::RGMIN_INVALID_PARAMETER)
+        }
     }
 }
 
@@ -2379,19 +2487,8 @@ pub enum rgmin_manifold_t {
     RGMIN_MANIFOLD_UNITARY = 23,
 }
 
-/// Select the session manifold by token.
-///
-/// # Safety
-/// `solver` is null or a live session from [`rgmin_solver_create`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgmin_solver_set_manifold(
-    solver: *mut rgmin_solver_t,
-    manifold: rgmin_manifold_t,
-) {
-    if solver.is_null() {
-        return;
-    }
-    let kind = match manifold {
+fn kind_from_token(manifold: rgmin_manifold_t) -> ManifoldKind {
+    match manifold {
         rgmin_manifold_t::RGMIN_MANIFOLD_SPHERE => ManifoldKind::Sphere,
         rgmin_manifold_t::RGMIN_MANIFOLD_SO3 => ManifoldKind::So3,
         rgmin_manifold_t::RGMIN_MANIFOLD_STIEFEL => ManifoldKind::Stiefel,
@@ -2426,7 +2523,22 @@ pub unsafe extern "C" fn rgmin_solver_set_manifold(
             rows: false,
         },
         rgmin_manifold_t::RGMIN_MANIFOLD_EUCLIDEAN => ManifoldKind::Euclidean,
-    };
+    }
+}
+
+/// Select the session manifold by token.
+///
+/// # Safety
+/// `solver` is null or a live session from [`rgmin_solver_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgmin_solver_set_manifold(
+    solver: *mut rgmin_solver_t,
+    manifold: rgmin_manifold_t,
+) {
+    if solver.is_null() {
+        return;
+    }
+    let kind = kind_from_token(manifold);
     unsafe { (*solver).solver.set_manifold(kind) };
 }
 
@@ -6568,6 +6680,21 @@ impl Default for rgmin_exp_t {
     }
 }
 
+impl Default for rgmin_rlbfgs_t {
+    /// [`Rlbfgs::default`].
+    fn default() -> Self {
+        let params = Rlbfgs::default();
+        Self {
+            memory: params.memory,
+            cautious_slope: params.cautious_slope,
+            armijo: params.armijo,
+            backtrack: params.backtrack,
+            linesearch_max: params.linesearch_max,
+            grad_ratio: params.grad_ratio,
+        }
+    }
+}
+
 impl Default for rgmin_scg_params_t {
     /// [`ScgParams::default`] with Netlab's Polak-Ribiere conjugacy.
     fn default() -> Self {
@@ -6635,6 +6762,12 @@ pub extern "C" fn rgmin_control_default() -> rgmin_control_t {
 #[unsafe(no_mangle)]
 pub extern "C" fn rgmin_exp_default() -> rgmin_exp_t {
     rgmin_exp_t::default()
+}
+
+/// [`Rlbfgs::default`]. ABI minor 51.
+#[unsafe(no_mangle)]
+pub extern "C" fn rgmin_rlbfgs_default() -> rgmin_rlbfgs_t {
+    rgmin_rlbfgs_t::default()
 }
 
 /// The record a null `params` of [`rgmin_minimize_scg`] stands for. ABI minor 46.

@@ -211,15 +211,35 @@ Python takes ``rgmin.LbfgsPairs.push(s, y, rho=None)``.
 Stopping rules
 ~~~~~~~~~~~~~~
 
-``rgmin_solver_set_etol(s, etol)`` stops a session when the relative energy change between accepted steps falls below ``etol``, the LAMMPS ``minimize etol`` test.
-``rgmin_solver_set_max_evals(s, n)`` stops it after ``n`` objective evaluations, line-search trials included, the LAMMPS ``maxeval`` test.
-Both are off until set, and ``rgmin_solver_clear_etol`` and ``rgmin_solver_clear_max_evals`` turn them off again.
-``rgmin_solver_evals(s)`` is the count the budget compares.
-The finished step reports ``RGMIN_STOP_ENERGY_TOLERANCE`` or ``RGMIN_STOP_EVAL_BUDGET`` in ``rgmin_report_t.stop``.
-A negative or non-finite ``etol``, a zero budget, a null session and an ``etol`` on a particle swarm session return ``RGMIN_INVALID_PARAMETER``, leave the session as it was, and put the reason in ``rgmin_last_error``.
-These are ``abi_minor`` 50, so check ``rgmin_abi_stamp().abi_minor >= 50`` first.
-``rgmin_control_t`` keeps its layout and the one-shot ``rgmin_minimize`` calls carry no stops.
+``rgmin_solver_set_etol(s, etol)`` stops a session when the relative energy
+change between accepted steps falls below ``etol``, the LAMMPS
+``minimize etol`` test. ``rgmin_solver_set_max_evals(s, n)`` stops it after ``n``
+objective evaluations, line-search trials included, the LAMMPS ``maxeval``
+test. Both are off until set, and ``rgmin_solver_clear_etol`` and
+``rgmin_solver_clear_max_evals`` turn them off again. ``rgmin_solver_evals(s)``
+is the count the budget compares. The finished step reports
+``RGMIN_STOP_ENERGY_TOLERANCE`` or ``RGMIN_STOP_EVAL_BUDGET`` in
+``rgmin_report_t.stop``. A negative or non-finite ``etol``, a zero budget, a
+null session and an ``etol`` on a particle swarm session return
+``RGMIN_INVALID_PARAMETER``, leave the session as it was, and put the
+reason in ``rgmin_last_error``. These are ``abi_minor`` 50, so check
+``rgmin_abi_stamp().abi_minor >= 50`` first. ``rgmin_control_t`` keeps its
+layout and the one-shot ``rgmin_minimize`` calls carry no stops.
 :doc:`stopping` has the formula and the SciPy and LAMMPS mapping.
+
+Cautious Riemannian L-BFGS
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``rgmin_minimize_rlbfgs`` runs Algorithm 2 of Huang, Absil, and Gallivan
+(`10.1137/17M1127582 <https://doi.org/10.1137/17M1127582>`_)
+on a manifold token. Null ``params`` is ``rgmin_rlbfgs_default``: memory 4,
+cautious slope ``10^{-4}``, Armijo ``10^{-4}``, backtrack ``1/2``, 48 trials,
+and the relative gradient stop ``10^{-6}``. The token uses the same
+default shapes as ``rgmin_solver_set_manifold``. A positive
+``ctrl->maxmove`` caps the ambient trial length. Zero leaves that cap
+off. ``xts_minimize_rlbfgs`` and ``xts_rlbfgs_default`` are the aliases.
+These are ``abi_minor`` 51. ``rgmin_control_t`` is unchanged, and the
+default Euclidean L-BFGS step stays the eOn cap.
 
 C++
 ~~~
