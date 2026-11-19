@@ -11,8 +11,8 @@ use eindir_core::{Bounds, DifferentiableObjective, Gradient, Objective};
 use ndarray::{Array1, Array2, ArrayView1, array};
 use rgmin::{
     Conjugacy, Control, Error, FireKind, HessianObjective, Method, NewtonKind, Report, Restart,
-    ScgParams, Solver, Status, minimize_method, minimize_method_hess, minimize_method_hvp,
-    minimize_newton, minimize_newton_cg, minimize_pso, minimize_scg,
+    ScgParams, Solver, Status, StopReason, minimize_method, minimize_method_hess,
+    minimize_method_hvp, minimize_newton, minimize_newton_cg, minimize_pso, minimize_scg,
 };
 use rgmin::{HessianVector, LineSearch};
 
@@ -954,4 +954,82 @@ fn backward_polish_keeps_the_evaluations_from_the_search() {
     )
     .unwrap();
     assert_eq!(polished_hvp.evals, plain.evals, "{polished_hvp:?}");
+}
+
+#[test]
+fn an_eval_budget_is_unmet_and_an_energy_stop_held() {
+    assert!(StopReason::EvalBudget.is_unmet());
+    assert!(!StopReason::EnergyTolerance.is_unmet());
+    let unmet = strict().with_max_evals(4).with_error_on_unmet(true);
+    let err = minimize_method(
+        &Quadratic,
+        quad_start(),
+        &unmet,
+        Method::Steepest,
+        LineSearch::default(),
+    )
+    .unwrap_err();
+    let Error::StopUnmet { reason, .. } = err else {
+        panic!("expected StopUnmet, got {err:?}");
+    };
+    assert_eq!(reason, StopReason::EvalBudget);
+    let held = strict().with_etol(1e-3).with_error_on_unmet(true);
+    let report = minimize_method(
+        &Quadratic,
+        quad_start(),
+        &held,
+        Method::Steepest,
+        LineSearch::default(),
+    )
+    .unwrap();
+    assert_eq!(report.status, Status::EnergyTolerance, "{report:?}");
+    assert!(!report.stop_reason().is_unmet());
+}
+
+#[test]
+fn particle_swarm_stops_when_the_count_meets_the_budget() {
+    let control = strict().with_maxiter(8).with_max_evals(2);
+    let obj = Tally::new(Rosenbrock::<2>::new());
+    let report = minimize_pso(&obj, rosenbrock_start(), &control, 1, 0.7, 1.5, 1.5).unwrap();
+    assert_eq!(report.status, Status::EvalBudget, "{report:?}");
+    assert_eq!(report.steps, 1, "{report:?}");
+    assert_eq!(report.evals, obj.calls());
+}
+
+#[test]
+fn fire_fill_holds_a_large_etol_through_the_delay() {
+    let calls = AtomicUsize::new(0);
+    let fill = |at: ArrayView1<f64>, grad: &mut Array1<f64>| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        let (value, g) = MorseTrimer.value_and_gradient(at);
+        grad.assign(&g);
+        value
+    };
+    let mut solver = Solver::new(Method::fire(FireKind::V1), strict().with_etol(1e3), 9);
+    let report = solver.run_fill(&mut morse_start(), fill).unwrap();
+    assert_eq!(report.status, Status::EnergyTolerance, "{report:?}");
+    // Default FIRE `n_min` is 5. The energy test first applies on the
+    // step that pushes `n_pos` past that delay, which is step 6 when
+    // every step stays downhill.
+    assert_eq!(report.steps, 6, "{report:?}");
+    assert_eq!(report.evals, calls.load(Ordering::SeqCst));
+}
+
+#[test]
+fn a_gradient_equal_to_gtol_does_not_outrank_the_eval_budget_on_fill() {
+    let gtol = 0.25;
+    let control = Control::default()
+        .with_maxiter(4)
+        .with_gtol(gtol)
+        .with_max_evals(3);
+    let mut solver = Solver::new(Method::lbfgs(), control, 1);
+    let mut x = array![0.5];
+    let report = solver
+        .run_fill(&mut x, |_at, grad| {
+            grad[0] = gtol;
+            1.0
+        })
+        .unwrap();
+    assert_eq!(report.status, Status::EvalBudget, "{report:?}");
+    assert_eq!(report.grad_norm, gtol, "{report:?}");
 }
