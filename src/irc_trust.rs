@@ -82,18 +82,19 @@ impl IrcTrust {
         }
         let norm = nrm2(w.view());
         if norm <= 1e-16 {
-            // Degenerate: sit on the first weighted axis.
-            let wnorm = nrm2(self.sqrtm.view());
-            if wnorm <= 1e-16 || self.dx == 0.0 {
+            // Degenerate: sit on the first represented weighted axis.
+            let axis = (0..n).find(|&i| self.sqrtm[i] > 1e-16);
+            if axis.is_none() || self.dx == 0.0 {
                 for i in 0..n {
                     out[i] = -self.d1[i];
                 }
                 return out;
             }
-            let scale = self.dx / self.sqrtm[0].max(1e-16);
-            out[0] = scale - self.d1[0];
-            for i in 1..n {
+            for i in 0..n {
                 out[i] = -self.d1[i];
+            }
+            if let Some(axis) = axis {
+                out[axis] = self.dx / self.sqrtm[axis] - self.d1[axis];
             }
             return out;
         }

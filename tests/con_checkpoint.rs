@@ -279,6 +279,77 @@ fn two_masses_for_one_symbol_are_refused() {
 }
 
 #[test]
+fn multiline_headers_are_refused_without_touching_the_destination() {
+    for (index, header) in ["two\nlines", "two\rlines"].into_iter().enumerate() {
+        let path = scratch(&format!("header-{index}"));
+        std::fs::write(&path, b"keep me").unwrap();
+        let err = write_checkpoint(
+            &path,
+            &host_report(),
+            &symbols(),
+            &masses(),
+            cell(),
+            &fixed(),
+            header,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("single line"), "{err}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep me");
+    }
+}
+
+#[test]
+fn checkpoint_io_failures_are_returned_to_the_caller() {
+    let directory = std::env::temp_dir().join(format!(
+        "rgmin-con-directory-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let err = write_checkpoint(
+        &directory,
+        &host_report(),
+        &symbols(),
+        &masses(),
+        cell(),
+        &fixed(),
+        HEADER,
+    )
+    .unwrap_err();
+    assert!(!err.to_string().is_empty());
+
+    let missing = directory.join("missing.con");
+    let err = read_checkpoint(&missing).unwrap_err();
+    assert!(!err.to_string().is_empty());
+}
+
+#[test]
+fn duplicate_atom_ids_fall_back_to_file_order() {
+    let path = scratch("duplicate-ids");
+    let text = std::fs::read_to_string(fixture())
+        .unwrap()
+        .replacen("3.0 0.0 -1.0 0 2", "3.0 0.0 -1.0 0 0", 1);
+    std::fs::write(&path, text).unwrap();
+
+    let (got, energy) = read_checkpoint(&path).unwrap();
+    assert_eq!(energy.unwrap().to_bits(), ENERGY.to_bits());
+    let expected = [
+        -0.0,
+        1.25,
+        f64::from_bits(1),
+        3.0,
+        0.0,
+        -1.0,
+        f64::MIN_POSITIVE,
+        -0.5,
+        2.0,
+        -2.5,
+        4.0,
+        0.125,
+    ];
+    assert_bits(got.as_slice().unwrap(), &expected);
+}
+
+#[test]
 fn awkward_finite_energy_round_trips_its_bits() {
     let path = scratch("energy");
     let energy = f64::from_bits(0x3ff0_0000_0000_0001);

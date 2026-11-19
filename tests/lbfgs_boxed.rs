@@ -183,3 +183,97 @@ fn bounded_step_rejects_malformed_domains_without_changing_history() {
     );
     assert_eq!(opt.len(), 1);
 }
+
+#[test]
+fn bounded_steps_require_configuration_and_matching_dimensions() {
+    let opt = Lbfgs::default();
+    let err = opt
+        .highs_step_boxed(array![0.0].view(), array![1.0].view(), None, None)
+        .unwrap_err();
+    assert!(err.to_string().contains("HighsStep"), "{err}");
+    let err = opt
+        .highs_step(array![0.0].view(), array![1.0].view())
+        .unwrap_err();
+    assert!(err.to_string().contains("HighsStep"), "{err}");
+
+    let mut configured = Lbfgs::default();
+    configured.highs = Some(HighsStep::default());
+    let err = configured
+        .highs_step(array![0.0].view(), array![1.0, 2.0].view())
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("length 1") && err.to_string().contains("dim 2"),
+        "{err}"
+    );
+}
+
+#[test]
+fn bounded_steps_report_nonfinite_and_inconsistent_controls() {
+    let x = array![0.0, 0.0];
+    let gradient = array![1.0, 2.0];
+    let invalid_steps = [
+        HighsStep::default().with_trust(f64::INFINITY),
+        HighsStep::default().with_trust(-1.0),
+        HighsStep::default().with_lo(f64::NAN),
+        HighsStep::default().with_hi(f64::NAN),
+        HighsStep::default().with_center_axes((0, 2)),
+        HighsStep::default().with_center_axes((1, 3)),
+    ];
+    for step in invalid_steps {
+        let mut opt = Lbfgs::default();
+        opt.highs = Some(step);
+        let err = opt
+            .highs_step_boxed(x.view(), gradient.view(), None, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid bounded-step data"), "{err}");
+    }
+
+    let mut opt = Lbfgs::default();
+    opt.highs = Some(HighsStep::default());
+    for (point, grad) in [
+        (array![f64::NAN, 0.0], gradient.clone()),
+        (x.clone(), array![f64::INFINITY, 0.0]),
+    ] {
+        let err = opt
+            .highs_step_boxed(point.view(), grad.view(), None, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid bounded-step data"), "{err}");
+    }
+}
+
+#[test]
+fn bounded_steps_report_bad_coordinate_boxes() {
+    let mut opt = Lbfgs::default();
+    opt.highs = Some(HighsStep::default());
+    let x = array![0.0, 0.0];
+    let gradient = array![1.0, 2.0];
+
+    let err = opt
+        .highs_step_boxed(x.view(), gradient.view(), Some(&[f64::NAN]), None)
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid coordinate box"), "{err}");
+
+    let err = opt
+        .highs_step_boxed(x.view(), gradient.view(), Some(&[1.0]), None)
+        .unwrap_err();
+    assert!(err.to_string().contains("outside coordinate box"), "{err}");
+}
+
+#[test]
+fn bounded_steps_report_bad_linear_equalities() {
+    let x = array![0.0, 0.0];
+    let gradient = array![1.0, 2.0];
+    let invalid_equalities = [
+        (vec![(2, 1.0)], 0.0),
+        (vec![(0, f64::NAN)], 0.0),
+        (vec![(0, 1.0)], f64::INFINITY),
+    ];
+    for equality in invalid_equalities {
+        let mut opt = Lbfgs::default();
+        opt.highs = Some(HighsStep::default().with_equalities(vec![equality]));
+        let err = opt
+            .highs_step_boxed(x.view(), gradient.view(), None, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid linear equality"), "{err}");
+    }
+}

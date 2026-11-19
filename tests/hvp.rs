@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use ndarray::{Array1, array};
 use rgmin::nlcg::{Conjugacy, Restart};
 use rgmin::{
-    Control, FdHvp, HvpOracle, Oracle, ScgParams, minimize_newton_cg, minimize_scg_exact,
-    steihaug_cg,
+    Control, FdHvp, HvpOracle, Oracle, Preconditioner, ScgParams, minimize_newton_cg,
+    minimize_scg_exact, steihaug_cg, steihaug_pcg,
 };
 
 fn ctrl(maxiter: usize, gtol: f64) -> Control {
@@ -218,4 +218,85 @@ fn the_preconditioned_boundary_lives_in_the_sketch_metric() {
     let (p2, d2) = steihaug_pcg(&obj, x.view(), &g, 0.5, 1e-10, 20, &IdentityPrecond);
     assert_eq!(p1, p2);
     assert_eq!(d1, d2);
+}
+
+#[test]
+fn finite_difference_returns_zero_for_a_zero_direction() {
+    let base = Oracle::unbounded(2, |x: ndarray::ArrayView1<f64>| {
+        (x.dot(&x), x.mapv(|value| 2.0 * value))
+    });
+    let fd = FdHvp::new(&base, f64::EPSILON.sqrt());
+    let action = rgmin::HessianVector::hessian_vector(
+        &fd,
+        array![1.0, 2.0].view(),
+        array![0.0, 0.0].view(),
+    );
+    assert_eq!(action, array![0.0, 0.0]);
+}
+
+struct NegativePreconditioner;
+
+impl Preconditioner for NegativePreconditioner {
+    fn solve(&self, residual: ndarray::ArrayView1<f64>) -> Array1<f64> {
+        residual.mapv(|value| -value)
+    }
+}
+
+#[test]
+fn invalid_preconditioners_fall_back_to_the_steepest_boundary() {
+    let objective = HvpOracle::unbounded(
+        2,
+        |x| (x[0], array![1.0, 0.0]),
+        |_, _| array![0.0, 0.0],
+    );
+    let (step, drop) = steihaug_pcg(
+        &objective,
+        array![0.0, 0.0].view(),
+        &array![1.0, 0.0],
+        2.0,
+        f64::EPSILON.sqrt(),
+        4,
+        &NegativePreconditioner,
+    );
+    assert_eq!(step, array![-2.0, 0.0]);
+    assert_eq!(drop, 2.0);
+}
+
+#[test]
+fn nonfinite_hessian_actions_return_a_boundary_step() {
+    let objective = HvpOracle::unbounded(
+        2,
+        |x| (x[0], array![1.0, 0.0]),
+        |_, _| array![f64::NAN, 0.0],
+    );
+    let (step, drop) = steihaug_cg(
+        &objective,
+        array![0.0, 0.0].view(),
+        &array![1.0, 0.0],
+        3.0,
+        f64::EPSILON.sqrt(),
+        4,
+    );
+    assert_eq!(step, array![-3.0, 0.0]);
+    assert!(drop.is_nan());
+}
+
+#[test]
+fn newton_cg_reports_bad_dimensions_and_initial_values() {
+    let objective = HvpOracle::unbounded(
+        2,
+        |_| (f64::NAN, array![0.0, 0.0]),
+        |_, v| v.to_owned(),
+    );
+    let err = minimize_newton_cg(&objective, array![0.0], &ctrl(4, f64::EPSILON))
+        .unwrap_err();
+    assert!(err.to_string().contains("length 1"), "{err}");
+
+    let err = minimize_newton_cg(
+        &objective,
+        array![0.0, 0.0],
+        &ctrl(4, f64::EPSILON),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("non-finite"), "{err}");
 }

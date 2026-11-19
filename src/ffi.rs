@@ -981,6 +981,13 @@ fn cpu_f64_slice<'a>(
         return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
     }
     let t = unsafe { &*t };
+    if t.version.major != 1 || t.version.minor != 0 {
+        set_last_error(&format!(
+            "{name}: unsupported DLPack version {}.{}",
+            t.version.major, t.version.minor
+        ));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
     let dl = &t.dl_tensor;
     if dl.device.device_type != DLDeviceType::kDLCPU {
         set_last_error(&format!(
@@ -1092,6 +1099,10 @@ pub unsafe extern "C" fn rgmin_minimize_opts(
             Ok(s) => s.to_vec(),
             Err(st) => return st,
         };
+        if init.iter().any(|value| !value.is_finite()) {
+            set_last_error("rgmin_minimize: x contains a non-finite value");
+            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        }
         let n = init.len();
         let obj = c_oracle(eval, grad, user, n);
         let c = unsafe { &*ctrl };
