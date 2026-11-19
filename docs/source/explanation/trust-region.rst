@@ -142,8 +142,8 @@ forward difference of the known gradient otherwise: one extra
 gradient per product, ``h = 1e-8 / ||v||``. ``Solver::try_step_hvp``
 is that step when the host's callbacks return ``Result``. The same
 values, gradients and products take the same step. The first error is
-``Error::Host``; nothing is evaluated after it, and ``x`` and the
-session stay as they were before the step. A chart or distance
+``Error::Host``; nothing is evaluated after it, and ``x`` and the session
+stay as they were before the step. A chart or distance
 constraints on a Newton-CG or Newton-PCG session return
 ``Error::FallibleUnsupported``. ``try_lowest_eigenpairs`` and
 ``try_lowest_eigenpairs_precond`` are the same split for one product.

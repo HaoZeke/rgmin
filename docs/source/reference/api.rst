@@ -45,7 +45,9 @@ The types a host works with:
     +-------------------------------------------+------------------------------------------------------------------------------------+
     | ``TryApplyHessian``                       | A block-eigen product that can fail.                                               |
     +-------------------------------------------+------------------------------------------------------------------------------------+
-    | ``try_lowest_eigenpairs``                 | ``lowest_eigenpairs`` on that product, with or without ``T``.                      |
+    | ``try_lowest_eigenpairs``                 | ``lowest_eigenpairs`` on that product, without ``T``.                              |
+    +-------------------------------------------+------------------------------------------------------------------------------------+
+    | ``try_lowest_eigenpairs_precond``         | ``lowest_eigenpairs_precond`` on that product, with an optional ``T``.             |
     +-------------------------------------------+------------------------------------------------------------------------------------+
 
 ``newton-cg`` and ``newton-pcg`` are ``Method::from_name`` tokens. The
