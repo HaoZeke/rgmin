@@ -98,6 +98,13 @@ ln -sfn "$HOME/.cargo/bin/rustup" /usr/local/bin/rustup
 """
 environment = { PATH = "/root/.cargo/bin:$PATH" }
 
+[[tool.cibuildwheel.overrides]]
+select = "*-manylinux_aarch64"
+# Under qemu-aarch64 -cpu max, AT_HWCAP2 advertises SME without the
+# 512-bit streaming vector length that scipy-openblas 0.3.34's
+# armv9sme dgemm assumes, so transposed products drop rows.
+test-environment = { OPENBLAS_CORETYPE = "ARMV8" }
+
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
 # Homebrew on the macos-15 runner builds its libraries for 15.0, and
