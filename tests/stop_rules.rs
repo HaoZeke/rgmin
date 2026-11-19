@@ -823,3 +823,99 @@ fn a_converged_gradient_is_tolerance_not_energy_tolerance() {
     let report = solver.run(&Quadratic, &mut x).unwrap();
     assert_eq!(report.status, Status::Tolerance, "{report:?}");
 }
+
+/// `f(x) = x` with a unit gradient, so a steepest trial moves the coordinate.
+struct Slope {
+    bounds: Bounds<f64>,
+}
+
+impl Slope {
+    fn new() -> Self {
+        Self {
+            bounds: Bounds::new(array![-1e6], array![1e6], 0.0),
+        }
+    }
+}
+
+impl Objective<f64> for Slope {
+    fn dim(&self) -> usize {
+        1
+    }
+
+    fn bounds(&self) -> &Bounds<f64> {
+        &self.bounds
+    }
+
+    fn eval(&self, x: ArrayView1<f64>) -> f64 {
+        x[0]
+    }
+}
+
+impl Gradient<f64> for Slope {
+    fn dim(&self) -> usize {
+        1
+    }
+
+    fn grad(&self, _x: ArrayView1<f64>) -> Array1<f64> {
+        array![1.0]
+    }
+}
+
+impl DifferentiableObjective<f64> for Slope {
+    fn value_and_gradient(&self, x: ArrayView1<f64>) -> (f64, Array1<f64>) {
+        (x[0], array![1.0])
+    }
+}
+
+/// An etol that accepts two equal energies and rejects the pair that a
+/// repeated steepest step of `Slope` actually compares after a restart.
+fn etol_between(fresh_previous: f64, fresh_current: f64) -> f64 {
+    let scale = 0.5 * (fresh_previous.abs() + fresh_current.abs() + f64::EPSILON.sqrt());
+    let etol = (fresh_current - fresh_previous).abs() / scale / 2.0;
+    let control = Control::default().with_etol(etol);
+    assert!(
+        control.energy_converged(fresh_current, fresh_current),
+        "equal energies must pass"
+    );
+    assert!(
+        !control.energy_converged(fresh_previous, fresh_current),
+        "the fresh pair must fail"
+    );
+    etol
+}
+
+fn restart_drops_recorded_energy(restart: &mut dyn FnMut(&mut Solver)) {
+    let obj = Slope::new();
+    let mut solver = Solver::new(Method::Steepest, strict().with_etol(0.0), 1);
+    let origin = array![5.0];
+    let mut x = origin.clone();
+    let first = solver.step(&obj, &mut x).unwrap();
+    assert_eq!(first.status, Status::Iterating, "{first:?}");
+    assert_ne!(first.value, origin[0], "the trial did not move");
+    let etol = etol_between(origin[0], first.value);
+    x.assign(&origin);
+    restart(&mut solver);
+    solver.set_etol(Some(etol)).unwrap();
+    let report = solver.step(&obj, &mut x).unwrap();
+    assert_eq!(report.value, first.value, "{report:?}");
+    assert_eq!(
+        report.status,
+        Status::Iterating,
+        "etol compared against the energy from before the restart: {report:?}"
+    );
+}
+
+#[test]
+fn rebase_drops_the_energy_etol_compares() {
+    restart_drops_recorded_energy(&mut Solver::rebase);
+}
+
+#[test]
+fn forget_drops_the_energy_etol_compares() {
+    restart_drops_recorded_energy(&mut Solver::forget);
+}
+
+#[test]
+fn forget_evaluation_drops_the_energy_etol_compares() {
+    restart_drops_recorded_energy(&mut Solver::forget_evaluation);
+}

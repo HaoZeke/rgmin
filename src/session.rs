@@ -2177,10 +2177,12 @@ impl Solver {
     /// Keep method memory and discard the cached point and acceptance window.
     /// The next step evaluates the current objective at the supplied point
     /// with the initial step scale and the retained curvature information.
+    /// The energy kept for [`Control::etol`] is dropped with the cached point.
     pub fn rebase(&mut self) {
         self.istep = self.control.istep;
         self.e_hist.clear();
         self.last_pos = None;
+        self.stops.reset();
         self.lbfgs_burdakov = self.lbfgs_burdakov_init;
         self.lbfgs_plateau = crate::lbfgs_plateau::RepeatedAcceptedStep::new();
         if let Overlay::QuickMin(_, session) = &mut self.overlay {
@@ -2189,12 +2191,14 @@ impl Solver {
     }
 
     /// Drop method memory. The next step is a cold start from the current `x`.
+    /// The energy kept for [`Control::etol`] is dropped with the method memory.
     pub fn forget(&mut self) {
         self.saddle_kicks = 0;
         self.geometry_lbfgs_stiff = None;
         self.istep = self.control.istep;
         self.e_hist.clear();
         self.last_pos = None;
+        self.stops.reset();
         self.lbfgs_burdakov = self.lbfgs_burdakov_init;
         self.lbfgs_plateau = crate::lbfgs_plateau::RepeatedAcceptedStep::new();
         let sr_radius = self.sr_opening_radius();
