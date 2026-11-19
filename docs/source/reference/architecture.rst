@@ -64,6 +64,7 @@ Objects
     ``xts.h`` aliases ``RGMIN_UNMET_STOP``, ``RGMIN_STOP_LINE_SEARCH``,
     and ``RGMIN_STOP_POLISH_UNMET``. ``RGMIN_UNMET_STOP`` is status 6.
     ``RGMIN_STOP_LINE_SEARCH`` is 4 and ``RGMIN_STOP_POLISH_UNMET`` is 5.
+    ``RGMIN_STOP_ENERGY_TOLERANCE`` is 6 and ``RGMIN_STOP_EVAL_BUDGET`` is 7.
 
 ``minimize_method``
     Cold-start dispatch for every ``Method``.
@@ -89,11 +90,12 @@ Objects
 ``rgmin_solver_create`` / ``rgmin_solver_step`` / ``rgmin_solver_free``
     The session half of the waist.
     Callbacks are arguments of each step, not stored on the handle.
-    ``include/rgmin.h`` sets ``abi_major`` 1, ``abi_minor`` 50 and ``layout_revision`` 5.
+    ``include/rgmin.h`` sets ``abi_major`` 1, ``abi_minor`` 51 and ``layout_revision`` 5.
     Minor 49 adds ``StopReason`` on the report, the opt-in unmet-stop
     error, and the backward-error polish. A zero iteration budget
     follows the same unmet-stop policy. Minor 50 adds the energy and
-    evaluation stops. ``rgmin_control_t`` is unchanged.
+    evaluation stops. Minor 51 adds ``rgmin_minimize_rlbfgs`` and
+    ``rgmin_rlbfgs_default``. ``rgmin_control_t`` is unchanged.
     ``rgmin_abi_compatible`` checks the major version and the layout revision only.
 
 ``DistanceConstraints``

@@ -17,6 +17,8 @@
 //! [`lbfgs_direction`] applies a caller-supplied initial inverse Hessian
 //! and does not evaluate an objective. [`minimize_lbfgs`] is the
 //! cold-start dispatch used by [`minimize_method`].
+//! [`minimize_rlbfgs`] is cautious limited-memory Riemannian BFGS. It
+//! does not replace [`Lbfgs`].
 
 #![warn(missing_docs)]
 // Numerical kernels take their state as explicit arguments, and the
@@ -114,6 +116,8 @@ mod report;
 mod restricted_trust;
 /// Eckart projector and Horn / Coutsias alignment.
 pub mod rigid;
+/// Cautious limited-memory Riemannian BFGS (Huang, Absil, Gallivan).
+pub mod rlbfgs;
 /// Tangent-space truncated conjugate gradients and trust-radius updates.
 pub mod rtr;
 /// Moller scaled conjugate gradient (damped-model step, no line search).
@@ -219,6 +223,10 @@ pub use quickmin::{
 };
 pub use report::{Report, Status, StopReason};
 pub use rigid::{RigidMode, RigidRequest, RigidWorkspace, align_rigid};
+pub use rlbfgs::{
+    HUANG_ARMIJO, HUANG_BACKTRACK, HUANG_CAUTIOUS_SLOPE, HUANG_GRADIENT_RATIO,
+    HUANG_LINESEARCH_MAX, HUANG_MEMORY, Rlbfgs, minimize_rlbfgs,
+};
 pub use scg::{
     DirectionalCurvature, ScgOptions, ScgParams, ScgStepTolerance, minimize_scg,
     minimize_scg_exact, minimize_scg_exact_with_options, minimize_scg_with_options,

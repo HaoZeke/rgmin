@@ -42,6 +42,7 @@ typedef rgmin_fire_preset_t xts_fire_preset_t;
 typedef rgmin_manifold_t xts_manifold_t;
 typedef rgmin_curv_fn xts_curv_fn;
 typedef rgmin_scg_params_t xts_scg_params_t;
+typedef rgmin_rlbfgs_t xts_rlbfgs_t;
 typedef rgmin_eigen_kind_t xts_eigen_kind_t;
 typedef rgmin_eigen_params_t xts_eigen_params_t;
 typedef rgmin_eigenpair_t xts_eigenpair_t;
@@ -116,6 +117,7 @@ typedef rgmin_constraints_t xts_constraints_t;
 #define xts_minimize_hvp rgmin_minimize_hvp
 #define xts_minimize_eindir rgmin_minimize_eindir
 #define xts_minimize_scg rgmin_minimize_scg
+#define xts_minimize_rlbfgs rgmin_minimize_rlbfgs
 #define xts_solver_create rgmin_solver_create
 #define xts_solver_free rgmin_solver_free
 #define xts_solver_forget rgmin_solver_forget
@@ -288,6 +290,7 @@ typedef rgmin_h0_fn xts_h0_fn;
 #define XTS_MANIFOLD_CENTERED_MATRIX RGMIN_MANIFOLD_CENTERED_MATRIX
 #define xts_control_default rgmin_control_default
 #define xts_exp_default rgmin_exp_default
+#define xts_rlbfgs_default rgmin_rlbfgs_default
 #define xts_scg_params_default rgmin_scg_params_default
 #define xts_scg_options_default rgmin_scg_options_default
 #define xts_eigen_params_default rgmin_eigen_params_default

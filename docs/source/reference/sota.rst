@@ -565,6 +565,21 @@ rank-1 f64 vector.
   library that names Stiefel and SE(3) in the same waist
   (`10.1145/3218822 <https://doi.org/10.1145/3218822>`_).
 
+``minimize_rlbfgs`` is cautious limited-memory Riemannian BFGS,
+Algorithm 2 of Huang, Absil, and Gallivan 2018
+(`10.1137/17M1127582 <https://doi.org/10.1137/17M1127582>`_).
+The two-loop map is Huang, Gallivan, and Absil 2015
+(`10.1137/140955483 <https://doi.org/10.1137/140955483>`_).
+On Euclidean space the transport is the identity and the update is
+the cautious BFGS method of Li and Fukushima 2001
+(`10.1137/S1052623499354242 <https://doi.org/10.1137/S1052623499354242>`_).
+The section 7 choices are memory 4, ``vartheta(t) = 10^{-4} t``, an
+Armijo–Goldstein backtrack from a unit trial, and the stop
+``||g_f|| / ||g_0|| < 10^{-6}``. The vector transport is the parallel
+transport of the exponential when that pair exists. This is not the
+sphere great-circle search, and the default Euclidean L-BFGS step
+stays the eOn cap.
+
 Euclidean is the default. An isolated molecule uses
 ``RigidQuotient`` (``R^{3N}/SE(3)``; Sella Cartesian
 ``fix_translation`` / ``fix_rotation``,
