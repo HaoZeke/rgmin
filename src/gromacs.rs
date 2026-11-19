@@ -41,13 +41,14 @@ pub const GROMACS_STEEP_EMSTEP_DEFAULT: f64 = 0.01;
 /// in bounded time.
 pub const GROMACS_STEEP_SHRINK_BUDGET_CAP: u32 = 1_000_000;
 
-/// GROMACS double precision floor on the steep displacement `ustep`.
+/// rgmin floor on the steep displacement `ustep`.
 ///
-/// `do_steep` in GROMACS 2025.4 `minimize.cpp` ends the minimization when
-/// `ustep` is below this value under `GMX_DOUBLE`. The single precision
-/// build uses a looser floor. This stepper is `f64`, so it follows the
-/// double precision branch. Thirty four halvings of
-/// [`GROMACS_STEEP_EMSTEP_DEFAULT`] land below it.
+/// GROMACS `do_steep` has no displacement floor. This stepper stops when
+/// `ustep` falls below this value so a rejected constraint cannot shrink
+/// the step forever. Thirty-four halvings of
+/// [`GROMACS_STEEP_EMSTEP_DEFAULT`] by [`GROMACS_STEEP_SHRINK`] land below
+/// it. That count, [`GROMACS_STEEP_MAX_CONSTRAINT_SHRINKS`], is the same
+/// rgmin safeguard, not a GROMACS constant.
 pub const GROMACS_STEEP_MIN_USTEP: f64 = 1e-12;
 
 /// Largest shrink count from this step size and shrink factor before the
@@ -86,6 +87,11 @@ pub fn gromacs_steep_max_constraint_shrinks(step_size: f64, shrink: f64) -> u32 
 }
 
 /// Consecutive constraint failures for a canonical `emstep = 0.01`.
+///
+/// rgmin's own budget: the least number of [`GROMACS_STEEP_SHRINK`]
+/// multiplications that take [`GROMACS_STEEP_EMSTEP_DEFAULT`] below
+/// [`GROMACS_STEEP_MIN_USTEP`]. GROMACS `do_steep` does not define this
+/// count.
 pub const GROMACS_STEEP_MAX_CONSTRAINT_SHRINKS: u32 = 34;
 
 /// Parameters of [`GromacsSteep`].

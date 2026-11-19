@@ -191,9 +191,9 @@ fn a_constraint_failure_shrinks_and_the_bound_then_errors() {
 fn persistent_lincs_failures_stop_at_the_double_precision_floor() {
     // A light hub with three heavy ends in a 30 degree cone has a LINCS
     // spectral radius above one, so every projection fails no matter how
-    // small the step is. GROMACS double precision `do_steep` then stops
-    // once `ustep` drops below `GROMACS_STEEP_MIN_USTEP`, thirty four
-    // halvings of the canonical `emstep` 0.01.
+    // small the step is. rgmin then stops once `ustep` drops below
+    // `GROMACS_STEEP_MIN_USTEP`, thirty four halvings of the canonical
+    // `emstep` 0.01. That floor and that count are rgmin safeguards.
     let (s, c) = 30_f64.to_radians().sin_cos();
     let mut start = Array1::zeros(12);
     for k in 0..3 {

@@ -505,14 +505,15 @@ void rgmin_solver_set_accept(rgmin_solver_t *solver, rgmin_accept_t accept);
  *  max_constraint_shrinks is an exact budget, including 0: 0 returns
  *  RGMIN_CONSTRAINT_ERROR on the first failed projection, and a positive
  *  value allows that many consecutive failed projections before the
- *  error, while the displacement is still at least the GROMACS double
- *  precision floor. A failure that crosses that floor returns
- *  RGMIN_STOP_MACHINE_PRECISION and keeps the last accepted point. */
+ *  error, while the displacement is still at least rgmin's displacement
+ *  floor. A failure that crosses that floor returns
+ *  RGMIN_STOP_MACHINE_PRECISION and keeps the last accepted point.
+ *  ABI minor 52. */
 int32_t rgmin_solver_set_gromacs_steep(rgmin_solver_t *solver, double shrink,
                                        uint32_t max_constraint_shrinks);
 /** Largest consecutive failed-projection budget from a GROMACS steep
- *  step size and shrink factor before the displacement falls below the
- *  GROMACS double precision floor. Invalid input gives 0. The result is
+ *  step size and shrink factor before the displacement falls below
+ *  rgmin's displacement floor. Invalid input gives 0. The result is
  *  capped to bound construction time. ABI minor 52. */
 uint32_t rgmin_gromacs_steep_max_constraint_shrinks(double step_size, double shrink);
 

@@ -57,8 +57,8 @@ The C selector is ~RGMIN_GROMACS_STEEP~ and the C++ selector is
 ~rgmin::Method::GromacsSteep~. Set ~rgmin_control_t.gtol~ and
 ~rgmin_control_t.istep~ in the same units as the callback.
 ~RGMIN_STOP_MACHINE_PRECISION~ reports that the displacement is below
-the GROMACS double precision floor, or that it cannot change a
-coordinate.
+rgmin's steep displacement floor, or that it cannot change a
+coordinate. GROMACS ~do_steep~ has no such floor.
 
 A non-finite callback value or gradient is returned as an oracle error
 (Rust ~Error::Oracle~, C ~RGMIN_INTERNAL_ERROR~ with

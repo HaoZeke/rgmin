@@ -482,6 +482,9 @@ static_assert(XTS_STOP_ENERGY_TOLERANCE == RGMIN_STOP_ENERGY_TOLERANCE,
               "XTS_STOP_ENERGY_TOLERANCE aliases RGMIN_STOP_ENERGY_TOLERANCE");
 static_assert(XTS_STOP_EVAL_BUDGET == RGMIN_STOP_EVAL_BUDGET,
               "XTS_STOP_EVAL_BUDGET aliases RGMIN_STOP_EVAL_BUDGET");
+static_assert(XTS_STOP_MACHINE_PRECISION == RGMIN_STOP_MACHINE_PRECISION,
+              "XTS_STOP_MACHINE_PRECISION aliases RGMIN_STOP_MACHINE_PRECISION");
+static_assert(XTS_STOP_MACHINE_PRECISION == 8, "machine precision is stop 8");
 
 rgmin_status_t bowl_eval(void* /*user*/, DLManagedTensorVersioned const* x, double* value) {
     double const* p = data(x);
