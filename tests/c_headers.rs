@@ -9,10 +9,12 @@ use std::ptr::null;
 
 use rgmin::ffi::{
     RGMIN_PRECON_EXP, rgmin_conjugacy_t, rgmin_control_t, rgmin_eigen_options_t,
-    rgmin_eigen_params_t, rgmin_exp_t, rgmin_precon_t, rgmin_scg_options_t, rgmin_scg_params_t,
-    rgmin_scg_step_tolerance_t,
+    rgmin_eigen_params_t, rgmin_exp_t, rgmin_precon_t, rgmin_rlbfgs_t, rgmin_scg_options_t,
+    rgmin_scg_params_t, rgmin_scg_step_tolerance_t,
 };
-use rgmin::{Control, EigenParams, ExpParams, NoiseFloor, ScgOptions, ScgParams, ScgStepTolerance};
+use rgmin::{
+    Control, EigenParams, ExpParams, NoiseFloor, Rlbfgs, ScgOptions, ScgParams, ScgStepTolerance,
+};
 
 #[test]
 fn public_c_header_compiles_and_checks_the_abi() {
@@ -106,6 +108,7 @@ fn c_initializers_hold_the_rust_defaults() {
     let control = Control::default();
     let exp = ExpParams::default();
     let lengths = exp.lengths.unwrap_or([0.0; 3]);
+    let rlbfgs = Rlbfgs::default();
     let scg = ScgParams::default();
     let eigen = EigenParams::default();
     let mut args = record!(rgmin_control_t {
@@ -127,6 +130,14 @@ fn c_initializers_hold_the_rust_defaults() {
         length_y: lengths[1],
         length_z: lengths[2],
         recalc_mu: i32::from(exp.recalc_mu),
+    }));
+    args.extend(record!(rgmin_rlbfgs_t {
+        memory: rlbfgs.memory,
+        cautious_slope: rlbfgs.cautious_slope,
+        armijo: rlbfgs.armijo,
+        backtrack: rlbfgs.backtrack,
+        linesearch_max: rlbfgs.linesearch_max,
+        grad_ratio: rlbfgs.grad_ratio,
     }));
     args.extend(record!(rgmin_scg_params_t {
         sigma0: scg.sigma0,

@@ -29,7 +29,7 @@ use crate::error::{Error, Result};
 use crate::manifold::Manifold;
 use crate::report::{Report, Status, StopReason};
 use crate::step::one_shot_report;
-use crate::stop::{StopRules, counted, stop_after};
+use crate::stop::{Counted, StopRules, counted};
 use crate::vecops::{axpy, scale};
 
 /// Cautious slope in `vartheta(t) = 10^{-4} t` (Huang, Absil, Gallivan 2018, section 7).
@@ -245,6 +245,28 @@ fn report_at(
     control.deliver(one_shot_report(value, pos, steps, gnorm, status).with_grad(Some(grad.clone())))
 }
 
+fn stop_after<M, O>(
+    stops: &mut StopRules,
+    control: &Control,
+    obj: &Counted<'_, O>,
+    manifold: &M,
+    point: &Array1<f64>,
+    value: f64,
+    moved: bool,
+    grad: &Array1<f64>,
+) -> Option<Status>
+where
+    M: Manifold + ?Sized,
+    O: ?Sized,
+{
+    if control.etol.is_none() && control.max_evals.is_none() {
+        return None;
+    }
+    let gradient_met =
+        control.classify(manifold.norm(point, grad), grad.len()) != Status::Iterating;
+    stops.after(control, value, moved, obj.count(), true, gradient_met)
+}
+
 fn search_failed(
     control: &Control,
     value: f64,
@@ -284,6 +306,7 @@ where
     let ys = manifold.inner(point, s, y);
     let yy = manifold.inner(point, y, y);
     ss > 0.0
+        && ys > 0.0
         && ys.is_finite()
         && yy.is_finite()
         && yy > 0.0
@@ -404,7 +427,9 @@ where
             );
             gamma = ys / yy;
         }
-        if let Some(status) = stop_after(&mut stops, control, obj, value, true, &grad) {
+        if let Some(status) =
+            stop_after(&mut stops, control, obj, manifold, &pos, value, true, &grad)
+        {
             let gnorm = manifold.norm(&pos, &grad);
             return report_at(control, value, pos, step + 1, &grad, gnorm, status);
         }
@@ -504,7 +529,9 @@ where
                 if ready.value <= value + params.armijo * alpha * slope {
                     return Armijo::Accepted(ready);
                 }
-                if let Some(status) = stop_after(stops, control, obj, ready.value, false, grad) {
+                if let Some(status) =
+                    stop_after(stops, control, obj, manifold, pos, ready.value, false, grad)
+                {
                     return Armijo::Stop(status);
                 }
             }
@@ -604,6 +631,31 @@ mod tests {
     use crate::manifold::Euclidean;
     use ndarray::array;
 
+    struct RetractionFallback;
+
+    impl Manifold for RetractionFallback {
+        fn project(&self, _x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+            v.clone()
+        }
+
+        fn retract(&self, x: &Array1<f64>, v: &Array1<f64>) -> Array1<f64> {
+            x + &(2.0 * v)
+        }
+
+        fn transport(
+            &self,
+            _x_from: &Array1<f64>,
+            _x_to: &Array1<f64>,
+            v: &Array1<f64>,
+        ) -> Array1<f64> {
+            v + 10.0
+        }
+
+        fn exp(&self, x: &Array1<f64>, v: &Array1<f64>) -> Option<Array1<f64>> {
+            Some(x + v)
+        }
+    }
+
     #[test]
     fn one_accepted_pair_meets_the_secant_equation() {
         let manifold = Euclidean;
@@ -620,5 +672,33 @@ mod tests {
         let tol = 1.0 / 1_000_000_000_000.0;
         assert!((hy[0] - s[0]).abs() < tol);
         assert!((hy[1] - s[1]).abs() < tol);
+    }
+
+    #[test]
+    fn zero_curvature_is_rejected_when_the_cautious_slope_is_zero() {
+        let params = Rlbfgs::default().with_cautious_slope(0.0);
+        let x = array![0.0, 0.0];
+        let s = array![1.0, 0.0];
+        let y = array![0.0, 1.0];
+        assert!(!accept_pair(&params, &Euclidean, &x, &s, &y, 1.0));
+    }
+
+    #[test]
+    fn cautious_test_skips_positive_curvature_below_its_threshold() {
+        let params = Rlbfgs::default().with_cautious_slope(1.0);
+        let x = array![0.0, 0.0];
+        let s = array![1.0, 0.0];
+        let y = array![1.0, 0.0];
+        assert!(!accept_pair(&params, &Euclidean, &x, &s, &y, 2.0));
+    }
+
+    #[test]
+    fn missing_parallel_transport_falls_back_to_retraction_transport() {
+        let x = array![1.0, 2.0];
+        let step = array![0.5, -0.25];
+        let cargo = [array![3.0, 4.0]];
+        let (point, carried) = advance(&RetractionFallback, &x, &step, &cargo);
+        assert_eq!(point, array![2.0, 1.5]);
+        assert_eq!(carried, vec![array![13.0, 14.0]]);
     }
 }
