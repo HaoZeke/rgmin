@@ -59,15 +59,20 @@ python bench/optimizers/run.py \
 keys are `schema`, `protocol`, `sources`, `artifacts`, `build`, `runtime`,
 `gaps`, and `records`; it never writes analysis keys. The artifact section
 contains hashes computed from the three supplied wheel archives after their
-distribution names and versions are checked against the installed packages.
-The runtime section records CPU model, architecture, logical CPU counts,
-memory, package versions, and operating-system version, but no hostname.
+distribution names and versions are checked against the installed packages,
+after every installed dist-info RECORD hash and size entry is verified, and
+after the wheel archive hash is matched to the installed direct-url archive
+hash when that metadata exists. The runtime section records CPU model,
+architecture, logical and physical core counts, a CPU-flag summary, memory,
+BLAS backend summary, package versions, thread-related environment variables,
+and operating-system version, but no hostname.
 
 The recorded wall times are 12 measured repetitions per cell on the machine
-described by that runtime header. They support comparisons within this run;
-they are not single-run speedup claims. Nonconverged eOn endpoints have null
-energy and force values because only their convergence verdict and force-call
-budget are reproducible and compared.
+described by that runtime header. Endpoint energies, endpoints, and
+iteration/force-call counts are deterministic under this protocol. Timing is
+machine-dependent and is only compared within-run. Nonconverged endpoints are
+still recorded for every implementation and are marked by the `converged`
+field.
 
 Analysis is a separate deterministic pass over the untouched raw records:
 
@@ -84,10 +89,10 @@ analysis keys. `results-analyzed.json` copies all raw provenance and adds
 `analysis`, `summaries`, `comparisons`, and `failures`; `results.md` is the
 short rendered table. The analyzed JSON includes medians, interquartile
 ranges, odd/even A/A noise bands per cell, Mann-Whitney p-values for
-continuous metrics, Fisher exact p-values for success rates, and paired
-final-energy agreement. Repeating the two commands with the same inputs
-reproduces both committed JSON documents byte for byte except for raw timing
-fields and statistics derived from them.
+continuous timing metrics, and paired final-energy agreement. Repeating the
+two commands with the same inputs reproduces deterministic endpoint fields and
+derived endpoint summaries, while timing fields and timing-derived summaries
+remain machine/run dependent.
 
 The variable-cell failure can be reproduced independently:
 

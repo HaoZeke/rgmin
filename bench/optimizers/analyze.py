@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
-from scipy.stats import fisher_exact, mannwhitneyu
+from scipy.stats import mannwhitneyu
 
 
 def parse_args() -> argparse.Namespace:
@@ -167,17 +167,6 @@ def comparisons(
             comparator = groups.get((system, method, implementation))
             if comparator is None:
                 continue
-            ref_success = sum(bool(row["converged"]) for row in reference)
-            cmp_success = sum(bool(row["converged"]) for row in comparator)
-            fisher_p = float(
-                fisher_exact(
-                    [
-                        [ref_success, len(reference) - ref_success],
-                        [cmp_success, len(comparator) - cmp_success],
-                    ],
-                    alternative="two-sided",
-                ).pvalue
-            )
             rows.append(
                 {
                     "system": system,
@@ -200,11 +189,6 @@ def comparisons(
                             converged_only=False,
                         ),
                     ),
-                    "force_calls_mann_whitney_p": mw_p(
-                        finite_values(reference, "force_calls"),
-                        finite_values(comparator, "force_calls"),
-                    ),
-                    "success_fisher_p": fisher_p,
                     "energy_agreement": paired_energy(reference, comparator, tolerance),
                 }
             )
@@ -240,6 +224,13 @@ def markdown_report(document: dict[str, Any]) -> str:
         for row in document["comparisons"]
     }
     systems_methods = sorted({(key[0], key[1]) for key in summaries})
+    machine = document["runtime"]["machine"]
+    thread_vars = document["runtime"].get("env_threads", {})
+    threads = (
+        ", ".join(f"{name}={value}" for name, value in sorted(thread_vars.items()))
+        if thread_vars
+        else "unset"
+    )
     lines = [
         "# Optimizer coverage benchmark",
         "",
@@ -252,8 +243,23 @@ def markdown_report(document: dict[str, Any]) -> str:
             f"{document['protocol']['energy_agreement_tolerance_ev']} eV."
         ),
         "",
-        "| System | Method | Code | Success | Wall ms, median [IQR] | Outside potential ms | Force calls to converge | Final energy eV | Wall p | Outside p | Calls p | Success p | Energy agreement |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        (
+            f"Machine: {machine['cpu']}; flags: {machine['cpu_flags_summary']}; "
+            f"architecture: {machine['architecture']}; available logical CPUs: "
+            f"{machine['available_logical_cpus']}/{machine['logical_cpus']}; kernel: "
+            f"{document['runtime'].get('kernel', document['runtime']['release'])}; "
+            f"Python: {document['runtime']['python']}; Rust: {document['build']['rust']}; "
+            f"C++: {document['build']['cxx']}; BLAS: {document['runtime'].get('blas', 'unknown')}; "
+            f"thread env: {threads}."
+        ),
+        "",
+        (
+            "P-values below are within-run timing-noise tests only "
+            "(Mann-Whitney on wall and outside-potential timings)."
+        ),
+        "",
+        "| System | Method | Code | Success | Wall ms, median [IQR] | Outside potential ms | Force calls to converge | Final energy eV | Wall timing p | Outside timing p | Energy agreement |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     gaps = {(gap["method"], gap["implementation"]): gap["reason"] for gap in document["gaps"]}
     for system, method in systems_methods:
@@ -263,22 +269,22 @@ def markdown_report(document: dict[str, Any]) -> str:
                 gap = gaps.get((method, implementation))
                 if gap:
                     lines.append(
-                        f"| {system} | {method} | {implementation} | gap | — | — | — | — | — | — | — | — | {gap} |"
+                        f"| {system} | {method} | {implementation} | gap | — | — | — | — | — | — | {gap} |"
                     )
                 continue
             comparison = comparisons_by_key.get((system, method, implementation))
             energy = "—"
-            wall_p = outside_p = calls_p = success_p = "—"
+            wall_p = outside_p = "—"
             if comparison is not None:
                 agreement = comparison["energy_agreement"]
                 energy = (
-                    f"{agreement['agreements']}/{agreement['pairs']}; "
+                    "n/a"
+                    if agreement["pairs"] == 0
+                    else f"{agreement['agreements']}/{agreement['pairs']}; "
                     f"max Δ={number(agreement['max_abs_delta_ev'])}"
                 )
                 wall_p = number(comparison["wall_mann_whitney_p"])
                 outside_p = number(comparison["outside_potential_mann_whitney_p"])
-                calls_p = number(comparison["force_calls_mann_whitney_p"])
-                success_p = number(comparison["success_fisher_p"])
             lines.append(
                 "| "
                 + " | ".join(
@@ -293,8 +299,6 @@ def markdown_report(document: dict[str, Any]) -> str:
                         interval(row["energy_ev"]),
                         wall_p,
                         outside_p,
-                        calls_p,
-                        success_p,
                         energy,
                     ]
                 )
@@ -316,38 +320,34 @@ def markdown_report(document: dict[str, Any]) -> str:
         if row["aa_wall"]["relative_band_width"] is not None
         else -1.0,
     )
-    bugs = []
+    variable_cell = []
     for system in ("Cu108-cell", "Si64-cell"):
         rgmin_cell = summaries.get((system, "cell-lbfgs", "rgmin"))
         ase_cell = summaries.get((system, "cell-lbfgs", "ase"))
         if (
             rgmin_cell is not None
             and ase_cell is not None
-            and rgmin_cell["successes"] == 0
-            and ase_cell["successes"] > 0
         ):
-            final_stresses = [
-                float(record["stress_max_ev_per_angstrom3"])
-                for record in document["records"]
-                if record["system"] == system
-                and record["method"] == "cell-lbfgs"
-                and record["implementation"] == "rgmin"
-                and record["stress_max_ev_per_angstrom3"] is not None
-            ]
-            median_stress = float(np.median(final_stresses)) if final_stresses else None
-            bugs.append(
-                f"- {system}: rgmin capped L-BFGS converged "
-                f"{rgmin_cell['successes']}/{rgmin_cell['n']} times while ASE converged "
-                f"{ase_cell['successes']}/{ase_cell['n']}; rgmin median final stress was "
-                f"{number(median_stress)} eV/A^3."
+            variable_cell.append(
+                f"- {system}: rgmin converged {rgmin_cell['successes']}/{rgmin_cell['n']}; "
+                f"ASE converged {ase_cell['successes']}/{ase_cell['n']}."
             )
-    if bugs:
-        bug_text = "\n".join(bugs) + (
-            "\n- Minimal reproduction: `bench/optimizers/repro_cell.py` runs the same "
-            "capped L-BFGS and filter without the benchmark scheduler."
+    eon_sd_records = [
+        row
+        for row in document["records"]
+        if row["implementation"] == "eon" and row["method"] == "sd"
+    ]
+    eon_budget = sum(bool(row.get("hit_iteration_budget")) for row in eon_sd_records)
+    eon_sd_note = "No eOn SD rows were recorded."
+    if eon_sd_records:
+        sample = eon_sd_records[0].get("eon_config", {})
+        eon_sd_note = (
+            f"eOn SD uses opt_convergence_metric={sample.get('opt_convergence_metric')} "
+            f"with opt_converged_force={sample.get('opt_converged_force')} eV/A, "
+            f"opt_step_size={sample.get('opt_step_size')}, opt_max_move={sample.get('opt_max_move')}, "
+            f"and opt_max_iterations={sample.get('opt_max_iterations')}. "
+            f"{eon_budget}/{len(eon_sd_records)} SD runs hit the iteration budget."
         )
-    else:
-        bug_text = "No rgmin bug was identified by this pass."
     lines.extend(
         [
             "",
@@ -360,10 +360,14 @@ def markdown_report(document: dict[str, Any]) -> str:
             f"Nonconverged or failed runs: {len(failures)}.",
             failure_text,
             "The eOn client has no variable-cell optimizer. A generic rgpot EMT Python binding was absent and is delivered as a separate source revision; the selected Cu systems use the predeclared Morse potential.",
+            eon_sd_note,
             "",
-            "## Bugs",
+            "## Variable-cell nonconvergence",
             "",
-            bug_text,
+            "\n".join(variable_cell),
+            "- Minimal reproduction: `bench/optimizers/repro_cell.py` runs the same capped L-BFGS and filter without the benchmark scheduler.",
+            "",
+            "Within-run caveat: endpoint and iteration-count comparisons are deterministic under this protocol; timing statistics quantify noise only within this run's machine and software stack.",
             "",
         ]
     )
@@ -388,8 +392,8 @@ def main() -> None:
         "continuous_test": "two-sided Mann-Whitney U",
         "energy_agreement_tolerance_ev": tolerance,
         "input": args.input.name,
+        "p_value_scope": "within-run timing noise only",
         "schema": 1,
-        "success_test": "two-sided Fisher exact",
     }
     document["summaries"] = summarize(groups)
     document["comparisons"] = comparisons(groups, tolerance)

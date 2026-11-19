@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
 import hashlib
 import importlib.metadata
 import json
 import os
 import platform
+import subprocess
 import time
 import warnings
 import zipfile
@@ -104,13 +107,85 @@ def canonical_distribution(name: str) -> str:
     return name.lower().replace("-", "_").replace(".", "_")
 
 
-def wheel_artifact(path: Path, expected_distribution: str) -> dict[str, str]:
-    if not path.is_file() or path.suffix != ".whl":
-        raise ValueError(f"{expected_distribution} wheel must be a wheel file")
+def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record_hash_bytes(path: Path) -> bytes:
+    return path.read_bytes()
+
+
+def record_hash(data: bytes) -> str:
+    digest = hashlib.sha256(data).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def verify_installed_record(distribution_name: str) -> dict[str, Any]:
+    distribution = importlib.metadata.distribution(distribution_name)
+    files = list(distribution.files or [])
+    record_rel = next(
+        (file for file in files if str(file).endswith(".dist-info/RECORD")),
+        None,
+    )
+    if record_rel is None:
+        raise ValueError(f"{distribution_name} has no dist-info RECORD")
+    record_path = Path(distribution.locate_file(record_rel))
+    checked = 0
+    for row in csv.reader(record_path.read_text(encoding="utf-8").splitlines()):
+        if len(row) != 3:
+            raise ValueError(f"{distribution_name} RECORD row has unexpected shape: {row}")
+        rel_path, hash_field, size_field = row
+        if not hash_field:
+            continue
+        algorithm, separator, expected_hash = hash_field.partition("=")
+        if separator != "=" or algorithm != "sha256":
+            raise ValueError(f"{distribution_name} RECORD uses unsupported hash: {hash_field}")
+        resolved = Path(distribution.locate_file(rel_path))
+        if not resolved.is_file():
+            raise ValueError(f"{distribution_name} RECORD file is missing: {rel_path}")
+        actual_hash = record_hash(record_hash_bytes(resolved))
+        if actual_hash != expected_hash:
+            raise ValueError(f"{distribution_name} RECORD hash mismatch for {rel_path}")
+        if size_field:
+            expected_size = int(size_field)
+            actual_size = resolved.stat().st_size
+            if expected_size != actual_size:
+                raise ValueError(f"{distribution_name} RECORD size mismatch for {rel_path}")
+        checked += 1
+    return {
+        "entries": len([row for row in csv.reader(record_path.read_text(encoding='utf-8').splitlines())]),
+        "entries_with_hash": checked,
+    }
+
+
+def direct_url_archive_hash(distribution_name: str) -> str | None:
+    distribution = importlib.metadata.distribution(distribution_name)
+    files = list(distribution.files or [])
+    direct_url_rel = next(
+        (file for file in files if str(file).endswith(".dist-info/direct_url.json")),
+        None,
+    )
+    if direct_url_rel is None:
+        return None
+    direct_url_path = Path(distribution.locate_file(direct_url_rel))
+    payload = json.loads(direct_url_path.read_text(encoding="utf-8"))
+    archive_hash = payload.get("archive_info", {}).get("hash")
+    if archive_hash is None:
+        return None
+    algorithm, separator, digest = archive_hash.partition("=")
+    if separator != "=" or algorithm != "sha256":
+        raise ValueError(f"{distribution_name} direct_url archive hash is invalid: {archive_hash}")
+    return digest
+
+
+def wheel_artifact(path: Path, expected_distribution: str) -> dict[str, str]:
+    if not path.is_file() or path.suffix != ".whl":
+        raise ValueError(f"{expected_distribution} wheel must be a wheel file")
+    wheel_sha = file_sha256(path)
     with zipfile.ZipFile(path) as wheel:
         metadata_files = [
             name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")
@@ -127,35 +202,102 @@ def wheel_artifact(path: Path, expected_distribution: str) -> dict[str, str]:
         raise ValueError(
             f"installed {expected_distribution} {installed_version} differs from wheel {version}"
         )
+    record_status = verify_installed_record(expected_distribution)
+    direct_url_hash = direct_url_archive_hash(expected_distribution)
+    if direct_url_hash is not None and direct_url_hash != wheel_sha:
+        raise ValueError(
+            f"{expected_distribution} direct_url archive hash does not match supplied wheel"
+        )
     return {
         "distribution": distribution,
         "filename": path.name,
-        "sha256": digest.hexdigest(),
+        "sha256": wheel_sha,
         "version": version,
+        "record_entries": str(record_status["entries"]),
+        "record_hashed_entries": str(record_status["entries_with_hash"]),
+        "record_verified": "true",
+        "direct_url_archive_sha256": direct_url_hash or "",
     }
 
 
-def cpu_model() -> str:
-    cpuinfo = Path("/proc/cpuinfo")
-    if cpuinfo.is_file():
-        for line in cpuinfo.read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition(":")
-            if separator and key.strip() in {"model name", "Processor"}:
-                return value.strip()
-    processor = platform.processor()
-    return processor if processor else "unknown"
+def parse_lscpu() -> dict[str, str]:
+    output = subprocess.run(
+        ["lscpu"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    rows: dict[str, str] = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition(":")
+        if separator:
+            rows[key.strip()] = value.strip()
+    return rows
+
+
+def flags_summary(flags: str) -> str:
+    tokens = [token for token in flags.split() if token]
+    if not tokens:
+        return "none"
+    preview = ", ".join(tokens[:12])
+    if len(tokens) <= 12:
+        return preview
+    return f"{preview}, ... ({len(tokens)} flags total)"
 
 
 def machine_header() -> dict[str, Any]:
+    lscpu = parse_lscpu()
+    cores_per_socket = int(lscpu.get("Core(s) per socket", "0") or "0")
+    sockets = int(lscpu.get("Socket(s)", "0") or "0")
+    threads_per_core = int(lscpu.get("Thread(s) per core", "0") or "0")
+    physical_cores = cores_per_socket * sockets if cores_per_socket and sockets else None
+    logical_cpus = int(lscpu.get("CPU(s)", "0") or "0")
     page_size = int(os.sysconf("SC_PAGE_SIZE"))
     physical_pages = int(os.sysconf("SC_PHYS_PAGES"))
+    model_name = lscpu.get("Model name") or lscpu.get("Architecture") or "unknown"
+    model_with_counts = (
+        f"{model_name} (physical_cores={physical_cores}, logical_cpus={logical_cpus}, "
+        f"threads_per_core={threads_per_core})"
+    )
     return {
         "architecture": platform.machine(),
         "available_logical_cpus": len(os.sched_getaffinity(0)),
-        "cpu": cpu_model(),
-        "logical_cpus": os.cpu_count(),
+        "cpu": model_with_counts,
+        "cpu_flags_summary": flags_summary(lscpu.get("Flags", "")),
+        "logical_cpus": logical_cpus,
+        "physical_cores": physical_cores,
+        "threads_per_core": threads_per_core,
+        "sockets": sockets,
         "memory_bytes": page_size * physical_pages,
     }
+
+
+def thread_env() -> dict[str, str]:
+    keys = [
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ]
+    return {key: os.environ[key] for key in keys if key in os.environ}
+
+
+def blas_backend() -> str:
+    import io
+    from contextlib import redirect_stdout
+
+    import numpy as np
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        np.__config__.show()
+    lines = [line.strip() for line in buffer.getvalue().splitlines() if line.strip()]
+    for line in lines:
+        lowered = line.lower()
+        if "blas" in lowered and lowered.endswith("found"):
+            return line
+    return lines[0] if lines else "unknown"
 
 
 def components(items: list[str]) -> dict[str, str]:
@@ -308,12 +450,14 @@ def run_ase_family(
         optimizer = fixed_optimizer(task.implementation, task.method, atoms)
         converged = bool(optimizer.run(fmax=fmax, steps=max_steps))
         energy, measured_fmax, measured_stress = final_observables(atoms, False)
+    hit_iteration_budget = (not converged) and int(optimizer.nsteps) >= max_steps
     return {
         "converged": converged,
         "energy_ev": energy,
         "fmax_ev_per_angstrom": measured_fmax,
         "stress_max_ev_per_angstrom3": measured_stress,
         "steps": int(optimizer.nsteps),
+        "hit_iteration_budget": hit_iteration_budget,
     }
 
 
@@ -336,6 +480,18 @@ def run_eon(
     parameters.opt_converged_force = fmax
     parameters.opt_convergence_metric = "max_atom"
     parameters.opt_max_iterations = max_steps
+    eon_config = {
+        "opt_method": str(parameters.opt_method),
+        "opt_converged_force": float(parameters.opt_converged_force),
+        "opt_convergence_metric": str(parameters.opt_convergence_metric),
+        "opt_max_iterations": int(parameters.opt_max_iterations),
+        "opt_step_size": float(parameters.opt_step_size)
+        if hasattr(parameters, "opt_step_size")
+        else None,
+        "opt_max_move": float(parameters.opt_max_move)
+        if hasattr(parameters, "opt_max_move")
+        else None,
+    }
     matter = eon.ase_to_matter(atoms, parameters=parameters)
     matter.reset_force_calls()
     relaxed, converged = matter.relax(inplace=False, quiet=True)
@@ -343,13 +499,17 @@ def run_eon(
     forces = np.asarray(relaxed.forces, dtype=np.float64)
     measured_fmax = float(np.linalg.norm(forces, axis=1).max(initial=0.0))
     accepted = bool(converged) and measured_fmax <= fmax
+    force_calls = int(relaxed.force_calls)
+    hit_iteration_budget = (not accepted) and force_calls >= (max_steps + 1)
     return {
         "converged": accepted,
-        "energy_ev": energy if accepted else None,
-        "fmax_ev_per_angstrom": measured_fmax if accepted else None,
+        "energy_ev": energy,
+        "fmax_ev_per_angstrom": measured_fmax,
         "stress_max_ev_per_angstrom3": None,
         "steps": None,
-        "eon_force_calls": int(relaxed.force_calls),
+        "eon_force_calls": force_calls,
+        "eon_config": eon_config,
+        "hit_iteration_budget": hit_iteration_budget,
     }
 
 
@@ -384,6 +544,7 @@ def run_task(
             "fmax_ev_per_angstrom": None,
             "stress_max_ev_per_angstrom3": None,
             "steps": None,
+            "hit_iteration_budget": False,
         }
         error = f"{type(exc).__name__}: {exc}"
     elapsed = time.perf_counter_ns() - started
@@ -401,7 +562,8 @@ def run_task(
         "outside_potential_seconds": max(0, elapsed - potential_ns) / 1.0e9,
         "force_calls": tracked.calls,
         "error": error,
-        "endpoint_values_comparable": bool(outcome["converged"]),
+        "endpoint_values_comparable": outcome["energy_ev"] is not None
+        and outcome["fmax_ev_per_angstrom"] is not None,
         **outcome,
     }
 
@@ -524,6 +686,9 @@ def main() -> None:
             "python": platform.python_version(),
             "system": platform.system(),
             "release": platform.release(),
+            "kernel": platform.release(),
+            "blas": blas_backend(),
+            "env_threads": thread_env(),
             "packages": installed_packages(),
         },
         "gaps": [
