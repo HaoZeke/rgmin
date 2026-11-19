@@ -1061,6 +1061,18 @@ fn cpu_f64_slice_mut<'a>(
     Ok(unsafe { slice::from_raw_parts_mut(p, n) })
 }
 
+/// The initial point check shared by the one shot C minimizers.
+///
+/// `entry` is the prefix that entry point puts on its other error
+/// messages, so the host sees which call refused the start.
+fn reject_non_finite_initial(entry: &str, x: &[f64]) -> Result<(), rgmin_status_t> {
+    if x.iter().any(|value| !value.is_finite()) {
+        set_last_error(&format!("{entry}: x contains a non-finite value"));
+        return Err(rgmin_status_t::RGMIN_INVALID_PARAMETER);
+    }
+    Ok(())
+}
+
 /// Minimize `f` from the 1-D f64 DLPack iterate `x`. On success, `x` is
 /// overwritten with the accepted point.
 ///
@@ -1131,9 +1143,8 @@ pub unsafe extern "C" fn rgmin_minimize_opts(
             Ok(s) => s.to_vec(),
             Err(st) => return st,
         };
-        if init.iter().any(|value| !value.is_finite()) {
-            set_last_error("rgmin_minimize: x contains a non-finite value");
-            return rgmin_status_t::RGMIN_INVALID_PARAMETER;
+        if let Err(status) = reject_non_finite_initial("rgmin_minimize", &init) {
+            return status;
         }
         let n = init.len();
         let obj = c_oracle(eval, grad, user, n);
@@ -1347,6 +1358,9 @@ pub unsafe extern "C" fn rgmin_minimize_hess_opts(
             Ok(s) => s.to_vec(),
             Err(st) => return st,
         };
+        if let Err(status) = reject_non_finite_initial("rgmin_minimize_hess", &init) {
+            return status;
+        }
         let n = init.len();
         let obj = c_oracle_hess(eval, grad, hess, user, n);
         let c = unsafe { &*ctrl };
@@ -1439,6 +1453,9 @@ pub unsafe extern "C" fn rgmin_minimize_hvp_opts(
             Ok(s) => s.to_vec(),
             Err(st) => return st,
         };
+        if let Err(status) = reject_non_finite_initial("rgmin_minimize_hvp", &init) {
+            return status;
+        }
         let n = init.len();
         let obj = c_oracle_hvp(eval, grad, hvp, user, n);
         let c = unsafe { &*ctrl };
@@ -1497,6 +1514,9 @@ pub unsafe extern "C" fn rgmin_minimize_eindir(
             Ok(s) => s.to_vec(),
             Err(st) => return st,
         };
+        if let Err(status) = reject_non_finite_initial("rgmin_minimize_eindir", &init) {
+            return status;
+        }
         let dim = unsafe { (*objective).dim };
         if dim != init.len() {
             set_last_error(&format!(
@@ -5213,6 +5233,9 @@ pub unsafe extern "C" fn rgmin_minimize_scg_with_options(
             Ok(s) => s.to_vec(),
             Err(st) => return st,
         };
+        if let Err(status) = reject_non_finite_initial("rgmin_minimize_scg", &init) {
+            return status;
+        }
         let n = init.len();
         let c = unsafe { &*ctrl };
         let control = control_from_c(c);

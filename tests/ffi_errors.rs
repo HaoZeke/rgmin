@@ -1,11 +1,16 @@
 #![cfg(feature = "capi")]
 
+use std::ffi::CStr;
 use std::os::raw::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dlpk::sys::DLManagedTensorVersioned;
+use eindir_core::ffi::{eindir_core_abi_stamp, eindir_objective_t, eindir_status_t};
 use rgmin::ffi::{
-    rgmin_abi_compatible, rgmin_abi_stamp, rgmin_control_t, rgmin_method_from_name, rgmin_method_t,
-    rgmin_minimize, rgmin_report_t, rgmin_status_t, rgmin_stop_t, rgmin_tensor_borrow_cpu_f64,
+    rgmin_abi_compatible, rgmin_abi_stamp, rgmin_control_t, rgmin_last_error,
+    rgmin_method_from_name, rgmin_method_t, rgmin_minimize, rgmin_minimize_eindir,
+    rgmin_minimize_hess_opts, rgmin_minimize_hvp_opts, rgmin_minimize_scg_with_options,
+    rgmin_report_t, rgmin_scg_params_t, rgmin_status_t, rgmin_stop_t, rgmin_tensor_borrow_cpu_f64,
     rgmin_tensor_free,
 };
 
@@ -277,4 +282,242 @@ fn incompatible_abi_and_dlpack_versions_are_rejected() {
     };
     unsafe { rgmin_tensor_free(tensor) };
     assert_eq!(status, rgmin_status_t::RGMIN_INVALID_PARAMETER);
+}
+
+/// Counts host evaluations for one call. Each caller owns its counter and
+/// hands it to the entry through the `user` pointer.
+fn count_call(user: *mut c_void) {
+    unsafe { &*user.cast::<AtomicUsize>() }.fetch_add(1, Ordering::Relaxed);
+}
+
+unsafe extern "C" fn counted_eval(
+    user: *mut c_void,
+    _x: *const DLManagedTensorVersioned,
+    value: *mut f64,
+) -> rgmin_status_t {
+    count_call(user);
+    unsafe { *value = 1.0 };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn counted_grad(
+    _user: *mut c_void,
+    _x: *const DLManagedTensorVersioned,
+    grad: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let output = unsafe { (*grad).dl_tensor.data.cast::<f64>() };
+    unsafe { *output = 0.0 };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn counted_hess(
+    _user: *mut c_void,
+    _x: *const DLManagedTensorVersioned,
+    hess: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let output = unsafe { (*hess).dl_tensor.data.cast::<f64>() };
+    unsafe { *output = 1.0 };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn counted_hvp(
+    _user: *mut c_void,
+    _x: *const DLManagedTensorVersioned,
+    _v: *const DLManagedTensorVersioned,
+    hv: *mut DLManagedTensorVersioned,
+) -> rgmin_status_t {
+    let output = unsafe { (*hv).dl_tensor.data.cast::<f64>() };
+    unsafe { *output = 0.0 };
+    rgmin_status_t::RGMIN_SUCCESS
+}
+
+unsafe extern "C" fn counted_eindir_eval(
+    user: *mut c_void,
+    _x: *const DLManagedTensorVersioned,
+    value: *mut f64,
+) -> eindir_status_t {
+    count_call(user);
+    unsafe { *value = 1.0 };
+    eindir_status_t::EINDIR_SUCCESS
+}
+
+unsafe extern "C" fn counted_eindir_grad(
+    _user: *mut c_void,
+    _x: *const DLManagedTensorVersioned,
+    grad: *mut DLManagedTensorVersioned,
+) -> eindir_status_t {
+    let output = unsafe { (*grad).dl_tensor.data.cast::<f64>() };
+    unsafe { *output = 0.0 };
+    eindir_status_t::EINDIR_SUCCESS
+}
+
+fn last_error() -> String {
+    unsafe { CStr::from_ptr(rgmin_last_error()) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// A refused start leaves `x` alone, calls the host never, and names the
+/// entry point that refused it.
+fn assert_refused(
+    entry: &str,
+    initial: f64,
+    status: rgmin_status_t,
+    calls: &AtomicUsize,
+    value: f64,
+) {
+    assert_eq!(
+        status,
+        rgmin_status_t::RGMIN_INVALID_PARAMETER,
+        "{entry} {initial}"
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 0, "{entry} {initial}");
+    assert_eq!(
+        last_error(),
+        format!("{entry}: x contains a non-finite value"),
+        "{initial}"
+    );
+    assert_eq!(value.to_bits(), initial.to_bits(), "{entry}");
+}
+
+/// The four entries that used to skip the check must refuse a nonfinite
+/// start the way `rgmin_minimize` does: `RGMIN_INVALID_PARAMETER`, an
+/// unchanged `x`, and no host evaluation. The message names the entry
+/// point the host called, as the other messages of that entry do.
+#[test]
+fn remaining_entries_reject_a_nonfinite_start() {
+    for initial in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        refuse_minimize(initial);
+        refuse_hess(initial);
+        refuse_hvp(initial);
+        refuse_eindir(initial);
+        refuse_scg(initial);
+    }
+}
+
+fn refuse_minimize(initial: f64) {
+    let calls = AtomicUsize::new(0);
+    let mut value = [initial];
+    let tensor = unsafe { rgmin_tensor_borrow_cpu_f64(value.as_mut_ptr(), value.len()) };
+    let mut out = report();
+    let mut ctrl = control();
+    ctrl.maxiter = 1;
+    let status = unsafe {
+        rgmin_minimize(
+            Some(counted_eval),
+            Some(counted_grad),
+            std::ptr::from_ref(&calls).cast_mut().cast(),
+            tensor,
+            &ctrl,
+            rgmin_method_t::RGMIN_STEEPEST,
+            &mut out,
+        )
+    };
+    unsafe { rgmin_tensor_free(tensor) };
+    assert_refused("rgmin_minimize", initial, status, &calls, value[0]);
+}
+
+fn refuse_hess(initial: f64) {
+    let calls = AtomicUsize::new(0);
+    let mut value = [initial];
+    let tensor = unsafe { rgmin_tensor_borrow_cpu_f64(value.as_mut_ptr(), value.len()) };
+    let mut out = report();
+    let mut ctrl = control();
+    ctrl.maxiter = 1;
+    let status = unsafe {
+        rgmin_minimize_hess_opts(
+            Some(counted_eval),
+            Some(counted_grad),
+            Some(counted_hess),
+            std::ptr::from_ref(&calls).cast_mut().cast(),
+            tensor,
+            &ctrl,
+            rgmin_method_t::RGMIN_NEWTON,
+            0,
+            0,
+            &mut out,
+        )
+    };
+    unsafe { rgmin_tensor_free(tensor) };
+    assert_refused("rgmin_minimize_hess", initial, status, &calls, value[0]);
+}
+
+fn refuse_hvp(initial: f64) {
+    let calls = AtomicUsize::new(0);
+    let mut value = [initial];
+    let tensor = unsafe { rgmin_tensor_borrow_cpu_f64(value.as_mut_ptr(), value.len()) };
+    let mut out = report();
+    let mut ctrl = control();
+    ctrl.maxiter = 1;
+    let status = unsafe {
+        rgmin_minimize_hvp_opts(
+            Some(counted_eval),
+            Some(counted_grad),
+            Some(counted_hvp),
+            std::ptr::from_ref(&calls).cast_mut().cast(),
+            tensor,
+            &ctrl,
+            rgmin_method_t::RGMIN_NEWTON_CG,
+            0,
+            0,
+            &mut out,
+        )
+    };
+    unsafe { rgmin_tensor_free(tensor) };
+    assert_refused("rgmin_minimize_hvp", initial, status, &calls, value[0]);
+}
+
+fn refuse_eindir(initial: f64) {
+    let calls = AtomicUsize::new(0);
+    let mut value = [initial];
+    let tensor = unsafe { rgmin_tensor_borrow_cpu_f64(value.as_mut_ptr(), value.len()) };
+    let objective = Box::new(eindir_objective_t {
+        dim: 1,
+        low: std::ptr::null_mut(),
+        high: std::ptr::null_mut(),
+        eval_fn: counted_eindir_eval,
+        grad_fn: Some(counted_eindir_grad),
+        user_data: std::ptr::from_ref(&calls).cast_mut().cast(),
+        free_fn: None,
+    });
+    let mut out = report();
+    let mut ctrl = control();
+    ctrl.maxiter = 1;
+    let status = unsafe {
+        rgmin_minimize_eindir(
+            &*objective,
+            &eindir_core_abi_stamp(),
+            tensor,
+            &ctrl,
+            rgmin_method_t::RGMIN_STEEPEST,
+            &mut out,
+        )
+    };
+    unsafe { rgmin_tensor_free(tensor) };
+    assert_refused("rgmin_minimize_eindir", initial, status, &calls, value[0]);
+}
+
+fn refuse_scg(initial: f64) {
+    let calls = AtomicUsize::new(0);
+    let mut value = [initial];
+    let tensor = unsafe { rgmin_tensor_borrow_cpu_f64(value.as_mut_ptr(), value.len()) };
+    let mut out = report();
+    let mut ctrl = control();
+    ctrl.maxiter = 1;
+    let params = rgmin_scg_params_t::default();
+    let status = unsafe {
+        rgmin_minimize_scg_with_options(
+            Some(counted_eval),
+            Some(counted_grad),
+            None,
+            std::ptr::from_ref(&calls).cast_mut().cast(),
+            tensor,
+            &ctrl,
+            &params,
+            std::ptr::null(),
+            &mut out,
+        )
+    };
+    unsafe { rgmin_tensor_free(tensor) };
+    assert_refused("rgmin_minimize_scg", initial, status, &calls, value[0]);
 }
