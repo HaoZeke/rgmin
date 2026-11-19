@@ -152,12 +152,19 @@ pub struct HighsOptions {
     pub crossover: HighsCrossover,
     /// Optional host callback. Its context is borrowed from the host.
     pub callback: Option<HighsCallback>,
+    /// Seconds one HiGHS solve may run, or `None` to keep each solve's own
+    /// limit.
+    ///
+    /// Left as `None`, the projection QP stops after 0.05 s and the
+    /// feasible step QP after 1.0 s. A value replaces both limits.
+    pub time_limit: Option<f64>,
 }
 
 with_setters!(HighsOptions {
     with_solver => solver: val HighsSolverKind,
     with_crossover => crossover: val HighsCrossover,
     with_callback => callback: opt HighsCallback,
+    with_time_limit => time_limit: opt f64,
 });
 
 impl Default for HighsOptions {
@@ -166,6 +173,7 @@ impl Default for HighsOptions {
             solver: HighsSolverKind::Choose,
             crossover: HighsCrossover::Choose,
             callback: None,
+            time_limit: None,
         }
     }
 }

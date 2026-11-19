@@ -123,6 +123,24 @@ fn apply_engine(model: &mut highs::Model, options: &HighsOptions) -> Result<()> 
     Ok(())
 }
 
+/// Seconds the projection QP may run unless the options set a limit.
+const PROJECTION_TIME_LIMIT: f64 = 0.05;
+
+/// Seconds the feasible step QP may run unless the options set a limit.
+const FEASIBLE_STEP_TIME_LIMIT: f64 = 1.0;
+
+/// The limit for one solve: the configured value, else that solve's default.
+fn time_limit_or(options: &HighsOptions, default: f64) -> f64 {
+    options.time_limit.unwrap_or(default)
+}
+
+/// Apply the time limit to one model.
+fn set_time_limit(model: &mut highs::Model, options: &HighsOptions, default: f64) -> Result<()> {
+    model
+        .try_set_option("time_limit", time_limit_or(options, default))
+        .map_err(|_| Error::Highs("cannot set time_limit".into()))
+}
+
 fn bind_callback(
     model: &mut highs::Model,
     options: &HighsOptions,
@@ -388,9 +406,7 @@ fn project_qp(
     model
         .try_set_option("threads", 1_i32)
         .map_err(|_| Error::Highs("cannot set threads=1".into()))?;
-    model
-        .try_set_option("time_limit", 0.05_f64)
-        .map_err(|_| Error::Highs("cannot set time_limit".into()))?;
+    set_time_limit(&mut model, options, PROJECTION_TIME_LIMIT)?;
 
     let (q_start, q_index, q_value) = identity_csc(n);
     let st = unsafe {
@@ -648,9 +664,13 @@ pub(crate) fn highs_feasible_step_boxed(
     }
     apply_engine(&mut model, options)?;
     serialise_openmp_once();
-    let _ = model.try_set_option("parallel", "off");
-    let _ = model.try_set_option("threads", 1_i32);
-    let _ = model.try_set_option("time_limit", 1.0_f64);
+    model
+        .try_set_option("parallel", "off")
+        .map_err(|_| Error::Highs("cannot set parallel=off".into()))?;
+    model
+        .try_set_option("threads", 1_i32)
+        .map_err(|_| Error::Highs("cannot set threads=1".into()))?;
+    set_time_limit(&mut model, options, FEASIBLE_STEP_TIME_LIMIT)?;
     if !equalities.is_empty() {
         model
             .try_set_option(
@@ -744,7 +764,8 @@ fn identity_csc(n: usize) -> (Vec<HighsInt>, Vec<HighsInt>, Vec<f64>) {
 
 #[cfg(test)]
 mod tests {
-    use super::identity_csc;
+    use super::{FEASIBLE_STEP_TIME_LIMIT, PROJECTION_TIME_LIMIT, identity_csc, time_limit_or};
+    use crate::HighsOptions;
 
     #[test]
     fn identity_hessian_has_terminal_column_pointer() {
@@ -752,5 +773,17 @@ mod tests {
         assert_eq!(start.len(), 33);
         assert_eq!(start.last(), Some(&(value.len() as _)));
         assert_eq!(index.len(), value.len());
+    }
+
+    #[test]
+    fn each_solve_keeps_its_own_limit_until_one_is_set() {
+        let options = HighsOptions::default();
+        assert_eq!(time_limit_or(&options, PROJECTION_TIME_LIMIT), 0.05);
+        assert_eq!(time_limit_or(&options, FEASIBLE_STEP_TIME_LIMIT), 1.0);
+        let set = options.with_time_limit(2.5);
+        assert_eq!(time_limit_or(&set, PROJECTION_TIME_LIMIT), 2.5);
+        assert_eq!(time_limit_or(&set, FEASIBLE_STEP_TIME_LIMIT), 2.5);
+        let cleared = set.with_time_limit(None);
+        assert_eq!(time_limit_or(&cleared, FEASIBLE_STEP_TIME_LIMIT), 1.0);
     }
 }
