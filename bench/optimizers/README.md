@@ -39,7 +39,6 @@ python bench/optimizers/run.py \
   --rgmin-sha <source-sha> \
   --rgpot-tag <source-tag> \
   --rgpot-sha <source-sha> \
-  --rgpot-patch-sha <source-sha> \
   --eon-tag <source-tag> \
   --eon-sha <source-sha> \
   --eon-rgpot-sha <source-sha> \
@@ -64,8 +63,13 @@ after every installed dist-info RECORD hash and size entry is verified, and
 after the wheel archive hash is matched to the installed direct-url archive
 hash when that metadata exists. The runtime section records CPU model,
 architecture, logical and physical core counts, a CPU-flag summary, memory,
-BLAS backend summary, package versions, thread-related environment variables,
-and operating-system version, but no hostname.
+BLAS backend summary (from NumPy build configuration and threadpoolctl when
+available, never a raw config fragment), package versions, thread-related
+environment variables, and operating-system version, but no hostname. All
+recorded source SHAs resolve on public remotes; if a local patch is applied on
+top of an upstream `rgpot` commit, pass `--rgpot-patch` (committed under
+`bench/optimizers/`) and `--rgpot-patch-tree` so its path, sha256, and
+resulting tree are recorded alongside the upstream SHA.
 
 The recorded wall times are 12 measured repetitions per cell on the machine
 described by that runtime header. Endpoint energies, endpoints, and

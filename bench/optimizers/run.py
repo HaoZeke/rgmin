@@ -58,29 +58,55 @@ class TimedPotential:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fixtures", type=Path, required=True)
+    parser.add_argument("--recapture-provenance", action="store_true")
+    parser.add_argument("--fixtures", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--rounds", type=int, required=True)
-    parser.add_argument("--cores", required=True)
-    parser.add_argument("--thread-count", type=int, required=True)
-    parser.add_argument("--fmax", type=float, required=True)
-    parser.add_argument("--stress-max", type=float, required=True)
-    parser.add_argument("--max-steps", type=int, required=True)
-    parser.add_argument("--energy-tolerance", type=float, required=True)
+    parser.add_argument("--rounds", type=int)
+    parser.add_argument("--cores")
+    parser.add_argument("--thread-count", type=int)
+    parser.add_argument("--fmax", type=float)
+    parser.add_argument("--stress-max", type=float)
+    parser.add_argument("--max-steps", type=int)
+    parser.add_argument("--energy-tolerance", type=float)
     parser.add_argument("--rgmin-sha", required=True)
     parser.add_argument("--rgpot-tag", required=True)
     parser.add_argument("--rgpot-sha", required=True)
-    parser.add_argument("--rgpot-patch-sha", required=True)
+    parser.add_argument("--rgpot-patch", type=Path, default=None)
+    parser.add_argument("--rgpot-patch-tree", default=None)
     parser.add_argument("--eon-tag", required=True)
     parser.add_argument("--eon-sha", required=True)
     parser.add_argument("--eon-rgpot-sha", required=True)
-    parser.add_argument("--rgmin-wheel", type=Path, required=True)
-    parser.add_argument("--rgpot-wheel", type=Path, required=True)
-    parser.add_argument("--eon-wheel", type=Path, required=True)
-    parser.add_argument("--component", action="append", required=True)
-    parser.add_argument("--rust-version", required=True)
-    parser.add_argument("--cxx-version", required=True)
-    return parser.parse_args()
+    parser.add_argument("--rgmin-wheel", type=Path)
+    parser.add_argument("--rgpot-wheel", type=Path)
+    parser.add_argument("--eon-wheel", type=Path)
+    parser.add_argument("--component", action="append")
+    parser.add_argument("--rust-version")
+    parser.add_argument("--cxx-version")
+    args = parser.parse_args()
+    if not args.recapture_provenance:
+        missing = [
+            flag
+            for flag, value in (
+                ("--fixtures", args.fixtures),
+                ("--rounds", args.rounds),
+                ("--cores", args.cores),
+                ("--thread-count", args.thread_count),
+                ("--fmax", args.fmax),
+                ("--stress-max", args.stress_max),
+                ("--max-steps", args.max_steps),
+                ("--energy-tolerance", args.energy_tolerance),
+                ("--rgmin-wheel", args.rgmin_wheel),
+                ("--rgpot-wheel", args.rgpot_wheel),
+                ("--eon-wheel", args.eon_wheel),
+                ("--component", args.component),
+                ("--rust-version", args.rust_version),
+                ("--cxx-version", args.cxx_version),
+            )
+            if value is None
+        ]
+        if missing:
+            parser.error(f"the following arguments are required: {', '.join(missing)}")
+    return args
 
 
 def set_affinity(spec: str, thread_count: int) -> list[int]:
@@ -283,21 +309,112 @@ def thread_env() -> dict[str, str]:
     return {key: os.environ[key] for key in keys if key in os.environ}
 
 
-def blas_backend() -> str:
-    import io
-    from contextlib import redirect_stdout
+def _format_numpy_dep(label: str, dep: Any) -> tuple[str, str | None] | None:
+    if not isinstance(dep, dict):
+        return None
+    if dep.get("found") is False:
+        return None
+    name = dep.get("name")
+    if not name:
+        return None
+    version = str(dep.get("version") or "").strip()
+    config = " ".join(str(dep.get("openblas configuration") or "").split())
+    text = f"{label}={name}"
+    if version:
+        text = f"{text} {version}"
+    if config:
+        text = f"{text} [{config}]"
+    return text, config or None
 
+
+def _numpy_blas_parts(reasons: list[str]) -> list[str]:
     import numpy as np
 
-    buffer = io.StringIO()
-    with redirect_stdout(buffer):
-        np.__config__.show()
-    lines = [line.strip() for line in buffer.getvalue().splitlines() if line.strip()]
-    for line in lines:
-        lowered = line.lower()
-        if "blas" in lowered and lowered.endswith("found"):
-            return line
-    return lines[0] if lines else "unknown"
+    config: Any = None
+    try:
+        config = np.show_config(mode="dicts")
+    except TypeError:
+        config = getattr(np.__config__, "CONFIG", None)
+    except Exception as exc:
+        reasons.append(f"numpy.show_config failed: {type(exc).__name__}: {exc}")
+        return []
+    if not isinstance(config, dict):
+        reasons.append("numpy config did not return a dict")
+        return []
+    deps = config.get("Build Dependencies")
+    if not isinstance(deps, dict):
+        reasons.append("numpy Build Dependencies missing")
+        return []
+    parts: list[str] = []
+    blas_entry = _format_numpy_dep("blas", deps.get("blas"))
+    if blas_entry is not None:
+        parts.append(blas_entry[0])
+        blas_cfg = blas_entry[1]
+    else:
+        blas_cfg = None
+        reasons.append("numpy Build Dependencies.blas missing")
+    lapack_entry = _format_numpy_dep("lapack", deps.get("lapack"))
+    if lapack_entry is not None:
+        lapack_text, lapack_cfg = lapack_entry
+        if lapack_cfg and lapack_cfg == blas_cfg:
+            lapack_dep = deps["lapack"]
+            lapack_name = lapack_dep.get("name")
+            lapack_ver = str(lapack_dep.get("version") or "").strip()
+            lapack_text = f"lapack={lapack_name}" + (f" {lapack_ver}" if lapack_ver else "")
+        parts.append(lapack_text)
+    return parts
+
+
+def _threadpoolctl_blas_parts(reasons: list[str]) -> list[str]:
+    try:
+        import threadpoolctl
+    except ImportError:
+        reasons.append("threadpoolctl unavailable")
+        return []
+    except Exception as exc:
+        reasons.append(f"threadpoolctl import failed: {type(exc).__name__}: {exc}")
+        return []
+    try:
+        infos = threadpoolctl.threadpool_info()
+    except Exception as exc:
+        reasons.append(f"threadpoolctl.threadpool_info failed: {type(exc).__name__}: {exc}")
+        return []
+    seen: list[str] = []
+    for entry in infos:
+        if not isinstance(entry, dict):
+            continue
+        user_api = str(entry.get("user_api") or "").lower()
+        internal_api = str(entry.get("internal_api") or "").strip()
+        prefix = str(entry.get("prefix") or "").lower()
+        if user_api != "blas" and "blas" not in internal_api.lower() and "blas" not in prefix:
+            continue
+        version = str(entry.get("version") or "").strip()
+        filepath = str(entry.get("filepath") or "").strip()
+        basename = Path(filepath).name if filepath else ""
+        label = internal_api or entry.get("prefix") or "blas"
+        summary = str(label)
+        if version:
+            summary = f"{summary} {version}"
+        if basename:
+            summary = f"{summary} ({basename})"
+        item = f"runtime={summary}"
+        if item not in seen:
+            seen.append(item)
+    if not seen:
+        reasons.append("threadpoolctl reported no BLAS runtime")
+    return seen
+
+
+def blas_backend() -> str:
+    reasons: list[str] = []
+    parts = _numpy_blas_parts(reasons) + _threadpoolctl_blas_parts(reasons)
+    if not parts:
+        reason_text = "; ".join(reasons) if reasons else "no backend metadata detected"
+        return f"unknown ({reason_text})"
+    combined = "; ".join(parts).strip()
+    if not combined or combined.startswith("{") or combined.startswith("["):
+        return "unknown (backend metadata produced invalid structured fragment)"
+    return combined
 
 
 def components(items: list[str]) -> dict[str, str]:
@@ -603,6 +720,44 @@ def schedule(rounds: int) -> list[Task]:
     return tasks
 
 
+def sources_block(args: argparse.Namespace) -> dict[str, Any]:
+    if (args.rgpot_patch is None) != (args.rgpot_patch_tree is None):
+        raise ValueError("--rgpot-patch and --rgpot-patch-tree must be provided together")
+    sources: dict[str, Any] = {
+        "rgmin": args.rgmin_sha,
+        "rgpot_tag": args.rgpot_tag,
+        "rgpot": args.rgpot_sha,
+        "eon_tag": args.eon_tag,
+        "eon": args.eon_sha,
+        "eon_bundled_rgpot": args.eon_rgpot_sha,
+    }
+    if args.rgpot_patch is not None:
+        bench_dir = Path(__file__).resolve().parent
+        repo_root = bench_dir.parent.parent
+        patch_resolved = args.rgpot_patch.resolve()
+        if not patch_resolved.is_file():
+            raise FileNotFoundError(f"rgpot patch not found: {args.rgpot_patch}")
+        if bench_dir not in patch_resolved.parents:
+            raise ValueError("rgpot patch file must live under bench/optimizers")
+        sources["rgpot_binding_patch"] = {
+            "path": str(patch_resolved.relative_to(repo_root)),
+            "sha256": file_sha256(patch_resolved),
+            "tree": args.rgpot_patch_tree,
+        }
+    return sources
+
+
+def recapture_provenance(args: argparse.Namespace) -> None:
+    if not args.output.is_file():
+        raise FileNotFoundError(f"existing raw results file not found: {args.output}")
+    document = json.loads(args.output.read_text(encoding="utf-8"))
+    if any(key in document for key in ("analysis", "summaries", "comparisons", "failures")):
+        raise ValueError("cannot recapture provenance on an analyzed document")
+    document["sources"] = sources_block(args)
+    document["runtime"]["blas"] = blas_backend()
+    write_json(args.output, document)
+
+
 def write_json(path: Path, document: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".part")
     temporary.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -621,6 +776,9 @@ def main() -> None:
         category=FutureWarning,
         message="Log flushes by default now",
     )
+    if args.recapture_provenance:
+        recapture_provenance(args)
+        return
     if args.rounds < 12:
         raise ValueError("rounds must be at least 12")
     if args.output.exists():
@@ -628,6 +786,7 @@ def main() -> None:
     machine = machine_header()
     cores = set_affinity(args.cores, args.thread_count)
     tasks = schedule(args.rounds)
+    sources = sources_block(args)
     document: dict[str, Any] = {
         "schema": 1,
         "protocol": {
@@ -657,15 +816,7 @@ def main() -> None:
                 "Si64-cell": "StillingerWeberSi defaults",
             },
         },
-        "sources": {
-            "rgmin": args.rgmin_sha,
-            "rgpot_tag": args.rgpot_tag,
-            "rgpot": args.rgpot_sha,
-            "rgpot_binding_patch": args.rgpot_patch_sha,
-            "eon_tag": args.eon_tag,
-            "eon": args.eon_sha,
-            "eon_bundled_rgpot": args.eon_rgpot_sha,
-        },
+        "sources": sources,
         "artifacts": {
             "rgmin_wheel": wheel_artifact(args.rgmin_wheel, "rgmin"),
             "rgpot_wheel": wheel_artifact(args.rgpot_wheel, "rgpot"),
