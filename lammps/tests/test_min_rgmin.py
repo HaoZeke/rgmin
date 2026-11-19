@@ -153,6 +153,29 @@ def test_etol_stops_before_ftol_with_fewer_iterations(tmp_path, modify):
     assert cut.evaluations < full.evaluations
 
 
+def test_fire_large_etol_waits_past_the_delay(tmp_path):
+    """A loose ``etol`` still waits out FIRE's delay.
+
+    ``min_style fire`` in rgmin uses ``n_min`` of 5, and the energy test
+    stays off until the power has been positive for longer than that.
+    The plugin used to apply ``minimize etol`` on every moved step, so
+    ``etol`` 0.1 stopped on the first step of this rattled cell. The
+    count of iterations separates that behaviour from a delay.
+    """
+    res = rgmin(
+        tmp_path,
+        "cu-vac",
+        "min_modify method fire",
+        etol=0.1,
+        ftol=0.0,
+        thermo=1,
+        maxiter=40,
+    )
+    assert res.returncode == 0, res.error or res.log[-2000:]
+    assert res.stop == "energy tolerance", res.stop
+    assert res.iterations > 5, res.iterations
+
+
 def test_etol_zero_leaves_the_run_unchanged(tmp_path):
     a = rgmin(tmp_path / "a", "cu-vac")
     b = rgmin(tmp_path / "b", "cu-vac", etol=0.0)
