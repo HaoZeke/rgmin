@@ -208,8 +208,8 @@ class Solver:
 
 def minimize(f_and_grad: Callable[[NDArray[numpy.float64]], tuple[float, NDArray[numpy.float64]]], x0: NDArray[numpy.float64], method: object, **kwargs) -> tuple[Report, NDArray[numpy.float64]]:
     """
-    Minimize ``f_and_grad`` in place and return ``(report, x)``. ``error_on_unmet=True`` raises ``RuntimeError`` when the stop is ``BUDGET``, ``LINE_SEARCH``, or ``POLISH_UNMET``. ``backward_polish`` is stored on the session and is not used by this step loop.
+    Minimize ``f_and_grad`` in place and return ``(report, x)``. ``error_on_unmet=True`` raises ``RuntimeError`` when the stop is ``BUDGET``, ``LINE_SEARCH``, or ``POLISH_UNMET``. ``backward_polish`` is stored on the session and is not used by this step loop, which does not form a Hessian.
     """
 
-def backward_error_floor(value: float, x: NDArray[numpy.float64]) -> float:
+def backward_error_floor(value: float, x: object) -> float:
     """First-order floor ``n * eps * (1 + |value| + sum |x_i|)``."""

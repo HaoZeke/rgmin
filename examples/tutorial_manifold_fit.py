@@ -15,7 +15,7 @@ rng = np.random.default_rng(0)
 
 def frame(n: int, p: int) -> Array:
     q, r = np.linalg.qr(rng.normal(size=(n, p)))
-    return q * np.sign(np.diag(r))
+    return np.asarray(q * np.sign(np.diag(r)), dtype=np.float64)
 
 
 def spd(p: int) -> Array:
