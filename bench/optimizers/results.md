@@ -2,7 +2,7 @@
 
 Release builds, 1 pinned thread, 12 order-flipped rounds, no warm-up and no rescue reruns. Convergence is 0.01 eV/A; cell rows also require 0.001 eV/A^3. Energy agreement tolerance is 0.001 eV.
 
-Machine: Intel(R) Xeon(R) Processor (physical_cores=8, logical_cpus=8, threads_per_core=1); flags: fpu, vme, de, pse, tsc, msr, pae, mce, cx8, apic, sep, mtrr, ... (128 flags total); architecture: x86_64; available logical CPUs: 8/8; kernel: 6.12.113+; Python: 3.12.3; Rust: rustc 1.89.0 (29483883e 2025-08-04); C++: GNU-13.3.0; BLAS: {; thread env: MKL_NUM_THREADS=1, NUMEXPR_NUM_THREADS=1, OMP_NUM_THREADS=1, OPENBLAS_NUM_THREADS=1, VECLIB_MAXIMUM_THREADS=1.
+Machine: Intel(R) Xeon(R) Processor (physical_cores=8, logical_cpus=8, threads_per_core=1); flags: fpu, vme, de, pse, tsc, msr, pae, mce, cx8, apic, sep, mtrr, ... (128 flags total); architecture: x86_64; available logical CPUs: 8/8; kernel: 6.12.113+; Python: 3.12.3; Rust: rustc 1.89.0 (29483883e 2025-08-04); C++: GNU-13.3.0; BLAS: blas=scipy-openblas 0.3.34.237.2 [OpenBLAS 0.3.34.237.2 USE64BITINT DYNAMIC_ARCH NO_AFFINITY SkylakeX MAX_THREADS=64]; lapack=scipy-openblas 0.3.34.237.2; runtime=openblas 0.3.34.237.2 (libscipy_openblas64_-4b78795a.so); thread env: MKL_NUM_THREADS=1, NUMEXPR_NUM_THREADS=1, OMP_NUM_THREADS=1, OPENBLAS_NUM_THREADS=1, VECLIB_MAXIMUM_THREADS=1.
 
 P-values below are within-run timing-noise tests only (Mann-Whitney on wall and outside-potential timings).
 
