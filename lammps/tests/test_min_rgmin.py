@@ -9,6 +9,7 @@ and ``RGMIN_LAMMPS_RUNNER`` prefixes every ``lmp`` run, such as with valgrind.
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -27,6 +28,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 FTOL = 1e-6
+# rgmin's floor in the relative energy test: sqrt of the f64 machine epsilon.
+EPS_ENERGY = math.sqrt(sys.float_info.epsilon)
 # Both minimizers stop with |F| < 1e-6 in the same basin, where the
 # energy is flat to ~|F|^2 / k; the rest is summation order.
 ETOL_REL = 1e-10
@@ -133,10 +136,52 @@ def test_etol_is_the_lammps_relative_test(tmp_path):
     energies = [e for _, e, _ in res.thermo]
 
     def met(a, b):
-        return abs(b - a) < etol * 0.5 * (abs(a) + abs(b) + 1e-8)
+        return abs(b - a) < etol * 0.5 * (abs(a) + abs(b) + EPS_ENERGY)
 
     assert met(energies[-2], energies[-1])
     assert not any(met(a, b) for a, b in zip(energies[:-2], energies[1:-1]) if a != b)
+
+
+@pytest.mark.parametrize("modify", ["", "min_modify method fire", "min_modify method bb"])
+def test_etol_stops_before_ftol_with_fewer_iterations(tmp_path, modify):
+    full = rgmin(tmp_path / "full", "cu-sia-vac", modify, ftol=1e-10, maxiter=2000)
+    cut = rgmin(tmp_path / "cut", "cu-sia-vac", modify, etol=1e-6, ftol=1e-10, maxiter=2000)
+    assert cut.returncode == 0, cut.error
+    assert cut.stop == "energy tolerance", cut.stop
+    assert full.stop != "energy tolerance"
+    assert cut.iterations < full.iterations
+    assert cut.evaluations < full.evaluations
+
+
+def test_fire_large_etol_waits_past_the_delay(tmp_path):
+    """A loose ``etol`` still waits out FIRE's delay.
+
+    ``min_style fire`` in rgmin uses ``n_min`` of 5, and the energy test
+    stays off until the power has been positive for longer than that.
+    The plugin used to apply ``minimize etol`` on every moved step, so
+    ``etol`` 0.1 stopped on the first step of this rattled cell. The
+    count of iterations separates that behaviour from a delay.
+    """
+    res = rgmin(
+        tmp_path,
+        "cu-vac",
+        "min_modify method fire",
+        etol=0.1,
+        ftol=0.0,
+        thermo=1,
+        maxiter=40,
+    )
+    assert res.returncode == 0, res.error or res.log[-2000:]
+    assert res.stop == "energy tolerance", res.stop
+    assert res.iterations > 5, res.iterations
+
+
+def test_etol_zero_leaves_the_run_unchanged(tmp_path):
+    a = rgmin(tmp_path / "a", "cu-vac")
+    b = rgmin(tmp_path / "b", "cu-vac", etol=0.0)
+    assert_converged(a)
+    assert_converged(b)
+    assert (a.iterations, a.evaluations, a.pe) == (b.iterations, b.evaluations, b.pe)
 
 
 def test_norm_max_stops_on_the_largest_atom_force(tmp_path):

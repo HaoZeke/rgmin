@@ -16,6 +16,7 @@ use crate::qn::{minimize_bfgs, minimize_lbfgs, minimize_sd, minimize_sr1, minimi
 use crate::report::{Report, Status};
 use crate::session::Solver;
 use crate::step::{implicit_atom_cap, l2, next_istep, one_shot_report, take_step};
+use crate::stop::{Counted, StopRules, counted, stop_after};
 
 /// Minimize `obj` from `init` with the chosen conjugacy, restart, and line search.
 pub fn minimize<O>(
@@ -179,11 +180,11 @@ where
     if !control.backward_polish {
         return control.deliver(report);
     }
-    let prior = report.steps;
+    let steps = report.steps;
+    let evals = report.evals;
     let polished =
         crate::newton::polish_inner(obj, report.coords, control, crate::NewtonKind::Shifted)?;
-    let steps = prior + polished.steps;
-    control.deliver(polished.with_steps(steps))
+    control.deliver(carry_polish(steps, evals, polished))
 }
 
 fn run_session_hess<O>(
@@ -221,10 +222,19 @@ where
     if !control.backward_polish {
         return control.deliver(report);
     }
-    let prior = report.steps;
+    let steps = report.steps;
+    let evals = report.evals;
     let polished = crate::hvp::polish_hvp_inner(obj, report.coords, control)?;
-    let steps = prior + polished.steps;
-    control.deliver(polished.with_steps(steps))
+    control.deliver(carry_polish(steps, evals, polished))
+}
+
+/// The search that ran before the polish already counted its steps and
+/// evaluations. The polish report replaces that report, so both totals
+/// have to be carried across or the caller sees only the polish.
+fn carry_polish(prior_steps: usize, prior_evals: usize, polished: Report) -> Report {
+    let steps = prior_steps + polished.steps;
+    let evals = prior_evals + polished.evals;
+    polished.with_steps(steps).with_evals(evals)
 }
 
 fn run_session_hvp<O>(
@@ -252,6 +262,22 @@ fn minimize_nlcg<O>(
 where
     O: DifferentiableObjective<f64> + ?Sized,
 {
+    counted(obj, control, |obj| {
+        nlcg_counted(obj, init, control, conjugacy, restart, linesearch)
+    })
+}
+
+fn nlcg_counted<O>(
+    obj: &Counted<'_, O>,
+    init: impl Into<Array1<f64>>,
+    control: &Control,
+    conjugacy: Conjugacy,
+    restart: Restart,
+    linesearch: LineSearch,
+) -> Result<Report>
+where
+    O: DifferentiableObjective<f64> + ?Sized,
+{
     let mut pos = init.into();
     if pos.len() != Objective::dim(obj) {
         return Err(Error::Dim {
@@ -266,6 +292,7 @@ where
     let mut g_old = grad.clone();
     let mut d_old = dir.clone();
     let mut istep = control.istep;
+    let mut stops = StopRules::from_start(value);
 
     for step in 0..control.maxiter {
         let gnorm = l2(&grad);
@@ -293,9 +320,13 @@ where
             ));
         }
         let lsstep = t.alpha;
+        let moved = t.moved;
         pos = t.x;
         value = t.f;
         grad = t.g;
+        if let Some(status) = stop_after(&mut stops, control, obj, value, moved, &grad) {
+            return control.deliver(one_shot_report(value, pos, step + 1, l2(&grad), status));
+        }
         let ctx = ConjugacyContext {
             current_gradient: grad.view(),
             previous_gradient: g_old.view(),

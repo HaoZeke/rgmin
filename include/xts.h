@@ -17,6 +17,8 @@
 #define XTS_UNMET_STOP RGMIN_UNMET_STOP
 #define XTS_STOP_LINE_SEARCH RGMIN_STOP_LINE_SEARCH
 #define XTS_STOP_POLISH_UNMET RGMIN_STOP_POLISH_UNMET
+#define XTS_STOP_ENERGY_TOLERANCE RGMIN_STOP_ENERGY_TOLERANCE
+#define XTS_STOP_EVAL_BUDGET RGMIN_STOP_EVAL_BUDGET
 
 #define XTS_ABI_VERSION_MAJOR RGMIN_ABI_VERSION_MAJOR
 #define XTS_ABI_VERSION_MINOR RGMIN_ABI_VERSION_MINOR
@@ -139,6 +141,11 @@ typedef rgmin_constraints_t xts_constraints_t;
 #define xts_solver_set_lbfgs_wolfe rgmin_solver_set_lbfgs_wolfe
 #define xts_solver_set_lbfgs_trust rgmin_solver_set_lbfgs_trust
 #define xts_solver_lbfgs_trust_radius rgmin_solver_lbfgs_trust_radius
+#define xts_solver_set_etol rgmin_solver_set_etol
+#define xts_solver_clear_etol rgmin_solver_clear_etol
+#define xts_solver_set_max_evals rgmin_solver_set_max_evals
+#define xts_solver_clear_max_evals rgmin_solver_clear_max_evals
+#define xts_solver_evals rgmin_solver_evals
 #define xts_solver_report_gradient rgmin_solver_report_gradient
 #define xts_solver_push_pair rgmin_solver_push_pair
 #define xts_solver_search_direction rgmin_solver_search_direction
