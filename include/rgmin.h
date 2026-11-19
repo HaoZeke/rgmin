@@ -73,7 +73,7 @@ typedef struct rgmin_abi_stamp_t {
 } rgmin_abi_stamp_t;
 
 #define RGMIN_ABI_VERSION_MAJOR 1
-#define RGMIN_ABI_VERSION_MINOR 51
+#define RGMIN_ABI_VERSION_MINOR 52
 /* 37 linesearch, 38 lbfgs_direction, 39 rgmin_lowest_eigenpairs.
  * 40 is the 0.6.0 union with the 0.5.2 C surface.
  * 41 rgmin_manifold_handle_t, 42 rgmin_lowest_eigenpairs_ex,
@@ -88,7 +88,10 @@ typedef struct rgmin_abi_stamp_t {
  * 50 etol and max_evals stops, RGMIN_STOP_ENERGY_TOLERANCE and
  *    RGMIN_STOP_EVAL_BUDGET. rgmin_control_t is unchanged.
  * 51 rgmin_minimize_rlbfgs and rgmin_rlbfgs_default. rgmin_control_t
- *    is unchanged. */
+ *    is unchanged.
+ * 52 RGMIN_GROMACS_STEEP, RGMIN_STOP_MACHINE_PRECISION,
+ *    rgmin_solver_set_gromacs_steep, and
+ *    rgmin_gromacs_steep_max_constraint_shrinks. */
 #define RGMIN_ABI_LAYOUT_REVISION 5
 /* Layout revision 5. rgmin_control_t is maxiter, gtol, istep, memory,
  * maxmove, noise_eps, noise_c. maxmove > 0 is the Euclidean cap; 0 keeps
@@ -133,7 +136,9 @@ typedef enum rgmin_method_t {
     /** Polak-Ribiere-Polyak, max(0, beta). Develop surface, past the released slots. */
     RGMIN_POLAK_RIBIERE_PLUS = 26,
     /** Polak-Ribiere with the eOn Powell restart at 0.5. Develop surface. */
-    RGMIN_EON_CG = 27
+    RGMIN_EON_CG = 27,
+    /** GROMACS integrator = steep. ABI minor 52. */
+    RGMIN_GROMACS_STEEP = 28
 } rgmin_method_t;
 
 /** Parse a method token. Case is ignored; hyphens and spaces match underscores.
@@ -175,7 +180,10 @@ typedef enum rgmin_stop_t {
      *  rgmin_solver_set_etol value. ABI minor 50. */
     RGMIN_STOP_ENERGY_TOLERANCE = 6,
     /** The rgmin_solver_set_max_evals budget was spent. ABI minor 50. */
-    RGMIN_STOP_EVAL_BUDGET = 7
+    RGMIN_STOP_EVAL_BUDGET = 7,
+    /** GROMACS steep could not represent another coordinate change.
+     *  ABI minor 52. */
+    RGMIN_STOP_MACHINE_PRECISION = 8
 } rgmin_stop_t;
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(rgmin_stop_t) == sizeof(int32_t),
@@ -491,6 +499,23 @@ typedef enum rgmin_accept_t {
  *  \ref rgmin_solver_create opens with \c RGMIN_ACCEPT_ENERGY. A session
  *  built from Rust with `Solver::new` opens with \c RGMIN_ACCEPT_NONE. */
 void rgmin_solver_set_accept(rgmin_solver_t *solver, rgmin_accept_t accept);
+/** GROMACS steep parameters on a RGMIN_GROMACS_STEEP session.
+ *  Returns 0, or 1 on a null session, an invalid shrink factor, or a
+ *  session that is not RGMIN_GROMACS_STEEP.
+ *  max_constraint_shrinks is an exact budget, including 0: 0 returns
+ *  RGMIN_CONSTRAINT_ERROR on the first failed projection, and a positive
+ *  value allows that many consecutive failed projections before the
+ *  error, while the displacement is still at least rgmin's displacement
+ *  floor. A failure that crosses that floor returns
+ *  RGMIN_STOP_MACHINE_PRECISION and keeps the last accepted point.
+ *  ABI minor 52. */
+int32_t rgmin_solver_set_gromacs_steep(rgmin_solver_t *solver, double shrink,
+                                       uint32_t max_constraint_shrinks);
+/** Largest consecutive failed-projection budget from a GROMACS steep
+ *  step size and shrink factor before the displacement falls below
+ *  rgmin's displacement floor. Invalid input gives 0. The result is
+ *  capped to bound construction time. ABI minor 52. */
+uint32_t rgmin_gromacs_steep_max_constraint_shrinks(double step_size, double shrink);
 
 /** FIRE schedule. */
 typedef enum rgmin_fire_variant_t {

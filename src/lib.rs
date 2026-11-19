@@ -54,6 +54,8 @@ mod error;
 pub mod ffi;
 /// FIRE / FIRE 2.0 inertial first-order steps.
 pub mod fire;
+/// GROMACS `integrator = steep` adaptive maximum-displacement rule.
+pub mod gromacs;
 /// Holonomic distance constraints (SHAKE, LINCS, SETTLE and RATTLE).
 pub mod holonomic;
 /// Matrix-free Newton: Hessian actions and Steihaug-Toint CG.
@@ -149,6 +151,11 @@ pub use eon_cg::{EonCg, EonCgReport, minimize_eon_cg};
 pub use error::{Error, Result};
 pub use fire::{
     Fire2Extras, FireConfig, FireKind, FirePreset, FireTrace, FireVariant, guenole2020,
+};
+pub use gromacs::{
+    GROMACS_STEEP_EMSTEP_DEFAULT, GROMACS_STEEP_GROW, GROMACS_STEEP_MAX_CONSTRAINT_SHRINKS,
+    GROMACS_STEEP_MIN_USTEP, GROMACS_STEEP_SHRINK, GROMACS_STEEP_SHRINK_BUDGET_CAP, GromacsSteep,
+    GromacsSteepConfig, gromacs_steep_max_constraint_shrinks,
 };
 pub use highs_kind::{
     HighsCCallback, HighsCallback, HighsCallbackKind, HighsCrossover, HighsOptions, HighsSolverKind,

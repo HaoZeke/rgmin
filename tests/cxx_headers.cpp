@@ -2,6 +2,7 @@
 #include "xts.h"
 #include "xts/optimize.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -481,6 +482,9 @@ static_assert(XTS_STOP_ENERGY_TOLERANCE == RGMIN_STOP_ENERGY_TOLERANCE,
               "XTS_STOP_ENERGY_TOLERANCE aliases RGMIN_STOP_ENERGY_TOLERANCE");
 static_assert(XTS_STOP_EVAL_BUDGET == RGMIN_STOP_EVAL_BUDGET,
               "XTS_STOP_EVAL_BUDGET aliases RGMIN_STOP_EVAL_BUDGET");
+static_assert(XTS_STOP_MACHINE_PRECISION == RGMIN_STOP_MACHINE_PRECISION,
+              "XTS_STOP_MACHINE_PRECISION aliases RGMIN_STOP_MACHINE_PRECISION");
+static_assert(XTS_STOP_MACHINE_PRECISION == 8, "machine precision is stop 8");
 
 rgmin_status_t bowl_eval(void* /*user*/, DLManagedTensorVersioned const* x, double* value) {
     double const* p = data(x);
@@ -599,19 +603,40 @@ int main() {
         return 4;
     }
     rgmin::Solver fire2(rgmin::Method::Fire2, stop_ctrl, 2);
+    rgmin::Solver steep(rgmin::Method::GromacsSteep, stop_ctrl, 2);
     if (stopper.set_fire_abc(true) != 1 ||
         fire2.set_fire_preset(RGMIN_FIRE_PRESET_GUENOLE2020) != 0 ||
-        fire2.set_fire_abc(true) != 0) {
+        fire2.set_fire_abc(true) != 0 ||
+        steep.set_gromacs_steep(0.5, 8) != 0 ||
+        stopper.set_gromacs_steep(0.5, 8) != 1) {
         std::fprintf(stderr, "fire preset setup failed\n");
         return 5;
+    }
+    {
+        double const shrink = std::nextafter(1.0, 0.0);
+        auto const t0 = std::chrono::steady_clock::now();
+        std::uint32_t const budget = rgmin_gromacs_steep_max_constraint_shrinks(0.1, shrink);
+        auto const elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - t0)
+                                    .count();
+        if (budget != 1'000'000u || elapsed_ms > 1000) {
+            std::fprintf(stderr, "shrink budget mismatch: budget=%u elapsed_ms=%lld\n", budget,
+                         static_cast<long long>(elapsed_ms));
+            return 23;
+        }
     }
     static_assert(static_cast<int>(rgmin::Method::PolakRibierePlus) == RGMIN_POLAK_RIBIERE_PLUS,
                   "PolakRibierePlus keeps the C enumerator");
     static_assert(static_cast<int>(rgmin::Method::EonCg) == RGMIN_EON_CG,
                   "EonCg keeps the C enumerator");
+    static_assert(static_cast<int>(rgmin::Method::GromacsSteep) == RGMIN_GROMACS_STEEP,
+                  "GromacsSteep keeps the C enumerator");
+    static_assert(XTS_GROMACS_STEEP == RGMIN_GROMACS_STEEP,
+                  "xts.h aliases the GROMACS steep selector");
     if (rgmin::method_from_name("eon-cg") != rgmin::Method::EonCg ||
-        rgmin::method_from_name("polak-ribiere-plus") != rgmin::Method::PolakRibierePlus) {
-        std::fprintf(stderr, "method_from_name missed a minor-35 method\n");
+        rgmin::method_from_name("polak-ribiere-plus") != rgmin::Method::PolakRibierePlus ||
+        rgmin::method_from_name("gromacs-steep") != rgmin::Method::GromacsSteep) {
+        std::fprintf(stderr, "method_from_name missed a public method\n");
         return 6;
     }
     bool refused = false;

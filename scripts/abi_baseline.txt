@@ -15,6 +15,7 @@ rgmin_control_default
 rgmin_eigen_options_default
 rgmin_eigen_params_default
 rgmin_exp_default
+rgmin_gromacs_steep_max_constraint_shrinks
 rgmin_last_constraint_error
 rgmin_last_error
 rgmin_last_error_message
@@ -110,6 +111,7 @@ rgmin_solver_set_fire_abc
 rgmin_solver_set_fire_cap_two_step_overshoot
 rgmin_solver_set_fire_preset
 rgmin_solver_set_fire_variant
+rgmin_solver_set_gromacs_steep
 rgmin_solver_set_frozen
 rgmin_solver_set_geometry_step
 rgmin_solver_set_highs
@@ -155,7 +157,6 @@ rgmin_solver_step_hess
 rgmin_solver_step_hess_fg
 rgmin_solver_step_hvp
 rgmin_solver_steps
-rgmin_status_t
 rgmin_tensor_borrow_cpu_f64
 rgmin_tensor_free
 rgmin_version

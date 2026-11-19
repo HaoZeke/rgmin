@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use eindir_core::{Bounds, DifferentiableObjective, Objective};
 use ndarray::{Array1, Array2, ArrayView1, Axis};
 
-use super::{Inner, RADIUS_GROWTH, RADIUS_START, SADDLE_KICKS, Solver};
+use super::{Inner, Overlay, RADIUS_GROWTH, RADIUS_START, SADDLE_KICKS, Solver};
 use crate::accept::{Accept, ENERGY_RISE, FALLBACK_STEP, HALVINGS, push_energy};
 use crate::adam::adam_direction;
 use crate::bb::bb_direction;
@@ -28,6 +28,7 @@ use crate::fire::{
     FireKind, FirePreparation, FirePreset, FireState, FireTrace, fire_after_v1,
     fire_displacement_into, fire_move_clipped, fire_prepare_v2, project_box_tangent,
 };
+use crate::gromacs::GROMACS_STEEP_MIN_USTEP;
 use crate::holonomic::{ConstraintError, DistanceConstraints, Tangent, unsupported};
 use crate::hvp::{
     ETA_ACCEPT, FiniteDifference, HessianVector, NYSTROM_RANK, NystromPrecond, OptionalAction,
@@ -42,7 +43,7 @@ use crate::qn::{
     bfgs_inverse_update, secant_scale, solve_dense, sr1_inverse_update, sr2_hessian_update,
 };
 use crate::qn_step::QnStep;
-use crate::report::Report;
+use crate::report::{Report, Status};
 use crate::rigid::project_horizontal;
 use crate::step::{
     apply_caps, finite, l2, max_atom_motion, next_istep, non_finite, scale_displacement_to_atom_cap,
@@ -966,6 +967,9 @@ impl Solver {
     where
         O: DifferentiableObjective<f64> + ?Sized,
     {
+        if matches!(self.overlay, Overlay::GromacsSteep(_)) {
+            return self.step_constrained_gromacs(obj, x);
+        }
         match self.inner {
             Inner::NewtonCg { .. } | Inner::NewtonPcg { .. } => {
                 return self.step_constrained_newton_cg(obj, x, &FiniteDifference);
@@ -1475,6 +1479,91 @@ impl Solver {
         self.remember(x, value, &raw);
         self.steps += 1;
         self.report_or_escape_constrained(&set, obj, x, value, raw)
+    }
+
+    /// GROMACS steepest descent on a holonomic constraint set.
+    fn step_constrained_gromacs<O>(&mut self, obj: &O, x: &mut Array1<f64>) -> Result<Report>
+    where
+        O: DifferentiableObjective<f64> + ?Sized,
+    {
+        let set = self.constraint_set();
+        let start = self.enter(&set, obj, x)?;
+        let norm = self.stationarity_norm(x, &start.grad);
+        if let Some(status) = self.control.halt(norm, self.free_len(obj.bounds())) {
+            self.remember(x, start.value, &start.raw);
+            return Ok(self.finish(start.value, x, &start.grad, norm, status));
+        }
+        let mut overlay = std::mem::replace(&mut self.overlay, Overlay::None);
+        let result = (|| match &mut overlay {
+            Overlay::GromacsSteep(state) => {
+                let displacement = state.displacement(start.grad.view());
+                // GROMACS do_steep sets a failed constraint trial to +infinity
+                // and shrinks ustep (minimize.cpp lines 3008-3009 and 3104).
+                // The failure is a rejected step until the shrink bound is spent.
+                let trial = match start.space.place(obj.bounds(), &displacement, self.caps()) {
+                    Err(e @ Error::Constraint(_)) => {
+                        if state.step_size() < GROMACS_STEEP_MIN_USTEP {
+                            self.remember(x, start.value, &start.raw);
+                            self.steps += 1;
+                            return Ok(self.finish(
+                                start.value,
+                                x,
+                                &start.grad,
+                                norm,
+                                Status::MachinePrecision,
+                            ));
+                        }
+                        if state.reject_constraint() {
+                            return Err(e);
+                        }
+                        self.remember(x, start.value, &start.raw);
+                        self.steps += 1;
+                        let status = if state.step_size() < GROMACS_STEEP_MIN_USTEP {
+                            Status::MachinePrecision
+                        } else {
+                            Status::Iterating
+                        };
+                        return Ok(self.finish(start.value, x, &start.grad, norm, status));
+                    }
+                    Err(e) => return Err(e),
+                    Ok(trial) => {
+                        state.clear_constraint_shrinks();
+                        trial
+                    }
+                };
+                if trial == *x {
+                    self.remember(x, start.value, &start.raw);
+                    Ok(self.finish(start.value, x, &start.grad, norm, Status::MachinePrecision))
+                } else {
+                    let (trial_value, trial_raw) = obj.value_and_gradient(trial.view());
+                    if !finite(trial_value, trial_raw.view()) {
+                        Err(non_finite())
+                    } else if state.update(start.value, trial_value) {
+                        *x = trial;
+                        let next = Space::at(&set, x.view(), self.project_rigid)?;
+                        let (trial_grad, _, _) = next.gradient(&trial_raw)?;
+                        let trial_norm = self.stationarity_norm(x, &trial_grad);
+                        self.remember(x, trial_value, &trial_raw);
+                        self.steps += 1;
+                        Ok(self.finish(
+                            trial_value,
+                            x,
+                            &trial_grad,
+                            trial_norm,
+                            self.control
+                                .classify(trial_norm, self.free_len(obj.bounds())),
+                        ))
+                    } else {
+                        self.remember(x, start.value, &start.raw);
+                        self.steps += 1;
+                        Ok(self.finish(start.value, x, &start.grad, norm, Status::Iterating))
+                    }
+                }
+            }
+            _ => unreachable!("GROMACS steep overlay"),
+        })();
+        self.overlay = overlay;
+        result
     }
 
     fn step_constrained_dogleg<O>(

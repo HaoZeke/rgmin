@@ -13,11 +13,11 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rgmin::{
-    Accept, ApplyBlockPreconditioner, ApplyHessian, Control, Error, FireConfig, FireKind,
-    FirePreset, LbfgsH0, LbfgsPairs, LbfgsStep, LevelSetConstraint, LineSearch, ManifoldFactor,
-    Method, Oracle, RiemannianManifold, SearchStep, Solver, SpdMetric, Status, StiefelRetraction,
-    StopNorm, SuppliedSearch, lowest_eigenpairs as solve_lowest_eigenpairs,
-    lowest_eigenpairs_precond,
+    Accept, ApplyBlockPreconditioner, ApplyHessian, Control, DEFAULT_ATOM_MAXMOVE, Error,
+    FireConfig, FireKind, FirePreset, GromacsSteepConfig, LbfgsH0, LbfgsPairs, LbfgsStep,
+    LevelSetConstraint, LineSearch, ManifoldFactor, Method, Oracle, RiemannianManifold, SearchStep,
+    Solver, SpdMetric, Status, StiefelRetraction, StopNorm, SuppliedSearch,
+    lowest_eigenpairs as solve_lowest_eigenpairs, lowest_eigenpairs_precond,
 };
 
 #[pyclass]
@@ -76,11 +76,19 @@ impl Session {
     ///
     /// `max_atom` caps the longest per-atom displacement and `maxmove`
     /// the Euclidean length of the whole step; a non-positive value
-    /// leaves that cap off. `h0` is the fixed L-BFGS inverse-Hessian
+    /// leaves that cap off. Omitted, every method except `gromacs-steep`
+    /// uses the generic per-atom cap. `gromacs-steep` leaves it off, so
+    /// `h` is the only displacement limit. `h0` is the fixed L-BFGS inverse-Hessian
     /// scale. `preset="guenole2020"` and `abc` select the FIRE 2.0
     /// parameter set and ABC-FIRE. `accept` is `none`, `energy` or
     /// `nonmonotone`; `downhill` is `energy`. `istep` is the step scale
-    /// of a method other than FIRE, whose scale is `dt`.
+    /// of a method other than FIRE, whose scale is `dt`. `shrink` is
+    /// the refused-trial factor of a `gromacs-steep` session; omitted,
+    /// the session uses the GROMACS 0.5 factor. `max_constraint_shrinks`
+    /// bounds consecutive constraint failures. Crossing the GROMACS
+    /// double precision displacement floor stops at machine precision.
+    /// An explicit budget that runs out while the displacement is still
+    /// at least that floor returns a constraint error.
     /// `error_on_unmet` and `backward_polish` are recorded on the
     /// session. One `step` stays `Ok`; the polish needs a Hessian.
     #[allow(clippy::too_many_arguments)]
@@ -89,7 +97,7 @@ impl Session {
         kind,
         n,
         *,
-        max_atom=0.2,
+        max_atom=None,
         wolfe=false,
         eon_cap=false,
         memory=8,
@@ -108,6 +116,8 @@ impl Session {
         abc=false,
         accept=None,
         istep=None,
+        shrink=None,
+        max_constraint_shrinks=None,
         level_set=None,
         error_on_unmet=false,
         backward_polish=false,
@@ -117,7 +127,7 @@ impl Session {
     fn new(
         kind: &str,
         n: usize,
-        max_atom: f64,
+        max_atom: Option<f64>,
         wolfe: bool,
         eon_cap: bool,
         memory: usize,
@@ -136,6 +146,8 @@ impl Session {
         abc: bool,
         accept: Option<&str>,
         istep: Option<f64>,
+        shrink: Option<f64>,
+        max_constraint_shrinks: Option<u32>,
         level_set: Option<f64>,
         error_on_unmet: bool,
         backward_polish: bool,
@@ -156,6 +168,12 @@ impl Session {
         );
         let lbfgs = matches!(method, Method::Lbfgs { .. });
         let nlcg = matches!(method, Method::Nlcg { .. });
+        let steep = matches!(method, Method::GromacsSteep);
+        let atom_cap = match max_atom {
+            Some(value) => value,
+            None if steep => 0.0,
+            None => DEFAULT_ATOM_MAXMOVE,
+        };
         let istep = match istep {
             Some(_) if fire => {
                 return Err(PyValueError::new_err(
@@ -177,9 +195,9 @@ impl Session {
             let step = if wolfe {
                 LbfgsStep::Wolfe
             } else if eon_cap {
-                LbfgsStep::capped(max_atom)
+                LbfgsStep::capped(atom_cap)
             } else {
-                LbfgsStep::scaled(max_atom)
+                LbfgsStep::scaled(atom_cap)
             };
             solver.set_lbfgs_step(step).map_err(value_error)?;
             if h0.is_some() {
@@ -228,8 +246,25 @@ impl Session {
         if accept != Accept::None {
             solver.set_accept(accept);
         }
-        if max_atom.is_finite() && max_atom > 0.0 {
-            solver.set_atom_maxmove(max_atom);
+        if shrink.is_some() || max_constraint_shrinks.is_some() {
+            if !steep {
+                return Err(PyValueError::new_err(
+                    "shrink and max_constraint_shrinks apply to a gromacs-steep session only",
+                ));
+            }
+            let mut config = GromacsSteepConfig::for_step_size(istep);
+            if let Some(factor) = shrink {
+                config = config.with_shrink(factor);
+            }
+            if let Some(max_shrinks) = max_constraint_shrinks {
+                config = config.with_max_constraint_shrinks(max_shrinks);
+            }
+            solver
+                .set_gromacs_steep_config(config)
+                .map_err(value_error)?;
+        }
+        if atom_cap.is_finite() && atom_cap > 0.0 {
+            solver.set_atom_maxmove(atom_cap);
         }
         if let Some(cap) = maxmove.filter(|cap| cap.is_finite() && *cap > 0.0) {
             solver.set_maxmove(cap);
@@ -296,9 +331,19 @@ impl Session {
         self.solver.set_max_evals(max_evals).map_err(value_error)
     }
 
+    /// Consecutive constraint-failure budget of a `gromacs-steep` session,
+    /// or `None` for other methods.
+    #[getter]
+    fn max_constraint_shrinks(&self) -> Option<u32> {
+        self.solver
+            .gromacs_steep_config()
+            .map(|config| config.max_constraint_shrinks)
+    }
+
     /// Drop the method memory. The next step is a cold start.
     fn forget(&mut self) {
         self.solver.forget();
+        self.stop = None;
     }
 
     /// Keep points on the level set `value(x) = target`. `None` clears it.

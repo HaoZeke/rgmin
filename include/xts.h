@@ -19,6 +19,7 @@
 #define XTS_STOP_POLISH_UNMET RGMIN_STOP_POLISH_UNMET
 #define XTS_STOP_ENERGY_TOLERANCE RGMIN_STOP_ENERGY_TOLERANCE
 #define XTS_STOP_EVAL_BUDGET RGMIN_STOP_EVAL_BUDGET
+#define XTS_STOP_MACHINE_PRECISION RGMIN_STOP_MACHINE_PRECISION
 
 #define XTS_ABI_VERSION_MAJOR RGMIN_ABI_VERSION_MAJOR
 #define XTS_ABI_VERSION_MINOR RGMIN_ABI_VERSION_MINOR
@@ -81,6 +82,7 @@ typedef rgmin_constraints_t xts_constraints_t;
 #define XTS_FIRE2 RGMIN_FIRE2
 #define XTS_NEWTON_CG RGMIN_NEWTON_CG
 #define XTS_NEWTON_PCG RGMIN_NEWTON_PCG
+#define XTS_GROMACS_STEEP RGMIN_GROMACS_STEEP
 
 #define XTS_CONJUGACY_FLETCHER_REEVES RGMIN_CONJUGACY_FLETCHER_REEVES
 #define XTS_CONJUGACY_POLAK_RIBIERE RGMIN_CONJUGACY_POLAK_RIBIERE
@@ -128,6 +130,8 @@ typedef rgmin_constraints_t xts_constraints_t;
 #define xts_solver_clear_exp rgmin_solver_clear_exp
 #define xts_solver_exp_mu rgmin_solver_exp_mu
 #define xts_solver_set_accept rgmin_solver_set_accept
+#define xts_solver_set_gromacs_steep rgmin_solver_set_gromacs_steep
+#define xts_gromacs_steep_max_constraint_shrinks rgmin_gromacs_steep_max_constraint_shrinks
 #define xts_solver_set_stop_norm rgmin_solver_set_stop_norm
 #define xts_solver_set_error_on_unmet rgmin_solver_set_error_on_unmet
 #define xts_solver_set_backward_polish rgmin_solver_set_backward_polish

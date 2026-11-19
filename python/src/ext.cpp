@@ -129,6 +129,8 @@ std::string method_name_from_code(int code) {
         return "diis";
     case RGMIN_ODE12R:
         return "ode12r";
+    case RGMIN_GROMACS_STEEP:
+        return "gromacs_steep";
     default:
         throw nb::value_error("unknown method");
     }
@@ -302,6 +304,44 @@ extern "C" rgmin_status_t rgmin_py_hess(void* user, DLManagedTensorVersioned con
     return map_trampoline(slot->hess_entry(slot->hess_trampoline, coordinates, hessian));
 }
 
+// std::max(finite, NaN) returns the finite argument, because
+// (finite < NaN) is false. A non-finite atom norm has to win.
+double max_atom_norm(double const* gradient, std::size_t n) {
+    double grad_norm = 0.0;
+    for (std::size_t i = 0; i < n; i += 3) {
+        std::size_t const end = std::min(i + 3, n);
+        double scale = 0.0;
+        double sum = 1.0;
+        for (std::size_t k = i; k < end; ++k) {
+            double const value = std::abs(gradient[k]);
+            if (!std::isfinite(value)) {
+                return value;
+            }
+            if (value != 0.0) {
+                if (scale < value) {
+                    double const ratio = scale / value;
+                    sum = 1.0 + sum * ratio * ratio;
+                    scale = value;
+                } else {
+                    double const ratio = value / scale;
+                    sum += ratio * ratio;
+                }
+            }
+        }
+        double const atom_norm = scale == 0.0 ? 0.0 : scale * std::sqrt(sum);
+        if (atom_norm > grad_norm) {
+            grad_norm = atom_norm;
+        }
+    }
+    return grad_norm;
+}
+
+void copy_gradient(nb::handle gradient, std::size_t n, double* destination) {
+    ConstVector grad = nb::cast<ConstVector>(gradient);
+    check_vector(grad, n, "gradient");
+    std::memcpy(destination, grad.data(), n * sizeof(double));
+}
+
 void read_gradient(nb::handle gradient, std::size_t n, double* destination) {
     ConstVector grad = nb::cast<ConstVector>(gradient);
     check_vector(grad, n, "gradient");
@@ -351,7 +391,8 @@ rgmin::Report finish_step(rgmin_status_t status, rgmin_report_t const& out, rgbi
 // c * sqrt(n) * eps_g (c = 3 unless noise_c is positive), else the spent
 // budget. project_rigid does not project this gradient, so a start whose
 // only gradient is rigid motion reads the larger norm.
-rgmin::Report zero_budget_report(nb::callable function, Vector x, rgmin::Control const& control) {
+rgmin::Report zero_budget_report(nb::callable function, Vector x, rgmin::Control const& control,
+                                 rgmin::Method method) {
     std::size_t const n = static_cast<std::size_t>(x.shape(0));
     nb::object result = function(owned_copy(x.data(), n));
     if (!nb::isinstance<nb::tuple>(result) || nb::len(result) != 2) {
@@ -362,12 +403,23 @@ rgmin::Report zero_budget_report(nb::callable function, Vector x, rgmin::Control
         throw rgbind::NumericalError("f_and_grad returned a non-finite value");
     }
     std::vector<double> gradient(n);
-    read_gradient(result[1], n, gradient.data());
-    double squares = 0.0;
-    for (double g : gradient) {
-        squares += g * g;
+    double grad_norm = 0.0;
+    if (method == rgmin::Method::GromacsSteep) {
+        // read_gradient rejects a non-finite component before the
+        // reduction, which would hide a max that drops NaN.
+        copy_gradient(result[1], n, gradient.data());
+        grad_norm = max_atom_norm(gradient.data(), n);
+        if (!std::isfinite(grad_norm)) {
+            throw rgbind::NumericalError("non-finite max-atom gradient norm");
+        }
+    } else {
+        read_gradient(result[1], n, gradient.data());
+        double squares = 0.0;
+        for (double g : gradient) {
+            squares += g * g;
+        }
+        grad_norm = std::sqrt(squares);
     }
-    double const grad_norm = std::sqrt(squares);
     rgmin_stop_t stop = RGMIN_STOP_BUDGET;
     if (grad_norm < control.gtol) {
         stop = RGMIN_STOP_TOLERANCE;
@@ -521,6 +573,7 @@ NB_MODULE(_core, m) {
         .value("QUICK_MIN", RGMIN_QUICKMIN)
         .value("DIIS", RGMIN_DIIS)
         .value("ODE12R", RGMIN_ODE12R)
+        .value("GROMACS_STEEP", RGMIN_GROMACS_STEEP)
         .value("PolakRibiere", RGMIN_POLAK_RIBIERE)
         .value("FletcherReeves", RGMIN_FLETCHER_REEVES)
         .value("Bfgs", RGMIN_BFGS)
@@ -544,7 +597,8 @@ NB_MODULE(_core, m) {
         .value("Fire2", RGMIN_FIRE2)
         .value("QuickMin", RGMIN_QUICKMIN)
         .value("Diis", RGMIN_DIIS)
-        .value("Ode12r", RGMIN_ODE12R);
+        .value("Ode12r", RGMIN_ODE12R)
+        .value("GromacsSteep", RGMIN_GROMACS_STEEP);
 
     nb::enum_<rgmin_stop_t>(m, "Stop", nb::is_arithmetic(),
                             "Why a step or a run ended. Members are UPPER_SNAKE. "
@@ -557,6 +611,7 @@ NB_MODULE(_core, m) {
         .value("POLISH_UNMET", RGMIN_STOP_POLISH_UNMET)
         .value("ENERGY_TOLERANCE", RGMIN_STOP_ENERGY_TOLERANCE)
         .value("EVAL_BUDGET", RGMIN_STOP_EVAL_BUDGET)
+        .value("MACHINE_PRECISION", RGMIN_STOP_MACHINE_PRECISION)
         .value("Tolerance", RGMIN_STOP_TOLERANCE)
         .value("NoiseFloor", RGMIN_STOP_NOISE_FLOOR)
         .value("StepTolerance", RGMIN_STOP_STEP_TOLERANCE)
@@ -564,7 +619,8 @@ NB_MODULE(_core, m) {
         .value("LineSearch", RGMIN_STOP_LINE_SEARCH)
         .value("PolishUnmet", RGMIN_STOP_POLISH_UNMET)
         .value("EnergyTolerance", RGMIN_STOP_ENERGY_TOLERANCE)
-        .value("EvalBudget", RGMIN_STOP_EVAL_BUDGET);
+        .value("EvalBudget", RGMIN_STOP_EVAL_BUDGET)
+        .value("MachinePrecision", RGMIN_STOP_MACHINE_PRECISION);
 
     nb::class_<rgmin::Report>(m, "Report", "Result of one optimizer step or of ``minimize``.")
         .def_prop_ro("value", [](rgmin::Report const& report) { return report.value; },
@@ -660,7 +716,7 @@ NB_MODULE(_core, m) {
             std::size_t const budget = config.control().maxiter;
             rgmin::Report report{};
             if (budget == 0) {
-                report = zero_budget_report(function, x0, config.control());
+                report = zero_budget_report(function, x0, config.control(), config.method());
             } else {
                 for (std::size_t i = 0; i < budget; ++i) {
                     report = step_python(solver, function, x0);
@@ -707,4 +763,12 @@ NB_MODULE(_core, m) {
         },
         nb::arg("value"), nb::arg("x"),
         "First-order floor ``n * eps * (1 + |value| + sum |x_i|)``.");
+
+    m.def(
+        "gromacs_steep_max_constraint_shrinks",
+        [](double istep, double shrink) {
+            return rgmin_gromacs_steep_max_constraint_shrinks(istep, shrink);
+        },
+        nb::arg("istep"), nb::arg("shrink"),
+        "Closed-form capped constraint-failure budget for ``gromacs-steep``.");
 }

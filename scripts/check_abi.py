@@ -4,8 +4,8 @@
 The ABI stamp defines in ``include/rgmin.h`` must equal the constants in
 ``src/ffi.rs``.
 
-A new function is listed and does not fail. A removed or renamed
-function fails. Type changes are what ``abidiff`` would catch when it
+A new function now fails until it is added to the baseline. A removed
+or renamed function fails. Type changes are what ``abidiff`` would catch when it
 is installed; this check is the one that always runs.
 """
 
@@ -24,7 +24,7 @@ BASELINE = ROOT / "scripts" / "abi_baseline.txt"
 FFI = ROOT / "src" / "ffi.rs"
 VERSION_FIELDS = ("MAJOR", "MINOR", "LAYOUT_REVISION")
 # Stop reasons the compatibility header must alias, as ``XTS_STOP_<name>``.
-REQUIRED_STOP_ALIASES = ("ENERGY_TOLERANCE", "EVAL_BUDGET")
+REQUIRED_STOP_ALIASES = ("ENERGY_TOLERANCE", "EVAL_BUDGET", "MACHINE_PRECISION")
 ALIAS = re.compile(r"^#define\s+(XTS_[A-Z0-9_]+|xts_[a-z0-9_]+)\s+(RGMIN_[A-Z0-9_]+|rgmin_[a-z0-9_]+)\s*$", re.M)
 # A return type ending in `*` may sit against the name: `T *rgmin_f(`.
 DECL = re.compile(r"^[A-Za-z_][\w \t\*]*?[\s\*](rgmin_[A-Za-z0-9_]+)\s*\(", re.M)
@@ -32,10 +32,15 @@ DECL = re.compile(r"^[A-Za-z_][\w \t\*]*?[\s\*](rgmin_[A-Za-z0-9_]+)\s*\(", re.M
 
 def names() -> list[str]:
     text = HEADER.read_text()
-    found = DECL.findall(text)
-    # Function-pointer typedefs match the same pattern. Drop those.
-    typedefs = set(re.findall(r"typedef\s+[^\n]*\s+(rgmin_[A-Za-z0-9_]+)\s*\)", text))
-    return sorted(set(found) - typedefs)
+    kept: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        # A function pointer typedef matches the declarator pattern on its
+        # return type. That name is not an ELF export.
+        if stripped.startswith("typedef") and "(*" in stripped:
+            continue
+        kept.extend(DECL.findall(line))
+    return sorted(set(kept))
 
 
 def versions() -> list[str]:
@@ -106,6 +111,7 @@ def main() -> int:
         print("added to the C ABI (update scripts/abi_baseline.txt when the addition is intentional):")
         for name in added:
             print(f"  {name}")
+        return 1
     if shutil.which("abidiff"):
         library = ROOT / "target" / "debug" / "librgmin.so"
         if library.is_file():

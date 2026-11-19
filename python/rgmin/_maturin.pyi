@@ -9,7 +9,7 @@ class Session:
         kind: str,
         n: int,
         *,
-        max_atom: float = 0.2,
+        max_atom: float | None = None,
         wolfe: bool = False,
         eon_cap: bool = False,
         memory: int = 8,
@@ -28,6 +28,8 @@ class Session:
         abc: bool = False,
         accept: str | None = None,
         istep: float | None = None,
+        shrink: float | None = None,
+        max_constraint_shrinks: int | None = None,
         level_set: float | None = None,
         error_on_unmet: bool = False,
         backward_polish: bool = False,
@@ -44,6 +46,8 @@ class Session:
     def stop(self) -> str | None: ...
     def set_etol(self, etol: float | None = None) -> None: ...
     def set_max_evals(self, max_evals: int | None = None) -> None: ...
+    @property
+    def max_constraint_shrinks(self) -> int | None: ...
     def forget(self) -> None: ...
     def set_level_set(self, target: float | None = None) -> None: ...
     def step(
