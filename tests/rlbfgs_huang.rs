@@ -162,6 +162,31 @@ fn riemannian_gradient_tolerance_outranks_the_evaluation_budget() {
     assert_eq!(report.evals, 2);
 }
 
+#[test]
+fn rlbfgs_checks_the_evaluation_budget_when_the_iteration_ends() {
+    let obj = Oracle::unbounded(1, |x: ArrayView1<f64>| {
+        (1.5 * x[0] * x[0], array![3.0 * x[0]])
+    });
+    let control = Control::default()
+        .with_maxiter(10)
+        .with_gtol(1e-12)
+        .with_max_evals(2);
+    let params = Rlbfgs::default().with_grad_ratio(0.0);
+    let report = minimize_rlbfgs(
+        &ManifoldKind::Euclidean,
+        &obj,
+        array![1.0],
+        &control,
+        &params,
+    )
+    .expect("rlbfgs");
+    assert_eq!(report.status, Status::EvalBudget, "{report:?}");
+    assert_eq!(report.steps, 1, "{report:?}");
+    assert_eq!(report.evals, 3, "{report:?}");
+    assert!((report.coords[0] + 0.5).abs() < 1e-12, "{report:?}");
+    assert!(report.value < 1.5, "{report:?}");
+}
+
 #[cfg(feature = "capi")]
 mod capi {
     use std::os::raw::c_void;
