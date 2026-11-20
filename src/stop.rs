@@ -50,6 +50,10 @@ impl<'a, O: ?Sized> Counted<'a, O> {
         }
     }
 
+    pub(crate) fn inner(&self) -> &'a O {
+        self.inner
+    }
+
     pub(crate) fn count(&self) -> usize {
         self.evals.load(Ordering::Relaxed)
     }
@@ -60,7 +64,7 @@ impl<'a, O: ?Sized> Counted<'a, O> {
         self.start_value.get().copied()
     }
 
-    fn note(&self, x: ArrayView1<f64>, value: Option<f64>) {
+    pub(crate) fn note(&self, x: ArrayView1<f64>, value: Option<f64>) {
         self.evals.fetch_add(1, Ordering::Relaxed);
         let (Some(start), Some(value)) = (&self.start, value) else {
             return;

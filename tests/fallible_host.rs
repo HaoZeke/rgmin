@@ -219,6 +219,7 @@ fn try_step_hvp_takes_the_steps_of_step_hvp() {
                     assert_eq!(a.value.to_bits(), b.value.to_bits());
                     assert_eq!(a.grad_norm.to_bits(), b.grad_norm.to_bits());
                     assert_eq!(a.status, b.status);
+                    assert_eq!(a.evals, b.evals);
                 }
                 (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string()),
                 (a, b) => panic!("{method:?}: {a:?} against {b:?}"),
@@ -227,6 +228,7 @@ fn try_step_hvp_takes_the_steps_of_step_hvp() {
             assert_eq!(bits(&x_plain), bits(&x_fallible));
             assert_eq!(plain.hvp_calls(), fallible.hvp_calls());
             assert_eq!(plain.gradient_calls(), fallible.gradient_calls());
+            assert_eq!(plain.evals(), fallible.evals());
         }
         assert_eq!(
             host.calls.get(),
@@ -353,6 +355,7 @@ struct SessionState {
     steps: usize,
     gradient_calls: usize,
     hvp_calls: usize,
+    evals: usize,
     stop_norm: StopNorm,
     linesearch: LineSearch,
     optimizer_family: OptimizerFamily,
@@ -372,6 +375,7 @@ impl SessionState {
             steps: solver.steps(),
             gradient_calls: solver.gradient_calls(),
             hvp_calls: solver.hvp_calls(),
+            evals: solver.evals(),
             stop_norm: solver.stop_norm(),
             linesearch: solver.linesearch(),
             optimizer_family: solver.optimizer_family(),
@@ -394,6 +398,7 @@ struct ReportBits {
     stop_norm: StopNorm,
     grad: Option<Vec<u64>>,
     status: Status,
+    evals: usize,
 }
 
 impl ReportBits {
@@ -406,6 +411,7 @@ impl ReportBits {
             stop_norm: report.stop_norm,
             grad: report.grad.as_ref().map(bits),
             status: report.status,
+            evals: report.evals,
         }
     }
 }
@@ -1018,5 +1024,59 @@ fn try_step_hvp_with_rigid_removal_keeps_the_fallible_contract() {
                 SessionState::of(&reference, &x_ref)
             );
         }
+    }
+}
+
+#[test]
+fn try_step_hvp_honours_begin_stops_and_evaluation_accounting() {
+    for method in methods() {
+        for etol in [-1.0, f64::NAN, f64::INFINITY] {
+            let mut solver = Solver::new(method.clone(), Control::default().with_etol(etol), DIM);
+            let host = Host::new(None);
+            let mut x = start();
+            let err = solver
+                .try_step_hvp(&host, &mut x)
+                .expect_err("invalid etol");
+            assert!(matches!(err, Error::InvalidControl { .. }), "{err:?}");
+            assert_eq!(host.calls.get(), 0);
+        }
+        let mut solver = Solver::new(method.clone(), Control::default().with_max_evals(0), DIM);
+        let host = Host::new(None);
+        let mut x = start();
+        let err = solver
+            .try_step_hvp(&host, &mut x)
+            .expect_err("zero max_evals");
+        assert!(matches!(err, Error::InvalidControl { .. }), "{err:?}");
+        assert_eq!(host.calls.get(), 0);
+
+        let control = Control::default().with_gtol(1e-12).with_max_evals(2);
+        let mut plain = Solver::new(method.clone(), control.clone(), DIM);
+        let mut fallible = Solver::new(method.clone(), control, DIM);
+        let host = Host::new(None);
+        let mut x_plain = start();
+        let mut x_fallible = start();
+        let rep_plain = plain.step_hvp(&Valleys, &mut x_plain).expect("plain step");
+        let rep_fallible = fallible
+            .try_step_hvp(&host, &mut x_fallible)
+            .expect("fallible step");
+        assert_eq!(rep_plain.status, Status::EvalBudget);
+        assert_eq!(rep_fallible.status, Status::EvalBudget);
+        assert_eq!(rep_fallible.evals, rep_plain.evals);
+        assert_eq!(fallible.evals(), plain.evals());
+        assert_eq!(rep_fallible.evals, fallible.gradient_calls());
+
+        let control = Control::default().with_gtol(1e-12).with_etol(1e3);
+        let mut plain = Solver::new(method.clone(), control.clone(), DIM);
+        let mut fallible = Solver::new(method, control, DIM);
+        let host = Host::new(None);
+        let mut x_plain = start();
+        let mut x_fallible = start();
+        let rep_plain = plain.step_hvp(&Valleys, &mut x_plain).expect("plain step");
+        let rep_fallible = fallible
+            .try_step_hvp(&host, &mut x_fallible)
+            .expect("fallible step");
+        assert_eq!(rep_plain.status, Status::EnergyTolerance);
+        assert_eq!(rep_fallible.status, Status::EnergyTolerance);
+        assert_eq!(rep_fallible.evals, rep_plain.evals);
     }
 }
