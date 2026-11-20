@@ -649,10 +649,10 @@ impl ApplyBlockPreconditioner for PyPrecond {
         match call_precond(&self.callback, block) {
             Ok(image) => image,
             Err(err) => {
-                if let Ok(mut guard) = self.caught.lock() {
-                    if guard.is_none() {
-                        *guard = Some(err);
-                    }
+                if let Ok(mut guard) = self.caught.lock()
+                    && guard.is_none()
+                {
+                    *guard = Some(err);
                 }
                 Array2::from_elem(block.dim(), f64::NAN)
             }
@@ -665,10 +665,10 @@ impl ApplyHessian for PyHvp {
         match call_hvp(&self.callback, x, v) {
             Ok(product) => product,
             Err(err) => {
-                if let Ok(mut guard) = self.caught.lock() {
-                    if guard.is_none() {
-                        *guard = Some(err);
-                    }
+                if let Ok(mut guard) = self.caught.lock()
+                    && guard.is_none()
+                {
+                    *guard = Some(err);
                 }
                 Array1::from_elem(v.len(), f64::NAN)
             }
