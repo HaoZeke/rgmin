@@ -183,9 +183,13 @@ where
     }
     let steps = report.steps;
     let evals = report.evals;
-    let polished =
-        crate::newton::polish_inner(obj, report.coords, control, crate::NewtonKind::Shifted)?;
-    control.deliver(carry_polish(steps, evals, polished))
+    let coords = report.coords;
+    counted(obj, control, |obj| {
+        let polished =
+            crate::newton::polish_inner(obj, coords, control, crate::NewtonKind::Shifted)?;
+        Ok(polished)
+    })
+    .and_then(|polished| control.deliver(carry_polish(steps, evals, polished)))
 }
 
 fn run_session_hess<O>(
@@ -225,8 +229,11 @@ where
     }
     let steps = report.steps;
     let evals = report.evals;
-    let polished = crate::hvp::polish_hvp_inner(obj, report.coords, control)?;
-    control.deliver(carry_polish(steps, evals, polished))
+    let coords = report.coords;
+    counted(obj, control, |obj| {
+        crate::hvp::polish_hvp_inner(obj, coords, control)
+    })
+    .and_then(|polished| control.deliver(carry_polish(steps, evals, polished)))
 }
 
 /// The search that ran before the polish already counted its steps and
