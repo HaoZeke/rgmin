@@ -216,8 +216,10 @@ pub fn polish_newton<O>(
 where
     O: HessianObjective + ?Sized,
 {
-    let report = polish_inner(obj, init.into(), control, kind)?;
-    control.deliver(report)
+    counted(obj, control, |obj| {
+        let report = polish_inner(obj, init.into(), control, kind)?;
+        control.deliver(report)
+    })
 }
 
 pub(crate) fn polish_inner<O>(

@@ -936,24 +936,46 @@ fn backward_polish_keeps_the_evaluations_from_the_search() {
     )
     .unwrap();
     assert!(plain.evals > 0, "{plain:?}");
+    let hess_tally = Tally::new(Quadratic);
     let polished = minimize_method_hess(
-        &Tally::new(Quadratic),
+        &hess_tally,
         quad_start(),
         &control,
         Method::Bfgs,
         LineSearch::default(),
     )
     .unwrap();
-    assert_eq!(polished.evals, plain.evals, "{polished:?}");
+    assert!(polished.evals > plain.evals, "{polished:?} vs {plain:?}");
+    assert_eq!(polished.evals, hess_tally.calls(), "{polished:?}");
+    let hvp_tally = Tally::new(Quadratic);
     let polished_hvp = minimize_method_hvp(
-        &Tally::new(Quadratic),
+        &hvp_tally,
         quad_start(),
         &control,
         Method::Bfgs,
         LineSearch::default(),
     )
     .unwrap();
-    assert_eq!(polished_hvp.evals, plain.evals, "{polished_hvp:?}");
+    assert!(
+        polished_hvp.evals > plain.evals,
+        "{polished_hvp:?} vs {plain:?}"
+    );
+    assert_eq!(polished_hvp.evals, hvp_tally.calls(), "{polished_hvp:?}");
+
+    let polish_tally = Tally::new(Quadratic);
+    let direct_newton =
+        rgmin::polish_newton(&polish_tally, quad_start(), &control, NewtonKind::Shifted).unwrap();
+    assert!(direct_newton.evals > 0, "{direct_newton:?}");
+    assert_eq!(
+        direct_newton.evals,
+        polish_tally.calls(),
+        "{direct_newton:?}"
+    );
+
+    let polish_hvp_tally = Tally::new(Quadratic);
+    let direct_hvp = rgmin::polish_hvp(&polish_hvp_tally, quad_start(), &control).unwrap();
+    assert!(direct_hvp.evals > 0, "{direct_hvp:?}");
+    assert_eq!(direct_hvp.evals, polish_hvp_tally.calls(), "{direct_hvp:?}");
 }
 
 #[test]

@@ -707,6 +707,20 @@ impl<O: TryHessianVector + ?Sized> StepOracle for HostOracle<'_, O> {
     }
 }
 
+impl<O: TryHessianVector + ?Sized> StepOracle for crate::stop::Counted<'_, HostOracle<'_, O>> {
+    fn dim(&self) -> usize {
+        self.inner().dim()
+    }
+    fn bounds(&self) -> &eindir_core::Bounds<f64> {
+        self.inner().bounds()
+    }
+    fn step_value_and_gradient(&self, x: ArrayView1<f64>) -> Result<(f64, Array1<f64>)> {
+        let out = self.inner().step_value_and_gradient(x)?;
+        self.note(x, Some(out.0));
+        Ok(out)
+    }
+}
+
 /// The action side of a [`TryHessianVector`].
 pub(crate) struct HostAction<'a, O: ?Sized>(pub &'a O);
 
@@ -1137,8 +1151,10 @@ pub fn polish_hvp<O>(obj: &O, init: impl Into<Array1<f64>>, control: &Control) -
 where
     O: HessianVector + ?Sized,
 {
-    let report = polish_hvp_inner(obj, init.into(), control)?;
-    control.deliver(report)
+    counted(obj, control, |obj| {
+        let report = polish_hvp_inner(obj, init.into(), control)?;
+        control.deliver(report)
+    })
 }
 
 pub(crate) fn polish_hvp_inner<O>(obj: &O, init: Array1<f64>, control: &Control) -> Result<Report>

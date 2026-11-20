@@ -115,3 +115,12 @@ def test_ase_optimizer_stops_on_the_eval_budget() -> None:
     opt = FIRE(_pt7(), logfile=None, max_evals=6)
     assert opt.run(fmax=1e-9, steps=200) is False
     assert opt.stop == "EvalBudget"
+
+
+def test_gromacs_steep_stops_on_the_eval_budget() -> None:
+    pytest.importorskip("ase")
+    from rgmin.optimize import GromacsSteep
+
+    opt = GromacsSteep(_pt7(), logfile=None, max_evals=2)
+    assert opt.run(fmax=1e-9, steps=200) is False
+    assert opt.stop == "EvalBudget"

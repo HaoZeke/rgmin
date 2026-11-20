@@ -398,12 +398,17 @@ where
             return Ok(report);
         }
         let accepted = match armijo(
-            manifold, obj, control, params, &mut stops, &pos, value, &grad, &pairs, gamma,
+            manifold, obj, control, params, &pos, value, &grad, &pairs, gamma,
         ) {
             Armijo::Stop(status) => {
                 return report_at(control, value, pos, step, &grad, gnorm, status);
             }
             Armijo::Failed => {
+                if let Some(status) = stop_after(
+                    &mut stops, control, obj, manifold, &pos, value, false, &grad,
+                ) {
+                    return report_at(control, value, pos, step + 1, &grad, gnorm, status);
+                }
                 return search_failed(control, value, pos, step, &grad, gnorm);
             }
             Armijo::Accepted(accepted) => accepted,
@@ -487,7 +492,6 @@ fn armijo<M, O>(
     obj: &crate::stop::Counted<'_, O>,
     control: &Control,
     params: &Rlbfgs,
-    stops: &mut StopRules,
     pos: &Array1<f64>,
     value: f64,
     grad: &Array1<f64>,
@@ -528,11 +532,6 @@ where
                 }
                 if ready.value <= value + params.armijo * alpha * slope {
                     return Armijo::Accepted(ready);
-                }
-                if let Some(status) =
-                    stop_after(stops, control, obj, manifold, pos, ready.value, false, grad)
-                {
-                    return Armijo::Stop(status);
                 }
             }
         }

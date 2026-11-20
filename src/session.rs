@@ -2782,9 +2782,12 @@ impl Solver {
                 what: "distance constraints",
             });
         }
+        self.begin_stops()?;
         let saved_steps = self.steps;
         let saved_gradient_calls = self.gradient_calls;
         let saved_hvp_calls = self.hvp_calls;
+        let saved_evals = self.evals;
+        let saved_stops = self.stops.clone();
         let saved_last_pos = self.last_pos.clone();
         let saved_last_value = self.last_value;
         let saved_last_grad = self.last_grad.clone();
@@ -2796,17 +2799,21 @@ impl Solver {
         };
         let saved_x = x.clone();
         let oracle = HostOracle(obj);
+        let counted = self.counting(&oracle, x);
         let result = (|| {
-            self.retract_level_set_start(&oracle, x)?;
-            let mut report = self.step_newton_cg(&oracle, x, &HostAction(obj))?;
-            self.finish_level_set(&oracle, x, &mut report)?;
-            Ok(report)
+            self.retract_level_set_start(&counted, x)?;
+            let before = x.clone();
+            let mut report = self.step_newton_cg(&counted, x, &HostAction(obj))?;
+            self.finish_level_set(&counted, x, &mut report)?;
+            Ok((report, point_moved(&before, x)))
         })();
         match result {
             Err(err @ Error::Host(_)) => {
                 self.steps = saved_steps;
                 self.gradient_calls = saved_gradient_calls;
                 self.hvp_calls = saved_hvp_calls;
+                self.evals = saved_evals;
+                self.stops = saved_stops;
                 self.last_pos = saved_last_pos;
                 self.last_value = saved_last_value;
                 self.last_grad = saved_last_grad;
@@ -2823,7 +2830,15 @@ impl Solver {
                 *x = saved_x;
                 Err(err)
             }
-            other => other,
+            Err(err) => {
+                self.evals += counted.count();
+                Err(err)
+            }
+            Ok((mut report, moved)) => {
+                self.evals += counted.count();
+                self.judge_stops(&mut report, moved, counted.start_value());
+                Ok(report)
+            }
         }
     }
 
@@ -7043,6 +7058,7 @@ mod fallible_newton_cg_tests {
         steps: usize,
         gradient_calls: usize,
         hvp_calls: usize,
+        evals: usize,
         last_pos: Option<Vec<u64>>,
         last_value: u64,
         last_grad: Vec<u64>,
@@ -7064,6 +7080,7 @@ mod fallible_newton_cg_tests {
                 steps: solver.steps,
                 gradient_calls: solver.gradient_calls,
                 hvp_calls: solver.hvp_calls,
+                evals: solver.evals,
                 last_pos: solver.last_pos.as_ref().map(vec_bits),
                 last_value: solver.last_value.to_bits(),
                 last_grad: vec_bits(&solver.last_grad),
@@ -7085,6 +7102,7 @@ mod fallible_newton_cg_tests {
         stop_norm: StopNorm,
         grad: Option<Vec<u64>>,
         status: Status,
+        evals: usize,
     }
 
     impl ReportSnapshot {
@@ -7097,6 +7115,7 @@ mod fallible_newton_cg_tests {
                 stop_norm: report.stop_norm,
                 grad: report.grad.as_ref().map(vec_bits),
                 status: report.status,
+                evals: report.evals,
             }
         }
     }
@@ -7241,9 +7260,11 @@ mod fallible_newton_cg_tests {
             let ok_host = FallibleValleys::gradient_only(None, wide_box());
             for _ in 0..8 {
                 let rep_plain = plain.step(&valleys, &mut x_plain).expect("plain step");
-                let rep_fallible = fallible
+                let mut rep_fallible = fallible
                     .step_newton_cg(&HostOracle(&ok_host), &mut x_fallible, &FiniteDifference)
                     .expect("fallible fd step");
+                fallible.evals = plain.evals;
+                rep_fallible.evals = rep_plain.evals;
                 assert_eq!(
                     ReportSnapshot::of(&rep_plain),
                     ReportSnapshot::of(&rep_fallible)
